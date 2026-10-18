@@ -57,7 +57,7 @@
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist/src',{recursive:true,force:true})\"",
-    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "build": "npm run clean && tsc -p tsconfig.build.json && node scripts/minify-runtime.ts",
     "check": "tsc -p . --noEmit",
     "test": "vitest run",
     "dev": "vite --config examples/hello/vite.config.ts",

@@ -69,7 +69,7 @@ dist/
 - Link stylesheets with `<Stylesheet href="src/styles.css" />` (or `assetUrl()`). In production they resolve through the manifest to hashed file names.
 - Files in `public/` (Vite's `publicDir`) are copied into `dist/client` as they are and served from the site root: `public/robots.txt` is `/robots.txt`, in dev and production. Refer to them by their path from `public/`: `assetUrl("favicon.svg")` or plain `/favicon.svg`, never `public/favicon.svg`. In development, `assetUrl()` warns about that mistake, about missing files, and about source files missing from `client` (they'd work in dev and 404 after the build). See [assets](05-pages-and-layouts.md#assets).
 - Routes marked `@prerender` are rendered to HTML files in `dist/client` at build time and served as files from then on. See [05-pages-and-layouts.md](05-pages-and-layouts.md).
-- The client runtime (`/_yerd/runtime.js`) isn't a build output. The server generates it from its own source, compresses it once (brotli and gzip, about 8 KB), and serves it with an `ETag` so browsers get a cheap 304 on later pages.
+- The client runtime (`/_yerd/runtime.js`) isn't a build output of your app. It ships minified inside the `@toyz/yerd` package; the server appends your custom attributes' client halves, compresses it once (brotli and gzip, about 10 KB), and serves it with an `ETag` so browsers get a cheap 304 on later pages.
 
 > [!NOTE]
 > Vite's server build leaves packages from `node_modules` (yerd included) as imports. Deploy `dist/` together with `package.json` and production dependencies (`npm ci --omit=dev`). yerd itself has no dependencies, so that's small.

@@ -1,3 +1,5 @@
+import { minified } from "./runtime-min.js";
+
 /**
  * yerd's client runtime, served at /_yerd/runtime.js.
  *
@@ -2063,13 +2065,15 @@ export function yerdRuntime(): void {
 let source: string | undefined;
 
 /**
- * The runtime as a script: the function's source in an IIFE. The source must
- * be self-contained, so the runtime has to be compiled at ES2017 or later:
- * older targets turn `async` into calls to a helper defined outside the
- * function, which wouldn't exist in the browser.
+ * The runtime as a script: the minified build when the package was built
+ * with one (`npm run build`), otherwise the function's source in an IIFE.
+ * The source must be self-contained, so the runtime has to be compiled at
+ * ES2017 or later: older targets turn `async` into calls to a helper defined
+ * outside the function, which wouldn't exist in the browser.
  */
 export function runtimeSource(): string {
   if (source) return source;
+  if (minified) return (source = minified);
   const fn = yerdRuntime.toString();
   if (/\b__(async|awaiter|generator)\b/.test(fn)) {
     throw new Error("yerd's client runtime was compiled below ES2017 (async was lowered to a helper); compile server code at ES2022");

@@ -715,7 +715,12 @@ a single self-contained function whose source (`fn.toString()`, in an IIFE) is
 served at `/_yerd/runtime.js` with `cache-control: no-cache`, followed by the
 custom attributes' client halves. Because it ships as source it must be
 compiled at ES2017 or later (`runtimeSource()` refuses a build with async
-lowered to helpers). `<Scripts />` writes the `<script type="module">` tag.
+lowered to helpers). The published package serves it minified instead:
+`npm run build` runs `scripts/minify-runtime.ts` after tsc, which minifies that
+same script with esbuild (a dev dependency) and writes it into
+`dist/src/client/runtime-min.js`; `runtimeSource()` prefers it when it's
+there. A checkout, the tests and the examples serve the unminified source.
+`<Scripts />` writes the `<script type="module">` tag.
 There is no `@toyz/yerd/client` export yet; it arrives with islands.
 
 The planned layout once islands and sprinkles land:
