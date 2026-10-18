@@ -279,6 +279,40 @@ describe("cue", () => {
     play.mockRestore();
   });
 
+  it("restarts every element a cue plays on with one style flush, not one each", async () => {
+    document.body.innerHTML = `<div id="a" data-yx-cue="horn"></div><div id="b" data-yx-cue="drum horn" data-yx-cued="horn"></div><div id="c" data-yx-cue="horn"></div><div id="d" data-yx-cue="drum"></div>`;
+    await settle();
+    const flushes = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get");
+    open()[0]!.send(cue({ name: "horn", at: server() }));
+    await settle();
+    expect(flushes).toHaveBeenCalledTimes(1);
+    flushes.mockRestore();
+    const cued = ["a", "b", "c", "d"].map((id) => document.getElementById(id)!.getAttribute("data-yx-cued"));
+    expect(cued).toEqual(["horn", "horn", "horn", null]);
+  });
+
+  it("starts its backoff over once a reopened stream connects", async () => {
+    document.body.innerHTML = `<div data-yx-cue="horn"></div>`;
+    await settle();
+    const giveUp = () => {
+      const source = open()[0]!;
+      source.readyState = 2;
+      source.onerror?.();
+      return source;
+    };
+    const first = giveUp();
+    await tick(1000);
+    const second = giveUp();
+    expect(second).not.toBe(first);
+    await tick(2000);
+    const third = open()[0]!;
+    expect(third).not.toBe(second);
+    third.onopen?.();
+    giveUp();
+    await tick(1000);
+    expect(open()[0]).not.toBe(third);
+  });
+
   it("reopens a stream the browser gave up on, backing off", async () => {
     document.body.innerHTML = `<div data-yx-cue="horn"></div>`;
     await settle();

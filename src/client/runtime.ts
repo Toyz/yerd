@@ -1910,6 +1910,8 @@ export function yerdRuntime(): void {
   // slow link).
   type CueMessage = { id: string; name: string; room: string; at: number; lasts?: number; data?: unknown };
   const cueing = new Set<Element>();
+  // Cue name -> the elements naming it; rebuilt when an element or its cues change.
+  let cueIndex: Map<string, Element[]> | undefined;
   // Source + cue id -> when it's over (server time): a reconnect replays what's still running, and each plays once.
   const heard = new Map<string, number>();
   const cueRuns = new WeakMap<Element, number>();
@@ -1919,13 +1921,26 @@ export function yerdRuntime(): void {
   const roomOf = (el: Element): string => el.getAttribute("data-yx-cue-room") || "main";
   const fromOf = (el: Element): string | null => el.getAttribute("data-yx-cue-from") || null;
 
-  /** Whether a cue that came from `url` is for `el`. */
+  /** Whether a cue that came from `url` is for `el` (which names it). */
   function cueFor(el: Element, url: string, cue: CueMessage): boolean {
-    if (!(el.getAttribute("data-yx-cue") ?? "").split(/\s+/).includes(cue.name)) return false;
     const from = fromOf(el);
     // Public stream: the element's room. Its own route: whatever the route sends, narrowed by cueRoom if it has one.
     if (!from) return url.startsWith(PUBLIC_CUES) && roomOf(el) === cue.room;
     return from === url && (!el.hasAttribute("data-yx-cue-room") || roomOf(el) === cue.room);
+  }
+
+  function namedBy(name: string): Element[] {
+    if (!cueIndex) {
+      cueIndex = new Map();
+      for (const el of cueing) {
+        for (const cueName of new Set((el.getAttribute("data-yx-cue") ?? "").split(/\s+/))) {
+          if (!cueName) continue;
+          if (!cueIndex.has(cueName)) cueIndex.set(cueName, []);
+          cueIndex.get(cueName)!.push(el);
+        }
+      }
+    }
+    return cueIndex.get(name) ?? [];
   }
 
   function playCue(cue: CueMessage, url: string): void {
@@ -1933,18 +1948,23 @@ export function yerdRuntime(): void {
     // Within a frame is on time (a timer firing a little late): no seeking for that.
     const late = behind < 16 ? 0 : behind;
     if (cue.lasts !== undefined && late >= cue.lasts) return;
-    for (const el of Array.from(cueing)) {
+    const playing: Array<{ el: Element; before: Set<Animation> | undefined }> = [];
+    for (const el of namedBy(cue.name)) {
       if (!el.isConnected || !cueFor(el, url, cue)) continue;
       const detail = { name: cue.name, room: cue.room, data: cue.data, at: cue.at, late };
       // preventDefault(): the listener plays it its own way.
       if (!el.dispatchEvent(new CustomEvent("yx:cue", { bubbles: true, cancelable: true, detail }))) continue;
-      const animated = typeof el.getAnimations === "function";
-      const before = new Set(animated ? el.getAnimations({ subtree: true }) : []);
+      const before = typeof el.getAnimations === "function" ? new Set(el.getAnimations({ subtree: true })) : undefined;
       el.removeAttribute("data-yx-cued");
-      // Flush styles between the two, so an animation keyed off the attribute starts over.
-      void (el as HTMLElement).offsetWidth;
+      playing.push({ el, before });
+    }
+    if (!playing.length) return;
+    // Flush styles once between taking the attribute off and putting it back,
+    // so an animation keyed off it starts over (on every element at once).
+    void (playing[0]!.el as HTMLElement).offsetWidth;
+    for (const { el, before } of playing) {
       el.setAttribute("data-yx-cued", cue.name);
-      if (late > 0 && animated) {
+      if (late > 0 && before) {
         for (const animation of el.getAnimations({ subtree: true })) {
           if (!before.has(animation)) animation.currentTime = (Number(animation.currentTime) || 0) + late;
         }
@@ -2006,6 +2026,7 @@ export function yerdRuntime(): void {
     );
   }
   function queueCues(): void {
+    cueIndex = undefined;
     if (cueQueued) return;
     cueQueued = true;
     queueMicrotask(connectCues);
