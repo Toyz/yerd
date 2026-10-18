@@ -33,6 +33,23 @@ export interface RequestEnv {
   trustProxy: boolean;
 }
 
+/** What a request's context is made from. */
+export interface RequestContextInit {
+  req: IncomingMessage;
+  res: ServerResponse;
+  /** The request target, split into path and query string. */
+  target: { path: string; search: string };
+  method: string;
+  params: Readonly<Record<string, string>>;
+  route: RouteInfo;
+  /** This request's own copy: setMeta() writes to it. */
+  meta: PageMeta;
+  /** Rendering a @prerender route at build time. Default false. */
+  prerendering?: boolean;
+  scope: Scope;
+  env: RequestEnv;
+}
+
 export class RequestContext implements YerdContext {
   readonly path: string;
   /** DI for this request; read by currentServices() so one async context serves both. */
@@ -54,21 +71,27 @@ export class RequestContext implements YerdContext {
   #outCookies: string[] | undefined;
   #status: number | undefined;
 
-  constructor(
-    readonly req: IncomingMessage,
-    readonly res: ServerResponse,
-    target: { path: string; search: string },
-    readonly method: string,
-    readonly params: Readonly<Record<string, string>>,
-    readonly route: RouteInfo,
-    readonly meta: PageMeta,
-    readonly prerendering: boolean,
-    scope: Scope,
-    readonly env: RequestEnv,
-  ) {
-    this.path = target.path;
-    this.#search = target.search;
-    this.services = { container: env.container, scope };
+  readonly req: IncomingMessage;
+  readonly res: ServerResponse;
+  readonly method: string;
+  readonly params: Readonly<Record<string, string>>;
+  readonly route: RouteInfo;
+  readonly meta: PageMeta;
+  readonly prerendering: boolean;
+  readonly env: RequestEnv;
+
+  constructor(init: RequestContextInit) {
+    this.req = init.req;
+    this.res = init.res;
+    this.method = init.method;
+    this.params = init.params;
+    this.route = init.route;
+    this.meta = init.meta;
+    this.prerendering = init.prerendering ?? false;
+    this.env = init.env;
+    this.path = init.target.path;
+    this.#search = init.target.search;
+    this.services = { container: init.env.container, scope: init.scope };
   }
 
   #noRequestData(what: string): void {
