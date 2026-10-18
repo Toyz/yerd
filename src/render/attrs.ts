@@ -181,7 +181,12 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
     if (value === null || value === undefined) continue;
     if (isBinding(value)) {
       const b = value as Binding;
-      (binds ??= []).push(`${name}:${bindingSpec(b)}`);
+      if (name === "class" || name === "className") {
+        // The runtime sets the attribute by this name, so className binds as
+        // class. Next to the other spelling it's only part of the class list,
+        // which the runtime can't keep in step on its own: just the value.
+        if (props[name === "class" ? "className" : "class"] == null) (binds ??= []).push(`class:${bindingSpec(b)}`);
+      } else (binds ??= []).push(`${name}:${bindingSpec(b)}`);
       value = b.value;
       if (value === null || value === undefined) continue;
     }
@@ -217,10 +222,15 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
       classDone = true;
       // Class flags bound to <Local> state: `{ active: s.selected }`, also inside an
       // array (`["card", { active: s.selected }]`). A binding is a (truthy) proxy, so
-      // each one becomes its initial value plus a `class.<flag>` binding.
+      // each one becomes its initial value plus a `class.<flag>` binding, one per
+      // class in the flag ("a b": the browser's classList takes one at a time).
+      // A binding used as a class name inside a list (`["card", s.theme]`) is an
+      // expression: its initial value, not kept in step. raw() is its text.
       const unbind = (item: unknown): unknown => {
+        if (isBinding(item)) return (item as Binding).value;
         if (Array.isArray(item)) return item.map(unbind);
-        if (!item || typeof item !== "object" || isRawHtml(item)) return item;
+        if (!item || typeof item !== "object") return item;
+        if (isRawHtml(item)) return item.html;
         const flags = item as Record<string, unknown>;
         if (!Object.values(flags).some(isBinding)) return item;
         const plain: Record<string, unknown> = {};
@@ -228,14 +238,15 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
           const v = flags[flag];
           if (isBinding(v)) {
             const b = v as Binding;
-            (binds ??= []).push(`class.${flag}:${bindingSpec(b)}`);
+            for (const word of flag.split(/\s+/)) if (word) (binds ??= []).push(`class.${word}:${bindingSpec(b)}`);
             plain[flag] = b.value;
           } else plain[flag] = v;
         }
         return plain;
       };
       value = unbind(value);
-      const other = name === "class" ? props.className : props.class;
+      // Both given: the other one's flags are bound too.
+      const other = unbind(name === "class" ? props.className : props.class);
       value = other ? appendClasses(classNames(value as ClassValue), other as ClassValue) : classNames(value as ClassValue);
       if (value === "") continue;
       out += ` class="${escapeHtml(value as string)}"`;
