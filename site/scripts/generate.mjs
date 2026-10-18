@@ -491,6 +491,33 @@ for (const entry of current.entries) {
   }
 }
 
+// ── companions ──
+//
+// A type only one other export refers to (OnOptions, used by on() alone) is
+// part of that export's story: it's documented on that page, and its own id
+// points there. Types several exports share keep their own page.
+
+const shortOf = (module) => (module === pkg.name ? "yerd" : module.slice(pkg.name.length + 1));
+const idOf = (entry) => `${shortOf(entry.module)}.${entry.name}`;
+for (const child of current.entries) {
+  if (child.kind !== "interface" && child.kind !== "type") continue;
+  const mention = new RegExp(`(^|[^\\w$.])${child.name.replace(/[$]/g, "\\$&")}(?![\\w$])`);
+  // Every export that mentions it, types included: one another type also uses is shared vocabulary.
+  const referrers = current.entries.filter(
+    (other) => other !== child && (mention.test(other.signature) || (other.members ?? []).some((m) => mention.test(m.signature))),
+  );
+  if (referrers.length !== 1) continue;
+  const parent = referrers[0];
+  if (parent.kind !== "function" && parent.kind !== "class" && parent.kind !== "const") continue;
+  // Kept where people look for it: SessionOptions stays in Sessions, not on YerdApp's page.
+  if (parent.section !== child.section) continue;
+  child.partOf = idOf(parent);
+  (parent.parts ??= []).push(child.name);
+}
+if (process.env.SHOW_COMPANIONS) {
+  for (const e of current.entries) if (e.parts) console.log(`${idOf(e)}: ${e.parts.join(", ")}`);
+}
+
 current.entries.sort((a, b) => {
   const s = SECTION_ORDER.indexOf(a.section) - SECTION_ORDER.indexOf(b.section);
   return s !== 0 ? s : a.name.localeCompare(b.name);

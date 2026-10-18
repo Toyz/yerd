@@ -42,6 +42,7 @@ const sheet = css`
   }
   .card-doc { font-size: 0.86rem; color: var(--text-dim); line-height: 1.5; margin: 0; }
   .card-module { font-family: var(--mono); font-size: 0.7rem; color: var(--text-faint); }
+  .card-parts { font-family: var(--mono); font-size: 0.72rem; color: var(--text-faint); margin-top: 2px; }
 
   .filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 8px; }
   .filters button {
@@ -87,6 +88,7 @@ export class PageApi extends LoomElement {
         </div>
         <div class="card-sig">{preview(e)}</div>
         {e.doc ? <p class="card-doc">{summary(e.doc)}</p> : null}
+        {e.parts?.length ? <div class="card-parts">with {e.parts.join(", ")}</div> : null}
         {e.module !== "@toyz/yerd" ? <div class="card-module">{e.module}</div> : null}
       </a>
     );
@@ -124,7 +126,8 @@ export class PageApi extends LoomElement {
           </div>
         )}
         {sections.map((section) => {
-          const inSection = api.entries.filter((e) => e.section === section);
+          // Types documented on another export's page are listed with it (card-parts), not on their own.
+          const inSection = api.entries.filter((e) => e.section === section && !e.partOf);
           const groups = kinds.map((g) => ({ ...g, entries: inSection.filter((e) => g.kinds.includes(e.kind)) })).filter((g) => g.entries.length);
           if (groups.length === 0) return null;
           return (

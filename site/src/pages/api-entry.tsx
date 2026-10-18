@@ -21,6 +21,12 @@ const sheet = css`
   .member pre.signature { margin: 10px 0; }
   .member .prose p:first-child { margin-top: 4px; }
   h2 .count { color: var(--text-faint); font-weight: 400; font-size: 0.9rem; }
+  .part { border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 18px 12px; margin: 16px 0; scroll-margin-top: 20px; }
+  .part.target { border-color: var(--accent-dim); box-shadow: 0 0 0 3px var(--accent-bg); }
+  .part-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  .part-head h3 { font-family: var(--mono); font-size: 1.1rem; margin: 0; }
+  .part-head h3 a { color: inherit; }
+  .part .member { background: var(--bg); }
 `;
 
 const MEMBER_ORDER: Record<Member["kind"], number> = { constructor: 0, property: 1, accessor: 2, method: 3, index: 4 };
@@ -54,8 +60,41 @@ export class PageApiEntry extends LoomElement {
   }
 
   scrollToFocus() {
-    if (!this.focusMember) return;
-    requestAnimationFrame(() => this.shadow.getElementById(`m-${this.focusMember}`)?.scrollIntoView({ block: "start" }));
+    const part = this.#partFocus();
+    if (!this.focusMember && !part) return;
+    requestAnimationFrame(() => this.shadow.getElementById(part ? `p-${part}` : `m-${this.focusMember}`)?.scrollIntoView({ block: "start" }));
+  }
+
+  /** The route names a type documented on another export's page: that type. */
+  #partFocus(): string | undefined {
+    return this.api?.entries.find((e) => entryId(e) === this.id)?.partOf ? this.id.slice(this.id.indexOf(".") + 1) : undefined;
+  }
+
+  /** A type documented on this page: its signature, docs, examples and members. */
+  #part(part: Entry, api: Api, focused: boolean) {
+    const self = entryId(part);
+    const ctx = linkContext(api, this.guides, undefined, self);
+    const link = (name: string) => {
+      const id = resolveApi(api, name);
+      return id && id !== self ? id : undefined;
+    };
+    const members = [...(part.members ?? [])].sort((a, b) => MEMBER_ORDER[a.kind] - MEMBER_ORDER[b.kind]);
+    return (
+      <section class={`part ${focused ? "target" : ""}`} id={`p-${part.name}`} loom-key={part.name}>
+        <div class="part-head">
+          <h3><a href={`#/api/${self}`}>{part.name}</a></h3>
+          <KindBadge kind={part.kind} />
+          <SinceBadge since={part.since} />
+          <a class="src" href={sourceUrl(api, part.source.file, part.source.line)} target="_blank" rel="noopener">source</a>
+        </div>
+        <Code class="signature" code={part.signature} link={link} />
+        {part.doc ? <Markdown text={part.doc} ctx={ctx} /> : null}
+        {(part.examples ?? []).map((ex) => (
+          <Code code={ex} />
+        ))}
+        {members.map((m) => this.#member(m, part, api))}
+      </section>
+    );
   }
 
   #member(m: Member, entry: Entry, api: Api) {
@@ -94,7 +133,10 @@ export class PageApiEntry extends LoomElement {
   update() {
     const api = this.api;
     if (!api) return <p class="loading">Loading…</p>;
-    const entry = api.entries.find((e) => entryId(e) === this.id);
+    const asked = api.entries.find((e) => entryId(e) === this.id);
+    // A companion type's id shows its owner's page, scrolled to it.
+    const entry = asked?.partOf ? (api.entries.find((e) => entryId(e) === asked.partOf) ?? asked) : asked;
+    const focusPart = asked && asked !== entry ? asked.name : undefined;
     if (!entry) {
       return (
         <div>
@@ -149,6 +191,17 @@ export class PageApiEntry extends LoomElement {
               {entry.kind === "const" ? "Properties" : "Members"} <span class="count">({members.length})</span>
             </h2>
             {members.map((m) => this.#member(m, entry, api))}
+          </>
+        ) : null}
+        {entry.parts?.length ? (
+          <>
+            <h2>
+              Related types <span class="count">({entry.parts.length})</span>
+            </h2>
+            {entry.parts
+              .map((name) => api.entries.find((e) => e.module === entry.module && e.name === name))
+              .filter((part): part is Entry => part !== undefined)
+              .map((part) => this.#part(part, api, part.name === focusPart))}
           </>
         ) : null}
       </article>

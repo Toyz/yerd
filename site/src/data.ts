@@ -31,6 +31,10 @@ export interface Entry {
   since: string | null;
   source: { file: string; line: number };
   members?: Member[];
+  /** A type only this other export uses (its id): documented on that export's page. */
+  partOf?: string;
+  /** The types documented on this page (see partOf). */
+  parts?: string[];
 }
 
 export interface Api {
