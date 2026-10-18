@@ -1,12 +1,12 @@
 # Your first app
 
-In this tutorial you'll build a tiny link board: a page that lists links, a form to add one, validation, delete buttons, in-place updates, and a test and a production build at the end.
+Build a tiny link board: a list of links, an add form with validation, delete buttons, in-place updates, a test and a production build.
 
-Every step adds one idea and ends with something to try. Data lives in memory, so there's no database to set up. Restart the server and your links are gone, which is fine for a link board you built in twenty minutes.
+Each step adds one idea and ends with something to try. Data lives in memory, so there's no database to set up.
 
 ## 1. Set up the project
 
-Start from an empty folder. [Getting started](01-getting-started.md) explains each of these pieces; here you just run them.
+Start from an empty folder ([Getting started](01-getting-started.md) explains each piece).
 
 ```sh
 mkdir link-board && cd link-board
@@ -16,13 +16,13 @@ npm install @toyz/yerd
 npm install -D typescript @types/node vite esbuild vitest
 ```
 
-Copy the `tsconfig.json` from [Getting started](01-getting-started.md#configure-typescript) as it is. Keep `"DOM"` in `lib`: Vite's client types and a few of yerd's own types mention browser things, and `tsc` complains without it.
+Copy the `tsconfig.json` from [Getting started](01-getting-started.md#configure-typescript). Keep `"DOM"` in `lib`, or `tsc` complains about Vite's client types:
 
 ```json
 "lib": ["ES2023", "esnext.decorators", "DOM"],
 ```
 
-Now the Vite config and the entry module. The entry default-exports the app, and the Vite plugin serves it.
+Add the Vite config and the entry module, which default-exports the app:
 
 ```ts
 // vite.config.ts
@@ -43,11 +43,11 @@ export default yerd()
   .discover(import.meta.glob("./routes/**/*.{ts,tsx}", { eager: true }));
 ```
 
-**Try it:** run `npx vite` and open http://localhost:5173. You get a plain `Not Found`, which proves the server is up and has no routes yet. Leave it running: it picks up your changes as you save.
+**Try it:** run `npx vite` and open http://localhost:5173. A plain `Not Found` means the server is up with no routes yet. Leave it running; it reloads as you save.
 
 ## 2. A layout and your first page
 
-A route is a class: [@route](api:yerd.route) gives it a path and [@get](api:yerd.get) marks the method that answers. A layout wraps every page in the same HTML document, so pages only return their own content.
+A route is a class: [@route](api:yerd.route) gives it a path and [@get](api:yerd.get) marks the method that answers. A layout wraps every page in the same document.
 
 ```tsx
 // src/layouts.tsx
@@ -116,13 +116,13 @@ export default yerd()
   .discover(import.meta.glob("./routes/**/*.{ts,tsx}", { eager: true }));
 ```
 
-**Try it:** reload http://localhost:5173. You see two links, and the tab says "Links | Link board". View the source: yerd added `<!doctype html>` because the layout's outermost element is `<html>`.
+**Try it:** reload. You see two links and the tab says "Links | Link board". The source starts with `<!doctype html>`, added because the layout's outermost element is `<html>`.
 
-Imports end in `.js` even though the file is `layouts.tsx`; that's `nodenext` resolution. [Pages and layouts](05-pages-and-layouts.md) covers components, metadata and nested layouts.
+Imports end in `.js` even for `.tsx` files (`nodenext` resolution). [Pages and layouts](05-pages-and-layouts.md) covers components, metadata and nested layouts.
 
 ## 3. A service to hold the links
 
-A list at the top of a route file won't scale past one route. Move it into a [@service](api:yerd.service): one instance for the whole app (a singleton), handed to whoever asks with [@inject](api:yerd.inject).
+Move the list into a [@service](api:yerd.service), one instance for the whole app, handed out with [@inject](api:yerd.inject).
 
 ```ts
 // src/links.ts
@@ -158,7 +158,7 @@ export class Links {
 }
 ```
 
-In `src/routes/home.tsx`, delete the `links` array and inject the service instead. Injected fields need the `accessor` keyword.
+In `src/routes/home.tsx`, replace the `links` array with the injected service (injected fields need `accessor`):
 
 ```tsx
 // src/routes/home.tsx
@@ -186,7 +186,7 @@ export class Home {
 }
 ```
 
-While you're here, handlers return anything, not just JSX. Return an array and you get JSON:
+Handlers can return anything; an array becomes JSON:
 
 ```ts
 // src/routes/api.ts
@@ -203,13 +203,13 @@ export class LinksApi {
 }
 ```
 
-**Try it:** the page looks the same (that's the point). Now run `curl localhost:5173/api/links` and you get the two links as JSON, from the same service the page uses.
+**Try it:** the page looks the same. `curl localhost:5173/api/links` returns the links as JSON from the same service.
 
-[Services](08-services.md) covers lifetimes, tokens and startup hooks; [Responses](04-responses.md) lists everything a handler can return.
+[Services](08-services.md) covers lifetimes and startup hooks; [Responses](04-responses.md) lists what a handler can return.
 
 ## 4. An add form
 
-A form calls a method directly: mark it with [@action](api:yerd.action) and pass it to the form's `action`. The submitted fields arrive as an [ActionForm](api:yerd.ActionForm), and `form.parse()` validates them against a DTO class built with [is](api:yerd.is).
+Mark a method with [@action](api:yerd.action) and pass it to a form's `action`. The fields arrive as an [ActionForm](api:yerd.ActionForm), and `form.parse()` validates them against a DTO built with [is](api:yerd.is).
 
 Add the DTO to `src/links.ts`:
 
@@ -227,7 +227,7 @@ export class NewLink {
 }
 ```
 
-A validator returns `true` or a message. [trim](api:yerd.trim) runs first, so a title of three spaces counts as empty. Now the form and the action:
+A validator returns `true` or a message; [trim](api:yerd.trim) runs first, so three spaces count as empty. Now the form and the action:
 
 ```tsx
 // src/routes/home.tsx
@@ -265,16 +265,16 @@ export class Home {
 }
 ```
 
-The form renders as a plain POST to `/` with a signed hidden `_yx` field naming the action. The action returns nothing, so yerd redirects the browser back to the page (a 303), and the page renders with the new link.
+The form renders as a plain POST with a signed hidden `_yx` field naming the action. An action that returns nothing redirects back to the page (303).
 
-**Try it:** add "Node.js" with `https://nodejs.org`, and the page reloads with Node.js at the bottom of the list. Now submit with an empty title: you get a raw 400 with JSON listing every problem. Accurate, but not something you'd show a human (step 6 fixes it).
+**Try it:** add "Node.js" with `https://nodejs.org`; it appears at the bottom. Submit an empty title and you get a raw 400 listing the problems (step 6 fixes that).
 
 > [!TIP]
-> The inputs have no `required` or `type="url"` on purpose, so you can watch the server reject things. In a real app add them too; the browser's checks save a round trip, the server's checks are the ones that count.
+> The inputs skip `required` and `type="url"` so you can watch the server reject things. In a real app add them; the server's checks are still the ones that count.
 
 ## 5. A flash message
 
-Let's tell people their link was added. After a redirect the page is a brand-new request, so the message has to survive one hop: that's what a session flash is for. Sessions are off until you turn them on.
+After a redirect the page is a new request, so a "link added" message must survive one hop: a session flash. Turn sessions on:
 
 ```ts
 // src/main.ts
@@ -284,7 +284,7 @@ export default yerd()
   .discover(import.meta.glob("./routes/**/*.{ts,tsx}", { eager: true }));
 ```
 
-In `src/routes/home.tsx`, inject the session with [@session](api:yerd.session), set a flash in the action, and read it in the page:
+Inject the session with [@session](api:yerd.session), set a flash in the action, and read it in the page:
 
 ```tsx
 // src/routes/home.tsx (the changed parts)
@@ -314,17 +314,17 @@ export class Home {
 }
 ```
 
-`flash(key, value)` keeps a value for the next request only, and `flash(key)` reads it and uses it up. Flash values come back as `unknown`, hence the cast.
+`flash(key, value)` keeps a value for the next request; `flash(key)` reads and consumes it (as `unknown`, hence the cast).
 
-**Try it:** add a link. A green "Added ..." appears above the form. Reload the page and it's gone.
+**Try it:** add a link and a green "Added ..." appears. Reload and it's gone.
 
-The default session store keeps everything in a sealed cookie, so there's still no server state. [Sessions and auth](09-sessions-and-auth.md) has the other stores and options.
+The default store keeps the session in a sealed cookie, so there's still no server state. See [Sessions and auth](09-sessions-and-auth.md).
 
 ## 6. Errors next to the form
 
-`form.parse()` throws a [ValidationFailed](api:yerd.ValidationFailed) (a 400) carrying every issue. Catch it, flash the first message and what the user typed, and let the action return as usual: the redirect brings them back to a page that shows both.
+`form.parse()` throws an [YerdError](api:yerd.YerdError) (400) carrying every issue. Catch it, flash the first message and the user's input, and the redirect brings them back to a page showing both.
 
-Add a helper and a type at the top of `src/routes/home.tsx`, and add `YerdError` and `ValidationFailed` to the import:
+Add a helper and a type at the top of `src/routes/home.tsx`, with `YerdError` and `type Issue` in the import:
 
 ```tsx
 // src/routes/home.tsx (new, above the class)
@@ -358,7 +358,7 @@ Replace the `add` action with one that catches:
   }
 ```
 
-In `page()`, read the two new flashes next to `notice`, and replace the form with one that shows them:
+In `page()`, read the new flashes next to `notice`, and show them in the form:
 
 ```tsx
     const error = this.session.flash("error") as string | undefined;
@@ -374,13 +374,13 @@ In `page()`, read the two new flashes next to `notice`, and replace the form wit
         </form>
 ```
 
-**Try it:** add "Vite" with the URL `vite.dev`. You land back on the page with "Links start with http:// or https://" under the form, and both fields still hold what you typed. Fix the URL to `https://vite.dev` and it goes through.
+**Try it:** add "Vite" with the URL `vite.dev`. You're back on the page with "Links start with http:// or https://" and your input kept. Fix it to `https://vite.dev` and it goes through.
 
-This is the pattern the [interactivity guide](06-interactivity.md#errors) recommends for forms that must work with and without JavaScript. Speaking of which.
+This is the [interactivity guide](06-interactivity.md#errors)'s pattern for forms that work with and without JavaScript.
 
 ## 7. Updates without a reload
 
-So far every click is a full page load. Add [Scripts](api:yerd.Scripts) to the layout's `<head>` and yerd's small client runtime takes over forms that call actions:
+Add [Scripts](api:yerd.Scripts) to the layout's `<head>` and yerd's client runtime takes over forms that call actions:
 
 ```tsx
 // src/layouts.tsx (the changed parts)
@@ -392,9 +392,9 @@ import { Scripts, type LayoutProps } from "@toyz/yerd";
       </head>
 ```
 
-The runtime posts the form with `fetch` and morphs the result into the page. It only touches parts marked with a [Region](api:yerd.Region), so wrap everything that changes in one. While you're in there, add delete buttons: `action={() => this.remove({ id: link.id })}` attaches the link's id to the action, signed, so nobody can edit it in the HTML.
+The runtime posts with `fetch` and morphs only the parts marked with a [Region](api:yerd.Region), so wrap everything that changes in one. Add delete buttons too: `action={() => this.remove({ id: link.id })}` attaches the id to the action, signed so nobody can edit it.
 
-Here's the whole file:
+The whole file:
 
 ```tsx
 // src/routes/home.tsx
@@ -473,21 +473,21 @@ export class Home {
 }
 ```
 
-What each action does now, with JavaScript on:
+With JavaScript on:
 
-- `add` still returns nothing. The runtime gets a 204, re-fetches the page in the background and morphs the Region, so the notice or the error shows up exactly as before. `data-yx-reset` clears the form after a success (after an error it falls back to the draft you flashed).
-- `remove` returns the Region itself, which saves that second request: the response is just `<div id="board" ...>`, no layout.
-- `key={link.id}` lets the morph match list items, and `data-yx-error` is where the runtime writes errors it gets back, like an expired form.
+- `add` returns nothing, so the runtime gets a 204, re-fetches the page in the background and morphs the Region. `data-yx-reset` clears the form after a success.
+- `remove` returns the Region itself, saving that second request.
+- `key={link.id}` lets the morph match list items; `data-yx-error` is where the runtime writes errors it gets back (an expired form, say).
 
-**Try it:** open the network tab and add a link. You'll see a POST answered with 204, one background GET, and no page load: the form clears and the notice appears in place. Delete a link and there's a single POST whose response is the Region.
+**Try it:** in the network tab, adding a link is a POST answered with 204 plus one background GET, and no page load. Deleting is a single POST whose response is the Region.
 
-**Try it with JavaScript off:** disable it in your browser's dev tools and do it all again. Adding, errors, the notice and delete all still work, with full page loads, because without the runtime yerd answers every action with a 303 back to the page.
+**Try it with JavaScript off:** everything still works with full page loads, because without the runtime every action answers with a 303 back to the page.
 
 [Interactivity](06-interactivity.md) has the rest: boosted links, `data-yx-confirm`, prefetching and auto mode.
 
 ## 8. A test
 
-Vitest runs on Vite, which can't compile TC39 decorators on its own. [yerdDecorators](api:vite.yerdDecorators) is the decorators-only half of the plugin, made for tests.
+Vitest can't compile TC39 decorators on its own; [yerdDecorators](api:vite.yerdDecorators) is the decorators-only half of the plugin.
 
 ```ts
 // vitest.config.ts
@@ -499,7 +499,7 @@ export default defineConfig({
 });
 ```
 
-The test sends requests straight into the app, no server or port involved. [app.client()](12-testing.md#a-client-that-keeps-cookies) keeps cookies like a browser, and `client.action()` fetches a page and submits its form with your fields. Action tokens are tied to the session they were rendered for, so the page and the post have to come from the same client.
+Tests send requests straight into the app, no port needed. [app.client()](12-testing.md#a-client-that-keeps-cookies) keeps cookies like a browser, and `client.action()` fetches a page and submits its form. Action tokens are tied to their session, so the page and the post must come from the same client.
 
 ```ts
 // test/links.test.ts
@@ -538,16 +538,16 @@ it("refuses a token from someone else's session", async () => {
 });
 ```
 
-- `routes` and `services` limit the app to exactly these classes, and `handleSignals: false` leaves Ctrl-C to vitest. The first request starts the app; `app.stop()` shuts it down.
-- `script: false` posts like a browser without JavaScript, so you get the 303 back to the page. Without it, the client posts the way the runtime does and gets the 204.
-- The add form is the first action on the page, so `client.action()` picks it; pass `{ index }` for another.
-- The last test is the security model at work: a token rendered for one visitor is useless to another.
+- `routes` and `services` limit the app to these classes; `handleSignals: false` leaves Ctrl-C to vitest. The first request starts the app and `app.stop()` shuts it down.
+- `script: false` posts like a browser without JavaScript (303); without it the client posts like the runtime (204).
+- `client.action()` picks the first action on the page; pass `{ index }` for another.
+- The last test shows a token rendered for one visitor is useless to another.
 
 **Try it:** `npx vitest run`. Three tests pass. [Testing](12-testing.md) covers scripted posts, fake services and logs.
 
 ## 9. Build and run for production
 
-Add scripts to `package.json` so nobody has to remember the commands. Vite doesn't type-check, so the build runs `tsc` first.
+Add scripts to `package.json`. Vite doesn't type-check, so the build runs `tsc` first.
 
 ```json
 "scripts": {
@@ -558,7 +558,7 @@ Add scripts to `package.json` so nobody has to remember the commands. Vite doesn
 }
 ```
 
-Action tokens and session cookies are signed with a secret. Without `YERD_SECRET`, yerd invents a random one per process, so every restart logs everyone out and breaks open forms. (The dev server keeps its random secret in `node_modules/.cache`, so this only bites in production.) Generate one (it must be at least 32 bytes) and keep it out of git.
+Without `YERD_SECRET`, each process signs tokens and cookies with a random secret, so every restart logs everyone out and breaks open forms (the dev server keeps its secret in `node_modules/.cache`). Generate one of at least 32 bytes and keep it out of git:
 
 ```sh
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
@@ -567,15 +567,15 @@ YERD_SECRET=paste-the-value-here npm start
 ```
 
 > [!NOTE]
-> `vite build` boots your app once, so it prints the "no YERD_SECRET set" warning even when you're only building. It matters at `npm start`, not here.
+> `vite build` boots your app once, so it prints the "no YERD_SECRET set" warning while building. Only `npm start` needs it.
 
-**Try it:** open http://localhost:3000 (set `PORT` to change it). Same app, now a single `dist/server/server.js`. To deploy, ship `dist/` with `package.json` and run `npm ci --omit=dev`: yerd has no dependencies of its own, so that's quick.
+**Try it:** open http://localhost:3000 (`PORT` changes it). To deploy, ship `dist/` with `package.json` and run `npm ci --omit=dev`; yerd has no dependencies of its own.
 
 The [deploying guide](11-deploying.md) covers proxies, static files, prerendering and graceful shutdown.
 
 ## Where to next
 
-You've used most of yerd in one small app. Each piece has its own guide:
+Each piece has its own guide:
 
 - [Routing](02-routing.md): params, groups, guards and content negotiation.
 - [Request data](03-request-data.md): query strings, bodies, uploads and every `is.*` validator.
@@ -584,12 +584,12 @@ You've used most of yerd in one small app. Each piece has its own guide:
 - [Interactivity](06-interactivity.md): actions, Regions, boosted links, live refresh and auto mode.
 - [Streaming and live](07-streaming-and-live.md): SSE, NDJSON and channels.
 - [Services](08-services.md): lifetimes, tokens, `@onBoot` and background work.
-- [Events](14-events.md): send the welcome mail or update a dashboard in the background.
+- [Events](14-events.md): background work such as a welcome mail.
 - [Sessions and auth](09-sessions-and-auth.md): logins, guards and the security model.
 - [Logging](10-logging.md), [Deploying](11-deploying.md) and [Testing](12-testing.md).
-- [Security](15-security.md) before you go live, and [Recipes](16-recipes.md) for complete solutions to common tasks.
+- [Security](15-security.md) before you go live, and [Recipes](16-recipes.md) for complete solutions.
 
-Want every open tab to update when someone adds a link? [Live refresh](06-interactivity.md#live-refresh) does it with a channel and one attribute.
+To update every open tab when someone adds a link, see [live refresh](06-interactivity.md#live-refresh).
 
 > [!WARNING]
-> A flash is used up by the next request from the same browser, and a live refresh in another tab counts. Move the notice out of the flash before you turn on live refresh, or it can show up in the wrong tab.
+> A flash is consumed by the next request from the same browser, including a live refresh in another tab. Move the notice out of the flash before turning on live refresh.
