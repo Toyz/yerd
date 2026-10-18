@@ -1,0 +1,475 @@
+// Generates the docs site's data from the repository itself:
+//
+//   public/data/api.json      every public export of the package's entry points,
+//                             with signatures as written, JSDoc, examples, source
+//                             links, class/interface members, and the version
+//                             each one first shipped in
+//   public/data/guides.json   the guides (docs/*.md and the README), by slug
+//   public/data/guides/*.md   their text
+//
+// "Since" versions come from git: for every release tag that's on npm, the
+// same walk runs over that tag's src/, and an export (or member) is stamped
+// with the first version it appears in. Anything only on main is unreleased.
+//
+// Run from site/: `node scripts/generate.mjs`. Needs the git history (tags);
+// CI checks out with fetch-depth 0.
+
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const site = resolve(here, "..");
+const repo = resolve(site, "..");
+const out = join(site, "public", "data");
+const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
+const REPO_URL = "https://github.com/Toyz/yerd";
+
+/** The package's documented entry points (package.json exports), source side. */
+const ENTRIES = [
+  { module: "@toyz/yerd", file: "src/index.ts" },
+  { module: "@toyz/yerd/auth", file: "src/auth/index.ts" },
+  { module: "@toyz/yerd/vite", file: "src/vite/index.ts" },
+  { module: "@toyz/yerd/jsx-runtime", file: "src/jsx/jsx-runtime.ts" },
+];
+
+/** Sections of the reference, by source file (then by directory). */
+const BY_FILE = {
+  "src/decorators/route.ts": "Routing",
+  "src/decorators/request.ts": "Request data",
+  "src/decorators/dto.ts": "DTOs and validation",
+  "src/decorators/guards.ts": "Guards",
+  "src/decorators/response.ts": "Responses",
+  "src/decorators/kit.ts": "Decorator kit",
+  "src/decorators/keys.ts": "Decorator kit",
+  "src/assets.ts": "Assets",
+  "src/polyfill.ts": "Runtime",
+};
+const BY_DIR = {
+  server: "Server",
+  router: "Server",
+  di: "Dependency injection",
+  render: "Rendering",
+  jsx: "JSX",
+  respond: "Responses",
+  actions: "Actions and dynamics",
+  attributes: "Actions and dynamics",
+  client: "Actions and dynamics",
+  session: "Sessions",
+  auth: "Auth",
+  live: "Live and streaming",
+  log: "Logging",
+  vite: "Vite",
+};
+const SECTION_ORDER = [
+  "Server", "Routing", "Request data", "DTOs and validation", "Responses", "Rendering", "JSX",
+  "Actions and dynamics", "Guards", "Dependency injection", "Sessions", "Auth", "Live and streaming",
+  "Logging", "Assets", "Decorator kit", "Vite", "Runtime",
+];
+
+function sectionOf(file) {
+  if (BY_FILE[file]) return BY_FILE[file];
+  const dir = file.split("/")[1];
+  return BY_DIR[dir] ?? "Other";
+}
+
+// ── the TypeScript program ──
+
+function programFor(root, entries) {
+  const options = {
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    lib: ["lib.es2023.d.ts", "lib.esnext.decorators.d.ts", "lib.dom.d.ts"],
+    jsx: ts.JsxEmit.ReactJSX,
+    jsxImportSource: "@toyz/yerd",
+    strict: true,
+    noEmit: true,
+    skipLibCheck: true,
+    types: ["node"],
+    typeRoots: [join(repo, "node_modules", "@types")],
+  };
+  const files = entries.map((e) => join(root, e.file)).filter((f) => existsSync(f));
+  return ts.createProgram(files, options);
+}
+
+const PRINT = ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope;
+
+function isHidden(symbol) {
+  return symbol.getJsDocTags().some((t) => t.name === "internal" || t.name === "hidden");
+}
+
+function docOf(symbol, checker) {
+  const text = ts.displayPartsToString(symbol.getDocumentationComment(checker)).trim();
+  const tags = symbol.getJsDocTags(checker);
+  const examples = [];
+  let deprecated;
+  let since;
+  const params = [];
+  for (const tag of tags) {
+    const body = ts.displayPartsToString(tag.text ?? []).trim();
+    if (tag.name === "example") examples.push(body.replace(/^```\w*\n?|\n?```$/g, ""));
+    else if (tag.name === "deprecated") deprecated = body || "Deprecated.";
+    else if (tag.name === "since") since = body.replace(/^v/, "");
+    else if (tag.name === "param") params.push(body);
+  }
+  return { text, examples, deprecated, since, params };
+}
+
+/** JSDoc read straight off a node, for members without a symbol (constructors, index signatures). */
+function nodeDoc(node) {
+  const docs = ts.getJSDocCommentsAndTags(node).filter(ts.isJSDoc);
+  const text = docs.map((d) => (typeof d.comment === "string" ? d.comment : ts.getTextOfJSDocComment(d.comment) ?? "")).join("\n").trim();
+  const examples = docs.flatMap((d) => (d.tags ?? []).filter((t) => t.tagName.text === "example").map((t) => (typeof t.comment === "string" ? t.comment : ts.getTextOfJSDocComment(t.comment) ?? "").replace(/^```\w*\n?|\n?```$/g, "")));
+  return { text, examples, params: [] };
+}
+
+/** A declaration's text as the author wrote it, without its body. */
+function headerOf(node, source) {
+  const text = node.getText(source);
+  let body;
+  if (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isConstructorDeclaration(node) || ts.isGetAccessor(node) || ts.isSetAccessor(node)) body = node.body;
+  else if (ts.isClassDeclaration(node)) return classHeader(node, source);
+  if (!body) return clean(text);
+  return clean(text.slice(0, body.getStart(source) - node.getStart(source)).trimEnd());
+}
+
+function classHeader(node, source) {
+  const text = node.getText(source);
+  const brace = node.members.pos - node.getStart(source);
+  return clean(text.slice(0, text.lastIndexOf("{", brace + 1)).trimEnd());
+}
+
+/** Drop JSDoc, decorators-on-own-lines noise and `export` from printed declarations. */
+function clean(text) {
+  return text
+    .replace(/\/\*\*[\s\S]*?\*\/\s*/g, "")
+    .replace(/^export\s+(default\s+)?/, "")
+    .replace(/^declare\s+/, "")
+    .trim();
+}
+
+function kindOf(decl) {
+  if (ts.isClassDeclaration(decl)) return "class";
+  if (ts.isInterfaceDeclaration(decl)) return "interface";
+  if (ts.isTypeAliasDeclaration(decl)) return "type";
+  if (ts.isEnumDeclaration(decl)) return "enum";
+  if (ts.isFunctionDeclaration(decl)) return "function";
+  if (ts.isVariableDeclaration(decl)) return "const";
+  return "other";
+}
+
+function location(decl, root) {
+  const source = decl.getSourceFile();
+  const { line } = source.getLineAndCharacterOfPosition(decl.getStart(source));
+  return { file: relative(root, source.fileName).split("\\").join("/"), line: line + 1 };
+}
+
+function memberKind(m) {
+  if (ts.isMethodDeclaration(m) || ts.isMethodSignature(m)) return "method";
+  if (ts.isGetAccessor(m) || ts.isSetAccessor(m)) return "accessor";
+  if (ts.isConstructorDeclaration(m) || ts.isConstructSignatureDeclaration(m)) return "constructor";
+  if (ts.isIndexSignatureDeclaration(m)) return "index";
+  return "property";
+}
+
+function memberName(m, source) {
+  if (ts.isConstructorDeclaration(m) || ts.isConstructSignatureDeclaration(m)) return "constructor";
+  if (ts.isIndexSignatureDeclaration(m)) return "[index]";
+  if (!m.name) return undefined;
+  if (ts.isPrivateIdentifier(m.name)) return undefined;
+  return m.name.getText(source);
+}
+
+function isPublicMember(m) {
+  const mods = ts.canHaveModifiers(m) ? ts.getModifiers(m) ?? [] : [];
+  return !mods.some((x) => x.kind === ts.SyntaxKind.PrivateKeyword || x.kind === ts.SyntaxKind.ProtectedKeyword);
+}
+
+function membersOf(decl, checker, source, root) {
+  if (!ts.isClassDeclaration(decl) && !ts.isInterfaceDeclaration(decl)) return [];
+  const members = [];
+  const seen = new Map();
+  for (const m of decl.members) {
+    const name = memberName(m, source);
+    if (!name || name.startsWith("_") || !isPublicMember(m)) continue;
+    const symbol = m.name ? checker.getSymbolAtLocation(m.name) : undefined;
+    if (symbol && isHidden(symbol)) continue;
+    const doc = symbol ? docOf(symbol, checker) : nodeDoc(m);
+    // Parameter properties: `constructor(readonly status: number)` documents fields too.
+    const mods = ts.canHaveModifiers(m) ? ts.getModifiers(m) ?? [] : [];
+    const isStatic = mods.some((x) => x.kind === ts.SyntaxKind.StaticKeyword);
+    let signature = headerOf(m, source).replace(/^(public\s+)/, "");
+    // `handle = async (...) => {...}` class fields: the type, not the function body.
+    if (ts.isPropertyDeclaration(m) && m.initializer && (ts.isArrowFunction(m.initializer) || ts.isFunctionExpression(m.initializer))) {
+      signature = `${name}: ${checker.typeToString(checker.getTypeAtLocation(m), undefined, PRINT)}`;
+    } else if (ts.isPropertyDeclaration(m) && m.initializer) {
+      signature = signature.replace(/\s*=[\s\S]*$/, "");
+    }
+    const entry = {
+      name,
+      kind: memberKind(m),
+      static: isStatic || undefined,
+      signature,
+      doc: doc.text || undefined,
+      examples: doc.examples.length ? doc.examples : undefined,
+      deprecated: doc.deprecated,
+      sinceOverride: doc.since,
+      line: location(m, root).line,
+    };
+    // Overloads: one entry, every signature.
+    const key = `${isStatic ? "static " : ""}${name}`;
+    if (seen.has(key)) {
+      const prev = seen.get(key);
+      if (!ts.isMethodDeclaration(m) || !m.body) prev.overloads = [...(prev.overloads ?? [prev.signature]), signature];
+      continue;
+    }
+    seen.set(key, entry);
+    members.push(entry);
+  }
+  // A method with overloads lists the overload signatures, not the implementation.
+  for (const m of members) if (m.overloads) m.signature = m.overloads.filter((s) => !/\{\s*$/.test(s)).join("\n");
+  return members;
+}
+
+/**
+ * An object-shaped constant (`export const is = { string(...), int(...) }`)
+ * documents its properties as members rather than as one enormous type.
+ */
+function objectMembers(symbol, decl, checker, root) {
+  if (!ts.isVariableDeclaration(decl)) return undefined;
+  const type = checker.getTypeOfSymbolAtLocation(symbol, decl);
+  if (type.getCallSignatures().length > 0 || type.isUnion()) return undefined;
+  const properties = type.getProperties();
+  if (properties.length < 2 || !decl.initializer || !ts.isObjectLiteralExpression(decl.initializer)) return undefined;
+  return properties.map((prop) => {
+    const propDecl = prop.getDeclarations()?.[0];
+    const propType = checker.getTypeOfSymbolAtLocation(prop, propDecl ?? decl);
+    const callable = propType.getCallSignatures();
+    const doc = docOf(prop, checker);
+    const signature = callable.length
+      ? callable.map((sig) => `${prop.getName()}${checker.signatureToString(sig, propDecl, PRINT)}`).join("\n")
+      : `${prop.getName()}: ${checker.typeToString(propType, propDecl, PRINT)}`;
+    return {
+      name: prop.getName(),
+      kind: callable.length ? "method" : "property",
+      signature,
+      doc: doc.text || undefined,
+      examples: doc.examples.length ? doc.examples : undefined,
+      deprecated: doc.deprecated,
+      sinceOverride: doc.since,
+      line: propDecl ? location(propDecl, root).line : undefined,
+    };
+  });
+}
+
+function signatureOf(symbol, decls, checker, source) {
+  const first = decls[0];
+  if (ts.isFunctionDeclaration(first)) {
+    // Overloads, when there are any, are the public signatures; the implementation isn't.
+    const overloads = decls.filter((d) => ts.isFunctionDeclaration(d) && !d.body);
+    return (overloads.length ? overloads : [first]).map((d) => headerOf(d, d.getSourceFile())).join("\n");
+  }
+  if (ts.isVariableDeclaration(first)) {
+    const list = first.parent;
+    const keyword = list && (list.flags & ts.NodeFlags.Const) ? "const" : "let";
+    const type = first.type ? first.type.getText(source) : checker.typeToString(checker.getTypeOfSymbolAtLocation(symbol, first), first, PRINT);
+    return `${keyword} ${symbol.getName()}: ${type}`;
+  }
+  return decls.map((d) => headerOf(d, d.getSourceFile())).join("\n\n");
+}
+
+/** Walk one checkout's entry points. `full`: collect everything; otherwise just the names (for since-stamping). */
+function walk(root, full) {
+  const program = programFor(root, ENTRIES);
+  const checker = program.getTypeChecker();
+  const entries = [];
+  const keys = new Set();
+  for (const { module, file } of ENTRIES) {
+    const source = program.getSourceFile(join(root, file));
+    if (!source) continue;
+    const moduleSymbol = checker.getSymbolAtLocation(source);
+    if (!moduleSymbol) continue;
+    for (const exported of checker.getExportsOfModule(moduleSymbol)) {
+      const name = exported.getName();
+      if (name === "default" || name.startsWith("_")) continue;
+      const symbol = exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
+      const decls = (symbol.getDeclarations() ?? []).filter((d) => !ts.isSourceFile(d));
+      if (decls.length === 0 || isHidden(symbol)) continue;
+      // A name that's both a value and a type (`export const ILogger = token<ILogger>()`
+      // next to `interface ILogger`) is documented once, by its most descriptive declaration.
+      const main = decls.find((d) => ts.isClassDeclaration(d) || ts.isInterfaceDeclaration(d)) ?? decls.find((d) => ts.isFunctionDeclaration(d)) ?? decls[0];
+      const declSource = main.getSourceFile();
+      const key = `${module}:${name}`;
+      keys.add(key);
+      const objectProps = objectMembers(symbol, main, checker, root);
+      const members = objectProps ?? membersOf(main, checker, declSource, root);
+      for (const m of members) keys.add(`${key}.${m.static ? "static " : ""}${m.name}`);
+      if (!full) continue;
+      const doc = docOf(symbol, checker);
+      const where = location(main, root);
+      entries.push({
+        module,
+        name,
+        kind: kindOf(main),
+        section: sectionOf(where.file),
+        signature: objectProps
+          ? `const ${name}: { ${objectProps.map((p) => p.name).join(", ")} }`
+          : signatureOf(symbol, ts.isFunctionDeclaration(main) ? decls.filter(ts.isFunctionDeclaration) : [main], checker, declSource),
+        doc: doc.text || undefined,
+        examples: doc.examples.length ? doc.examples : undefined,
+        deprecated: doc.deprecated,
+        sinceOverride: doc.since,
+        source: where,
+        members: members.length ? members : undefined,
+      });
+    }
+  }
+  return { entries, keys };
+}
+
+// ── versions ──
+
+function git(...args) {
+  return execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+}
+
+async function publishedVersions() {
+  try {
+    const response = await fetch(`https://registry.npmjs.org/${pkg.name.replace("/", "%2f")}`, { signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) return undefined;
+    const meta = await response.json();
+    return new Set(Object.keys(meta.versions ?? {}));
+  } catch {
+    return undefined;
+  }
+}
+
+async function releases() {
+  const tags = git("tag", "--list", "v*", "--sort=v:refname").split("\n").filter(Boolean);
+  const onNpm = await publishedVersions();
+  // A tag whose release never reached npm (a failed publish) didn't ship anything.
+  return tags.map((tag) => ({ tag, version: tag.slice(1) })).filter((r) => !onNpm || onNpm.has(r.version));
+}
+
+function checkout(tag) {
+  const dir = mkdtempSync(join(tmpdir(), `yerd-${tag}-`));
+  const archive = execFileSync("git", ["archive", "--format=tar", tag, "src"], { cwd: repo, maxBuffer: 256 * 1024 * 1024 });
+  execFileSync("tar", ["-x", "-C", dir], { input: archive });
+  return dir;
+}
+
+// ── guides ──
+
+// The user guides live in docs/guide/NN-slug.md (ordered by the number); the
+// older docs/*.md are design notes, kept for anyone curious about internals.
+const DESIGN_NOTES = [
+  { slug: "design", file: "docs/PLAN.md", title: "Design and decisions" },
+  { slug: "dynamics-design", file: "docs/DYNAMICS.md" },
+  { slug: "auth-design", file: "docs/AUTH.md" },
+  { slug: "decorators-design", file: "docs/DECORATORS.md" },
+  { slug: "logging-design", file: "docs/LOGGING.md" },
+  { slug: "build-design", file: "docs/BUILD.md" },
+  { slug: "performance", file: "docs/PERF.md" },
+  { slug: "releasing", file: "docs/RELEASING.md" },
+  { slug: "builder", file: "docs/BUILDER.md" },
+  { slug: "spikes", file: "docs/SPIKES.md" },
+];
+
+function guideList() {
+  const list = [{ slug: "overview", file: "README.md", title: "Overview", group: "Start" }];
+  const dir = join(repo, "docs", "guide");
+  if (existsSync(dir)) {
+    for (const name of readdirSync(dir).filter((f) => /^\d+-[\w-]+\.md$/.test(f)).sort()) {
+      list.push({ slug: name.replace(/^\d+-|\.md$/g, ""), file: `docs/guide/${name}`, group: "Guides" });
+    }
+  }
+  for (const note of DESIGN_NOTES) list.push({ ...note, group: "Design notes" });
+  return list;
+}
+
+function writeGuides() {
+  mkdirSync(join(out, "guides"), { recursive: true });
+  const keep = new Set(guideList().map((g) => `${g.slug}.md`));
+  for (const name of readdirSync(join(out, "guides"))) if (!keep.has(name)) rmSync(join(out, "guides", name));
+  const index = [];
+  for (const guide of guideList()) {
+    const path = join(repo, guide.file);
+    if (!existsSync(path)) continue;
+    const text = readFileSync(path, "utf8");
+    const heading = /^#\s+(.+)$/m.exec(text)?.[1]?.replace(/`/g, "") ?? guide.slug;
+    writeFileSync(join(out, "guides", `${guide.slug}.md`), text);
+    index.push({ slug: guide.slug, title: guide.title ?? heading, file: guide.file, group: guide.group });
+  }
+  writeFileSync(join(out, "guides.json"), JSON.stringify(index, null, 2));
+  return index;
+}
+
+// ── main ──
+
+const started = performance.now();
+// Files are overwritten in place (and stale ones removed one by one) rather
+// than deleting the folder: a running Vite dev server keeps a list of public
+// files, and removing the whole directory under it makes it serve index.html.
+mkdirSync(out, { recursive: true });
+
+const current = walk(repo, true);
+const shipped = await releases();
+const firstSeen = new Map();
+for (const { tag, version } of shipped) {
+  const dir = checkout(tag);
+  try {
+    for (const key of walk(dir, false).keys) if (!firstSeen.has(key)) firstSeen.set(key, version);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+let unreleased = 0;
+for (const entry of current.entries) {
+  const key = `${entry.module}:${entry.name}`;
+  entry.since = entry.sinceOverride ?? firstSeen.get(key) ?? null;
+  delete entry.sinceOverride;
+  if (entry.since === null) unreleased++;
+  for (const m of entry.members ?? []) {
+    m.since = m.sinceOverride ?? firstSeen.get(`${key}.${m.static ? "static " : ""}${m.name}`) ?? null;
+    delete m.sinceOverride;
+    // A member newer than its owner is worth a badge; one as old as its owner isn't.
+    if (m.since === entry.since) m.since = undefined;
+  }
+}
+
+current.entries.sort((a, b) => {
+  const s = SECTION_ORDER.indexOf(a.section) - SECTION_ORDER.indexOf(b.section);
+  return s !== 0 ? s : a.name.localeCompare(b.name);
+});
+
+let commit = "unknown";
+try {
+  commit = git("rev-parse", "--short", "HEAD");
+} catch {
+  // not a git checkout
+}
+
+const api = {
+  package: pkg.name,
+  version: pkg.version,
+  released: shipped.map((r) => r.version),
+  latest: shipped.at(-1)?.version ?? null,
+  commit,
+  repo: REPO_URL,
+  generated: new Date().toISOString(),
+  sections: SECTION_ORDER.filter((s) => current.entries.some((e) => e.section === s)),
+  entries: current.entries,
+};
+writeFileSync(join(out, "api.json"), JSON.stringify(api));
+const guides = writeGuides();
+
+console.log(
+  `[site] ${current.entries.length} exports (${unreleased} unreleased) across ${api.sections.length} sections, ` +
+    `since-stamped from ${shipped.length} release(s) [${api.released.join(", ")}], ${guides.length} guides, ` +
+    `${Math.round(performance.now() - started)}ms`,
+);

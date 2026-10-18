@@ -1,0 +1,55 @@
+/* Global tokens. Custom properties inherit through shadow roots, so every
+   loom component reads these with var(--...). */
+:root {
+  color-scheme: dark;
+  --bg: #0d0f12;
+  --bg-raised: #14171c;
+  --bg-sunken: #0a0c0e;
+  --bg-hover: #1b1f26;
+  --border: #23272f;
+  --border-strong: #313743;
+  --text: #e6e8eb;
+  --text-dim: #a2a9b4;
+  --text-faint: #6b7280;
+  --accent: #8bd5a0;
+  --accent-dim: #4f8c62;
+  --accent-bg: rgba(139, 213, 160, 0.1);
+  --warn: #e8c46a;
+  --warn-bg: rgba(232, 196, 106, 0.1);
+  --danger: #f08b8b;
+  --info: #8ab4f8;
+  --info-bg: rgba(138, 180, 248, 0.1);
+  --font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --radius: 8px;
+  --sidebar: 272px;
+
+  --tok-comment: #6b7280;
+  --tok-string: #c3e88d;
+  --tok-keyword: #c792ea;
+  --tok-decorator: #ffcb6b;
+  --tok-number: #f78c6c;
+  --tok-type: #82aaff;
+  --tok-fn: #8bd5a0;
+  --tok-tag: #f07178;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--accent-dim);
+  color: var(--text);
+}

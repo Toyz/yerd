@@ -1,0 +1,129 @@
+/** One export: import line, signature, docs, examples, and its members with their own version badges. */
+
+import { LoomElement, component, css, mount, prop, reactive, styles, watch } from "@toyz/loom";
+import { route } from "@toyz/loom/router";
+import { entryId, linkContext, loadApi, loadGuides, sectionId, sourceUrl, type Api, type Entry, type GuideInfo, type Member } from "../data";
+import { Code, KindBadge, Markdown, SinceBadge } from "../ui";
+
+const sheet = css`
+  .crumbs { font-size: 0.82rem; color: var(--text-faint); margin-bottom: 10px; }
+  .title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .title h1 { font-family: var(--mono); font-size: 1.7rem; margin: 0; word-break: break-all; }
+  .facts { display: flex; gap: 14px; flex-wrap: wrap; font-size: 0.82rem; color: var(--text-faint); margin: 8px 0 18px; }
+  .deprecated-note { border-left: 3px solid var(--danger); background: rgba(240, 139, 139, 0.08); padding: 8px 14px; border-radius: 0 var(--radius) var(--radius) 0; margin: 12px 0; }
+  .empty { color: var(--text-faint); font-style: italic; }
+  .member { border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 16px 6px; margin: 12px 0; background: var(--bg-raised); scroll-margin-top: 20px; }
+  .member-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 0; }
+  .member-head h3 { font-family: var(--mono); font-size: 0.98rem; margin: 0; }
+  .member-head .src { margin-left: auto; font-size: 0.75rem; }
+  .member pre.signature { margin: 10px 0; }
+  .member .prose p:first-child { margin-top: 4px; }
+  h2 .count { color: var(--text-faint); font-weight: 400; font-size: 0.9rem; }
+`;
+
+const MEMBER_ORDER: Record<Member["kind"], number> = { constructor: 0, property: 1, accessor: 2, method: 3, index: 4 };
+
+@route("/api/:id")
+@component("page-api-entry")
+@styles(sheet)
+export class PageApiEntry extends LoomElement {
+  @prop({ param: "id" }) accessor id = "";
+  @reactive accessor api: Api | undefined = undefined;
+  @reactive accessor guides: GuideInfo[] = [];
+
+  @mount async load() {
+    window.scrollTo(0, 0);
+    const [api, guides] = await Promise.all([loadApi(), loadGuides()]);
+    this.api = api;
+    this.guides = guides;
+  }
+
+  @watch("id") onId() {
+    if (this.isConnected) window.scrollTo(0, 0);
+  }
+
+  #member(m: Member, entry: Entry, api: Api) {
+    const ctx = linkContext(api, this.guides);
+    return (
+      <div class="member" id={`m-${m.name}`} loom-key={`${m.static ? "static " : ""}${m.name}`}>
+        <div class="member-head">
+          <h3>
+            {m.static ? "static " : ""}
+            {m.name}
+          </h3>
+          <span class="badge kind">{m.kind}</span>
+          <SinceBadge since={m.since} />
+          {m.deprecated ? <span class="badge deprecated">deprecated</span> : null}
+          {m.line ? (
+            <a class="src" href={sourceUrl(api, entry.source.file, m.line)} target="_blank" rel="noopener">source</a>
+          ) : null}
+        </div>
+        <Code class="signature" code={m.signature} />
+        {m.deprecated ? <div class="deprecated-note">{m.deprecated}</div> : null}
+        {m.doc ? <Markdown text={m.doc} ctx={ctx} /> : null}
+        {(m.examples ?? []).map((ex) => (
+          <Code code={ex} />
+        ))}
+      </div>
+    );
+  }
+
+  update() {
+    const api = this.api;
+    if (!api) return <p class="loading">Loading…</p>;
+    const entry = api.entries.find((e) => entryId(e) === this.id);
+    if (!entry) {
+      return (
+        <div>
+          <h1>Not found</h1>
+          <p>
+            No export <code>{this.id}</code>. <a href="#/api">All exports</a>
+          </p>
+        </div>
+      );
+    }
+    const ctx = linkContext(api, this.guides);
+    const members = [...(entry.members ?? [])].sort((a, b) => MEMBER_ORDER[a.kind] - MEMBER_ORDER[b.kind]);
+    const typeOnly = entry.kind === "interface" || entry.kind === "type";
+    const importLine = `import { ${typeOnly ? `type ${entry.name}` : entry.name} } from "${entry.module}";`;
+    return (
+      <article>
+        <div class="crumbs">
+          <a href="#/api">API</a> / <a href={`#/api/section/${sectionId(entry.section)}`}>{entry.section}</a>
+        </div>
+        <div class="title">
+          <h1>{entry.name}</h1>
+          <KindBadge kind={entry.kind} />
+          <SinceBadge since={entry.since} />
+          {entry.deprecated ? <span class="badge deprecated">deprecated</span> : null}
+        </div>
+        <div class="facts">
+          <span>{entry.module}</span>
+          <a href={sourceUrl(api, entry.source.file, entry.source.line)} target="_blank" rel="noopener">
+            {entry.source.file}:{entry.source.line}
+          </a>
+        </div>
+        <Code code={importLine} />
+        <Code class="signature" code={entry.signature} />
+        {entry.deprecated ? <div class="deprecated-note">{entry.deprecated}</div> : null}
+        {entry.doc ? <Markdown text={entry.doc} ctx={ctx} /> : <p class="empty">No description yet; the signature and source are above.</p>}
+        {entry.examples?.length ? (
+          <>
+            <h2>Examples</h2>
+            {entry.examples.map((ex) => (
+              <Code code={ex} />
+            ))}
+          </>
+        ) : null}
+        {members.length ? (
+          <>
+            <h2>
+              {entry.kind === "const" ? "Properties" : "Members"} <span class="count">({members.length})</span>
+            </h2>
+            {members.map((m) => this.#member(m, entry, api))}
+          </>
+        ) : null}
+      </article>
+    );
+  }
+}

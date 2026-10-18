@@ -82,6 +82,10 @@ export default yerd()
 
 ## Docs and examples
 
+**[toyz.github.io/yerd](https://toyz.github.io/yerd/)**: guides, plus an API
+reference generated from the source on every push to main, with the version
+each export and member first shipped in.
+
 - [docs/PLAN.md](docs/PLAN.md): the design, decorator catalog, status.
 - [docs/DYNAMICS.md](docs/DYNAMICS.md): actions, morphing, custom attributes, auto mode.
 - [docs/AUTH.md](docs/AUTH.md): sessions, auth, the security model.

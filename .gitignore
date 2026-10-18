@@ -7,3 +7,4 @@ test-results/
 playwright-report/
 examples/*/dist/
 *.tgz
+site/public/data/
