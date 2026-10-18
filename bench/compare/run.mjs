@@ -58,8 +58,8 @@ if (clientCpus) execFileSync("taskset", ["-a", "-pc", clientCpus, String(process
 
 // ---------------------------------------------------------------- frameworks
 
-function pkgVersion(name) {
-  const path = name === "@toyz/yerd" ? join(here, "../../package.json") : join(here, "node_modules", name, "package.json");
+function pkgVersion(name, within = "") {
+  const path = name === "@toyz/yerd" ? join(here, "../../package.json") : join(here, "node_modules", within, within && "node_modules", name, "package.json");
   return JSON.parse(readFileSync(path, "utf8")).version;
 }
 
@@ -72,6 +72,15 @@ const FRAMEWORKS = [
   { id: "nest", name: "NestJS (Fastify)", pkg: "@nestjs/core", url: "https://nestjs.com", entry: "dist/nest.js" },
   { id: "node", name: "node:http (baseline)", url: "https://nodejs.org/api/http.html", entry: "dist/node.js" },
 ].map((f, i) => ({ ...f, port: 3101 + i, version: f.pkg ? pkgVersion(f.pkg) : process.versions.node }));
+
+// Nest's Fastify adapter pins an exact Fastify, nested under it when it differs from ours.
+function nestFastify() {
+  try {
+    return pkgVersion("fastify", "@nestjs/platform-fastify");
+  } catch {
+    return pkgVersion("fastify");
+  }
+}
 
 // ---------------------------------------------------------------- scenarios
 
@@ -303,7 +312,7 @@ const results = new Map(scenarios.map((s) => [s.id, []]));
 const skipped = [];
 
 for (const framework of frameworks) {
-  console.log(`\n${framework.name} ${framework.version}`);
+  console.log(`\n${framework.name} ${framework.version}   (load average ${load()})`);
   const server = await start(framework);
   try {
     const ready = [];
@@ -413,11 +422,12 @@ const report = {
     "yerd streams pages (chunked transfer encoding); the React-based servers and Hono send one buffered string with a content-length.",
     "Per request yerd also builds a request context, creates the route class instance through its DI container in a request scope (C#-style scoped lifetime), resolves decorated accessors, and adds an x-content-type-options: nosniff header. Express adds an ETag on res.json/res.send by default; kept, since it is the default.",
     "The auth check compares the Authorization header with a fixed token: a createGuard guard in yerd, a CanActivate guard in Nest, a route onRequest hook in Fastify, route middleware in Express, Koa and Hono.",
-    `NestJS ${pkgVersion("@nestjs/core")} uses @nestjs/platform-fastify (Fastify ${pkgVersion("fastify")} as bundled by Nest). Hono runs on @hono/node-server ${pkgVersion("@hono/node-server")}. Koa uses @koa/router ${pkgVersion("@koa/router")} and @koa/bodyparser ${pkgVersion("@koa/bodyparser")}. React ${pkgVersion("react")}.`,
+    `NestJS ${pkgVersion("@nestjs/core")} uses @nestjs/platform-fastify (which pins its own Fastify, ${nestFastify()}). Hono runs on @hono/node-server ${pkgVersion("@hono/node-server")}. Koa uses @koa/router ${pkgVersion("@koa/router")} and @koa/bodyparser ${pkgVersion("@koa/bodyparser")}. React ${pkgVersion("react")}.`,
     "node:http (baseline) is not a framework: a hand-rolled router on plain node:http, shown as a ceiling. 'vs best' percentages compare frameworks only.",
     serverCpus
       ? `CPU pinning (taskset): each server on CPUs ${serverCpus}, the client on CPUs ${clientCpus}, so results don't swing with where the scheduler puts them.`
       : "No CPU pinning.",
+    "Run-to-run noise: between two full runs on this machine most cells moved by about 10% or less (yerd params by 14%); the first of those runs also had one outlier, yerd ssr 26% low while other work was running on the host, so it was run again. Treat gaps under ~10% as ties. The benchmark itself keeps 5-6 threads busy (server plus client), which is most of the load average during a run.",
     `1-minute/5-minute/15-minute load average: ${loadAtStart} at start, ${loadAtEnd} at end.`,
   ],
 };
