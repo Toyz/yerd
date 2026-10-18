@@ -215,6 +215,16 @@ describe("<Dynamic>", () => {
     );
   });
 
+  // The wrapper is an element like any other: inside <Local> its handlers
+  // go to the browser (they were dropped).
+  it("a handler on the wrapper inside <Local> is shipped, outside it's dropped", async () => {
+    expect(await renderToString(<Local state={{ n: 0 }}>{(s) => <Dynamic id="d" onClick={() => s.n++}>{() => "x"}</Dynamic>}</Local>)).toBe(
+      '<yerd-local data-yx-local="{&quot;n&quot;:0}" data-yx-as="s" style="display:contents">' +
+        '<div data-yx-on-click="() =&gt; s.n++" id="d" data-yx-region>x</div></yerd-local>',
+    );
+    expect(await renderToString(<Dynamic id="d" onClick={() => 1}>{() => "x"}</Dynamic>)).toBe('<div id="d" data-yx-region>x</div>');
+  });
+
   it("calling Dynamic as a function just renders its children", async () => {
     expect(await renderToString(Dynamic({ id: "d", children: () => <i>x</i> }) as Child)).toBe("<i>x</i>");
   });

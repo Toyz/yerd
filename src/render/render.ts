@@ -338,7 +338,7 @@ function renderDynamic(props: DynamicProps, state: State): Step {
     state.insideDynamic--;
   };
   try {
-    write(state, `<${as}${renderAttributes(attrs, as)}>`);
+    write(state, `<${as}${renderAttributes(attrs, as, true, state.insideLocal > 0)}>`);
     // Prerendering: the skeleton. Otherwise: the real content, per request.
     const step = renderChild(deferred ? fallback : children(), state);
     const tail = step ? step.then(finish) : finish();
