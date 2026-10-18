@@ -6,6 +6,12 @@
  * horizontal rules. Every piece of text is escaped; the only markup in the
  * output is what this file writes, so a doc can't inject script.
  *
+ * And the guide extensions docs/WRITING.md describes: `answer` blocks
+ * (answer.ts) drawn as one card with the code above them, `> [!TAKE]`
+ * callouts, diagram blocks by name (diagrams.tsx), and runs of code blocks
+ * labelled tab="..." grouped behind one tab strip. prose.ts makes the cards
+ * interactive.
+ *
  * Links: `api:yerd.res` goes to an API page, `OTHER.md` and `docs/OTHER.md`
  * become routes to that guide,
  * `#section` a route to the heading, repository paths (`src/...`,
@@ -13,7 +19,10 @@
  * mailto is dropped to plain text.
  */
 
+import { renderAnswer } from "./answer";
+import { hasDiagram } from "./diagrams";
 import { highlight, type CodeLinker } from "./highlight";
+import { chosenTab } from "./prose";
 
 export interface Heading {
   level: number;
@@ -192,6 +201,82 @@ function cells(row: string): string[] {
   return row.trim().replace(/^\||\|$/g, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
 }
 
+/** yerd's mark (ui.tsx's Mark), small, for the take callout's label. */
+const TAKE_MARK =
+  '<svg class="take-mark" viewBox="0 0 32 32" width="20" height="20" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--brand)"/>' +
+  `<text x="16" y="22.5" text-anchor="middle" font-family="'Young Serif', Georgia, serif" font-size="22" fill="#fff8ee">y</text></svg>`;
+
+interface Fence {
+  /** The language: the info string's first word. */
+  lang: string;
+  /** The rest of the info string: `tab="..."`, a diagram's name. */
+  info: string;
+  body: string;
+  /** The line the fence closes on. */
+  end: number;
+}
+
+/** The fenced block opening at line `i`, if one does. It closes on a fence at least as long as its own. */
+function readFence(lines: string[], i: number): Fence | undefined {
+  const open = /^(\s*)(```+|~~~+)\s*([^\s`]*)\s*(.*?)\s*$/.exec(lines[i]!);
+  if (!open) return undefined;
+  const [, indent, close, lang, info] = open;
+  const body: string[] = [];
+  let j = i + 1;
+  for (; j < lines.length && !lines[j]!.trimStart().startsWith(close!); j++) body.push(lines[j]!.slice(indent!.length));
+  return { lang: lang!.toLowerCase(), info: info!, body: body.join("\n"), end: j };
+}
+
+/** The next fenced block when only blank lines come before it. */
+function nextFence(lines: string[], from: number): Fence | undefined {
+  let j = from;
+  while (j < lines.length && lines[j]!.trim() === "") j++;
+  return j < lines.length ? readFence(lines, j) : undefined;
+}
+
+function tabLabel(info: string): string | undefined {
+  const m = /(?:^|\s)tab=(?:"([^"]*)"|'([^']*)'|(\S+))/.exec(info);
+  return m ? (m[1] ?? m[2] ?? m[3])!.trim() : undefined;
+}
+
+function codeBlock(fence: Fence, ctx: LinkContext): string {
+  const lang = fence.lang || "text";
+  return `<div class="code-wrap"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="code" data-lang="${escapeHtml(lang)}"><code>${highlight(fence.body, lang, codeLinker(fence.body, ctx))}</code></pre></div>`;
+}
+
+let tabGroups = 0;
+
+/**
+ * Consecutive tab="..." blocks: one card with a tab strip. Groups with the
+ * same labels share a choice (prose.ts keeps it), so picking "An object" once
+ * switches every such group on the page.
+ */
+function renderTabs(tabs: Array<{ label: string; html: string }>): string {
+  const id = `tabs${++tabGroups}`;
+  const key = tabs.map((t) => t.label).join("\u0001");
+  const chosen = Math.max(0, tabs.findIndex((t) => t.label === chosenTab(key)));
+  const strip = tabs
+    .map(
+      (t, n) =>
+        `<button type="button" role="tab" id="${id}-t${n}" aria-controls="${id}-p${n}" aria-selected="${n === chosen}" tabindex="${n === chosen ? 0 : -1}" data-label="${escapeHtml(t.label)}">${escapeHtml(t.label)}</button>`,
+    )
+    .join("");
+  const panels = tabs
+    .map((t, n) => `<div class="tab-panel" role="tabpanel" id="${id}-p${n}" aria-labelledby="${id}-t${n}"${n === chosen ? "" : " hidden"}>${t.html}</div>`)
+    .join("");
+  return `<div class="example tabbed" data-tabs="${escapeHtml(key)}"><div class="tab-bar"><div class="tab-strip" role="tablist" aria-label="Variants">${strip}</div></div>${panels}</div>`;
+}
+
+/** A named diagram (diagrams.tsx), or its fallback text as a plain block when the name is unknown. */
+function renderDiagram(name: string, fallback: string): string {
+  const text = fallback.trim();
+  if (hasDiagram(name)) {
+    return `<yerd-diagram class="diagram" name="${escapeHtml(name)}" data-alt="${escapeHtml(text)}"><pre class="diagram-fallback">${escapeHtml(text)}</pre></yerd-diagram>`;
+  }
+  if (import.meta.env?.DEV) console.warn(`[docs] unknown diagram "${name}"; showing its fallback text`);
+  return `<pre class="diagram-fallback">${escapeHtml(text)}</pre>`;
+}
+
 export function renderMarkdown(source: string, ctx: LinkContext): Rendered {
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const headings: Heading[] = [];
@@ -216,14 +301,38 @@ export function renderMarkdown(source: string, ctx: LinkContext): Rendered {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
 
-    const fence = /^(\s*)(```+|~~~+)\s*([\w+-]*)/.exec(line);
+    const fence = readFence(lines, i);
     if (fence) {
       flush();
-      const body: string[] = [];
-      const close = fence[2]!;
-      for (i++; i < lines.length && !lines[i]!.trimStart().startsWith(close); i++) body.push(lines[i]!.slice(fence[1]!.length));
-      const source = body.join("\n");
-      html += `<div class="code-wrap"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="code" data-lang="${escapeHtml(fence[3] || "text")}"><code>${highlight(source, fence[3] || "text", codeLinker(source, ctx))}</code></pre></div>`;
+      i = fence.end;
+      if (fence.lang === "answer") {
+        html += `<div class="example only-answer">${renderAnswer(fence.body)}</div>`;
+        continue;
+      }
+      if (fence.lang === "diagram") {
+        html += renderDiagram(fence.info.split(/\s+/)[0] ?? "", fence.body);
+        continue;
+      }
+      // A code block, the answer right after it (blank lines between), and,
+      // for blocks labelled tab="...", the tabbed blocks that follow.
+      const withAnswer = (block: Fence) => {
+        const next = nextFence(lines, block.end + 1);
+        if (next?.lang !== "answer") return { block, answer: undefined };
+        i = next.end;
+        return { block, answer: next };
+      };
+      const label = tabLabel(fence.info);
+      if (label === undefined) {
+        const { block, answer } = withAnswer(fence);
+        html += answer ? `<div class="example">${codeBlock(block, ctx)}${renderAnswer(answer.body)}</div>` : codeBlock(block, ctx);
+        continue;
+      }
+      const tabs = [{ label, ...withAnswer(fence) }];
+      for (let next = nextFence(lines, i + 1); next && tabLabel(next.info) !== undefined; next = nextFence(lines, i + 1)) {
+        i = next.end;
+        tabs.push({ label: tabLabel(next.info)!, ...withAnswer(next) });
+      }
+      html += renderTabs(tabs.map((t) => ({ label: t.label, html: codeBlock(t.block, ctx) + (t.answer ? renderAnswer(t.answer.body) : "") })));
       continue;
     }
 
@@ -268,11 +377,16 @@ export function renderMarkdown(source: string, ctx: LinkContext): Rendered {
       flush();
       const body = [quote[1]!];
       for (; i + 1 < lines.length && /^\s*>/.test(lines[i + 1]!); i++) body.push(lines[i + 1]!.replace(/^\s*>\s?/, ""));
-      // GitHub-style callouts: > [!NOTE], [!TIP], [!WARNING], [!IMPORTANT].
-      const callout = /^\[!(NOTE|TIP|WARNING|IMPORTANT|CAUTION)\]\s*$/i.exec(body[0]!.trim());
+      // GitHub-style callouts: > [!NOTE], [!TIP], [!WARNING], [!IMPORTANT];
+      // and yerd's own, > [!TAKE]: why yerd does something the way it does.
+      const callout = /^\[!(NOTE|TIP|WARNING|IMPORTANT|CAUTION|TAKE)\]\s*$/i.exec(body[0]!.trim());
       if (callout) {
         const kind = callout[1]!.toLowerCase();
-        html += `<div class="callout ${kind}"><div class="callout-title">${kind}</div>${renderMarkdown(body.slice(1).join("\n"), ctx).html}</div>`;
+        const inner = renderMarkdown(body.slice(1).join("\n"), ctx).html;
+        html +=
+          kind === "take"
+            ? `<aside class="callout take" aria-label="yerd's take"><div class="callout-title">${TAKE_MARK}<span>yerd's take</span></div>${inner}</aside>`
+            : `<div class="callout ${kind}"><div class="callout-title">${kind}</div>${inner}</div>`;
       } else html += `<blockquote>${renderMarkdown(body.join("\n"), ctx).html}</blockquote>`;
       continue;
     }

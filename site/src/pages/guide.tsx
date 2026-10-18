@@ -7,7 +7,7 @@
 import { LoomElement, component, css, mount, on, prop, reactive, styles, throttle, watch } from "@toyz/loom";
 import { route } from "@toyz/loom/router";
 import { linkContext, loadApi, loadGuide, loadGuides, type Api, type GuideInfo } from "../data";
-import { onCopyClick } from "../ui";
+import { onProseClick, onProseKeydown } from "../prose";
 import { renderMarkdown, type Heading } from "../markdown";
 
 const sheet = css`
@@ -133,7 +133,7 @@ export class PageGuide extends LoomElement {
               </span>
             </div>
           ) : null}
-          <div class="prose" onClick={onCopyClick} rawHTML={this.html}></div>
+          <div class="prose" onClick={onProseClick} onKeyDown={onProseKeydown} rawHTML={this.html}></div>
           <div class="after">
             {editUrl ? (
               <p class="edit-line">

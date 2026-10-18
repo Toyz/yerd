@@ -5,6 +5,7 @@
 
 import { css } from "@toyz/loom";
 import { codeStyles } from "./highlight";
+import { proseStyles } from "./prose";
 
 /**
  * Kind tags are shaped like the plant labels you push into a flower bed: a
@@ -66,6 +67,7 @@ export const tagStyles = css`
 export const pageStyles = css`
   ${codeStyles}
   ${tagStyles}
+  ${proseStyles}
 
   :host {
     display: block;

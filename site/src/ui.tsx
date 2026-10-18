@@ -2,6 +2,7 @@
 
 import { renderMarkdown, type LinkContext } from "./markdown";
 import { highlight } from "./highlight";
+import { onProseClick, onProseKeydown } from "./prose";
 
 /** "since v0.1.0", "unreleased", or nothing (as old as its owner). */
 export function SinceBadge({ since }: { since: string | null | undefined }) {
@@ -37,7 +38,7 @@ export function Mark({ size = 28 }: { size?: number }) {
 
 /** Markdown (guides, JSDoc), rendered by markdown.ts: escaped text plus its own markup only. */
 export function Markdown({ text, ctx, class: className = "prose" }: { text: string; ctx: LinkContext; class?: string }) {
-  return <div class={className} onClick={onCopyClick} rawHTML={renderMarkdown(text, ctx).html}></div>;
+  return <div class={className} onClick={onProseClick} onKeyDown={onProseKeydown} rawHTML={renderMarkdown(text, ctx).html}></div>;
 }
 
 /**
@@ -72,17 +73,9 @@ export function Code({
 
 /**
  * Click handler for a container of rendered markdown: the copy buttons the
- * renderer puts on code blocks.
+ * renderer puts on code blocks and answers, tabs, previews (prose.ts).
  */
-export function onCopyClick(event: Event): void {
-  const button = (event.target as Element).closest?.(".copy");
-  if (!button) return;
-  const code = button.parentElement?.querySelector("code")?.textContent ?? "";
-  void navigator.clipboard?.writeText(code).then(() => {
-    button.textContent = "Copied";
-    setTimeout(() => (button.textContent = "Copy"), 1200);
-  });
-}
+export const onCopyClick = onProseClick;
 
 /** The first sentence of a doc comment, for lists. */
 export function summary(doc: string | undefined): string {
