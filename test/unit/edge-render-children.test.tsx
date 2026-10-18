@@ -199,7 +199,7 @@ describe("components", () => {
     ["a promise of a promise", Promise.resolve(Promise.resolve("x")), "x"],
     ["an array of promises", [later("a", 5), later("b", 1)], "ab"],
   ])("async, returning %s", async (_, value, html) => {
-    const C = async () => value as Child;
+    const C = (async () => value) as () => Child;
     expect(await renderToString(<p><C /></p>)).toBe(`<p>${html}</p>`);
   });
 
@@ -243,7 +243,7 @@ describe("components", () => {
   });
 
   it("a thenable that isn't a Promise is awaited", async () => {
-    const thenable = { then: (resolve: (v: unknown) => void) => resolve(<i>t</i>) };
+    const thenable: unknown = { then: (resolve: (v: unknown) => void) => resolve(<i>t</i>) };
     expect(await renderToString(<p>{thenable as never}</p>)).toBe("<p><i>t</i></p>");
   });
 

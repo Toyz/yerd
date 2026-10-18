@@ -189,9 +189,10 @@ describe("class and className", () => {
   });
 
   it("raw() in a class is its text (it rendered as class=\"html\")", async () => {
-    expect(await renderToString(<b class={raw("a b")} />)).toBe('<b class="a b"></b>');
-    expect(await renderToString(<b class={["x", raw("y")]} />)).toBe('<b class="x y"></b>');
-    expect(await renderToString(<b class="x" className={raw("y")} />)).toBe('<b class="x y"></b>');
+    // The JSX types don't take raw() here; a spread or plain jsx() call can.
+    expect(await renderToString(<b class={raw("a b") as never} />)).toBe('<b class="a b"></b>');
+    expect(await renderToString(<b class={["x", raw("y")] as never} />)).toBe('<b class="x y"></b>');
+    expect(await renderToString(<b class="x" className={raw("y") as never} />)).toBe('<b class="x y"></b>');
   });
 });
 
