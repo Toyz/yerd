@@ -187,6 +187,8 @@ export function yerdLocal(hooks: RuntimeHooks): ChunkApi {
       let source = el.getAttribute(name)!;
       let fn = compile(scope, source);
       const listener = (event: Event): void => {
+        // A form the core re-submits after a replay already ran its handlers.
+        if (hooks.quiet()) return;
         const now = el.getAttribute(name);
         if (now === null) return;
         if (now !== source) {
@@ -299,7 +301,7 @@ export function yerdLocal(hooks: RuntimeHooks): ChunkApi {
    * unless a handler (or a binding) changed it meanwhile.
    */
   function replay(held: HeldInput[]): void {
-    for (const { event, value, checked } of held) {
+    for (const { event, value, checked, deferred } of held) {
       const target = event.target as HTMLInputElement;
       if (!target.isConnected) continue;
       const was = { value: target.value, checked: target.checked, start: null as number | null, end: null as number | null };
@@ -314,6 +316,8 @@ export function yerdLocal(hooks: RuntimeHooks): ChunkApi {
       if (putBack) target.value = value;
       if (reCheck) target.checked = checked;
       let stopped = false;
+      // The core cancelled a deferred event's default itself; what counts is whether a handler would have.
+      let prevented = !deferred && event.defaultPrevented;
       for (let el: Element | null = target; el && !stopped; el = event.bubbles ? el.parentElement : null) {
         const listener = wired.get(el)?.get(`data-yx-on-${event.type}`);
         if (!listener) continue;
@@ -323,6 +327,8 @@ export function yerdLocal(hooks: RuntimeHooks): ChunkApi {
             get(e, key) {
               if (key === "currentTarget") return current;
               if (key === "stopPropagation" || key === "stopImmediatePropagation") return () => void (stopped = true);
+              if (key === "preventDefault") return () => void (prevented = true);
+              if (key === "defaultPrevented") return prevented;
               const v: unknown = Reflect.get(e, key);
               return typeof v === "function" ? v.bind(e) : v;
             },
@@ -338,6 +344,7 @@ export function yerdLocal(hooks: RuntimeHooks): ChunkApi {
         }
       }
       if (reCheck && target.checked === checked) target.checked = was.checked;
+      if (deferred && !prevented && target.isConnected) hooks.runDefault(event);
     }
   }
 

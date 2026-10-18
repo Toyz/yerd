@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { runtimePieces, runtimeSource } from "../../src/client/runtime.js";
 import { yerdDnd } from "../../src/client/runtime-dnd.js";
 import type { Chunk } from "../../src/client/hooks.js";
+import { chunkVersion } from "../../src/client/runtime.js";
 
 // Files dropped on the page before the dnd chunk has arrived: their
 // DataTransfer can only be read while the drop is dispatched, so the core
@@ -76,7 +77,9 @@ describe("runtimeSource()", () => {
   it("serves a module that finds its chunks beside itself", () => {
     const module = runtimeSource({ chunks: "split" });
     expect(module.startsWith("(function yerdRuntime")).toBe(true);
-    expect(module.trimEnd().endsWith('(new URL(".", import.meta.url).href, undefined, (url) => import(url));')).toBe(true);
+    expect(module).toContain('(new URL(".", import.meta.url).href, undefined, (url) => import(url), {');
+    // Each chunk's version goes in, for the URL the core asks for.
+    expect(module).toContain(`"local":"${chunkVersion("local")}"`);
     // The chunks aren't in it.
     expect(module).not.toContain("function yerdLocal");
     expect(module).not.toContain("yerd-local:");

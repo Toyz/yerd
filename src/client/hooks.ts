@@ -37,6 +37,12 @@ export interface HeldInput {
   event: Event;
   value?: string;
   checked?: boolean;
+  /**
+   * The core cancelled what the browser would have done (follow a link,
+   * submit), since a handler on the way may cancel it: replay does it
+   * afterwards, through runDefault(), unless one did.
+   */
+  deferred?: boolean;
 }
 
 export interface RuntimeHooks {
@@ -66,6 +72,15 @@ export interface RuntimeHooks {
   filesOf(transfer: DataTransfer | null): File[];
   /** Elements that take drops. */
   dropTargets: string;
+  /**
+   * The server has a newer runtime than this page's core (a deploy while the
+   * page was open): its chunk can't be trusted to fit, so reload the page.
+   */
+  outdated(): void;
+  /** Do what the browser would have done for a deferred event (see HeldInput.deferred). */
+  runDefault(event: Event): void;
+  /** True while the core re-submits a form whose <Local> submit handlers already ran in a replay: they sit this one out. */
+  quiet(): boolean;
 }
 
 /** What a chunk may hand back to the core. */

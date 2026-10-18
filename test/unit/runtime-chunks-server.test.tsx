@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Local, RUNTIME_PATH, Scripts, Styles, action, css, get, renderToString, route, type RunningServer } from "@toyz/yerd";
 import { rawGet, serve } from "./edge-routing-helpers.js";
+import { OUTDATED_CHUNK, chunkVersion } from "../../src/client/runtime.js";
 
-const hint = (name: string) => `<link rel="modulepreload" href="/_yerd/runtime-${name}.js">`;
+const hint = (name: string) => `<link rel="modulepreload" href="/_yerd/runtime-${name}.js?v=${chunkVersion(name)}">`;
 
 function Page({ children }: { children?: unknown }) {
   return (
@@ -119,6 +120,25 @@ describe("the chunk endpoints", () => {
   it("each chunk has its own ETag, and the core's differs from them", async () => {
     const tags = await Promise.all([RUNTIME_PATH, "/_yerd/runtime-cues.js", "/_yerd/runtime-dnd.js", "/_yerd/runtime-local.js"].map(async (path) => (await fetch(server.url + path)).headers.get("etag")));
     expect(new Set(tags).size).toBe(4);
+  });
+
+  it.each(["cues", "dnd", "local"])("serve the %s chunk's current version for good: its URL changes when it does", async (name) => {
+    const res = await fetch(`${server.url}/_yerd/runtime-${name}.js?v=${chunkVersion(name)}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    expect((await res.text()).startsWith("export default function")).toBe(true);
+  });
+
+  it("answer a version from another deploy with a chunk that tells the page to reload", async () => {
+    const res = await fetch(`${server.url}/_yerd/runtime-dnd.js?v=not-this-one`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.text()).toBe(OUTDATED_CHUNK);
+  });
+
+  it("the core carries each chunk's version", async () => {
+    const core = await (await fetch(server.url + "/_yerd/runtime.js", { headers: { "accept-encoding": "identity" } })).text();
+    for (const name of ["cues", "dnd", "local"]) expect(core).toContain(`"${name}":"${chunkVersion(name)}"`);
   });
 
   it("an unknown chunk name is a 404, for GET and HEAD alike", async () => {

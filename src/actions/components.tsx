@@ -1,5 +1,6 @@
 import { jsx, type Child } from "../jsx/jsx-runtime.js";
 import { raw } from "../render/escape.js";
+import { chunkVersion } from "../client/runtime.js";
 
 /**
  * Where yerd serves its client runtime (`/_yerd/runtime.js`). `<Scripts />`
@@ -21,7 +22,8 @@ export const RUNTIME_CHUNK_PREFIX = `${RUNTIME_PATH.slice(0, -".js".length)}-`;
 /** @internal modulepreload hints for runtime chunks, which the renderer puts after <Scripts />. */
 export function chunkHints(names: readonly string[]): string {
   let out = "";
-  for (const name of names) out += `<link rel="modulepreload" href="${RUNTIME_CHUNK_PREFIX}${name}.js">`;
+  // The same versioned URL the core imports, so the preload is the one it uses.
+  for (const name of names) out += `<link rel="modulepreload" href="${RUNTIME_CHUNK_PREFIX}${name}.js?v=${chunkVersion(name)}">`;
   return out;
 }
 

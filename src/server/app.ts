@@ -29,7 +29,7 @@ import { CLASS_GUARDS, METHOD_GUARDS, guardRegistry, isGuardRef, resetGuardRegis
 import { SessionManager, checkSessionOptions } from "../session/manager.js";
 import type { SessionOptions } from "../session/session.js";
 import { RUNTIME_CHUNK_PREFIX, RUNTIME_PATH } from "../actions/components.js";
-import { chunkSource, runtimeSource } from "../client/runtime.js";
+import { OUTDATED_CHUNK, chunkSource, chunkVersion, runtimeSource } from "../client/runtime.js";
 import { attributesSource, resetAttributeRegistry } from "../attributes/attribute.js";
 import { isYerdNode } from "../jsx/jsx-runtime.js";
 import { YerdResponse, isBare, redirect } from "../respond/response.js";
@@ -1451,7 +1451,7 @@ export class YerdApp {
     if (path === RUNTIME_PATH && reading) return send(res, runtimeResponse(req), method === "HEAD", undefined);
     // Its chunks, beside it (/_yerd/runtime-<name>.js). A name that isn't one is a 404 here, not a route's.
     if (reading && path.startsWith(RUNTIME_CHUNK_PREFIX) && path.endsWith(".js")) {
-      return send(res, chunkResponse(req, path.slice(RUNTIME_CHUNK_PREFIX.length, -3)), method === "HEAD", undefined);
+      return send(res, chunkResponse(req, path.slice(RUNTIME_CHUNK_PREFIX.length, -3), target.search), method === "HEAD", undefined);
     }
     // The server's clock, for pages lining up `sync` animations and cues.
     if (path === CLOCK_PATH && reading) {
@@ -1989,13 +1989,24 @@ function runtimeResponse(req: IncomingMessage): Outgoing {
   return scriptResponse(req, "", runtimeSource({ chunks: "split" }) + attributesSource());
 }
 
-function chunkResponse(req: IncomingMessage, name: string): Outgoing {
+/**
+ * A chunk. The core asks for the version it was built with (`?v=`): that one
+ * never changes, so it's cached for good. Any other version comes from a page
+ * whose core predates this deploy, and gets a chunk that reloads the page.
+ */
+function chunkResponse(req: IncomingMessage, name: string, search: string): Outgoing {
   const source = chunkSource(name);
-  return source === undefined ? errorResponse(404) : scriptResponse(req, name, source);
+  if (source === undefined) return errorResponse(404);
+  const asked = new URLSearchParams(search).get("v");
+  if (asked === null) return scriptResponse(req, name, source);
+  if (asked !== chunkVersion(name)) {
+    return { status: 200, headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" }, body: OUTDATED_CHUNK };
+  }
+  return scriptResponse(req, name, source, "public, max-age=31536000, immutable");
 }
 
 /** A runtime script (`key`: "" for the core, else the chunk's name), from its compressed copies. */
-function scriptResponse(req: IncomingMessage, key: string, source: string): Outgoing {
+function scriptResponse(req: IncomingMessage, key: string, source: string, cacheControl = "no-cache"): Outgoing {
   let asset = scriptAssets.get(key);
   if (asset?.source !== source) {
     const raw = Buffer.from(source);
@@ -2010,7 +2021,7 @@ function scriptResponse(req: IncomingMessage, key: string, source: string): Outg
   }
   const headers: Record<string, string> = {
     "content-type": "text/javascript; charset=utf-8",
-    "cache-control": "no-cache",
+    "cache-control": cacheControl,
     etag: asset.etag,
     vary: "accept-encoding",
   };

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { minified } from "./runtime-min.js";
 import type { Carried, Chunk, ChunkApi, ChunkName, HeldDrop, HeldInput, RuntimeHooks, Stream } from "./hooks.js";
 import { yerdCues } from "./runtime-cues.js";
@@ -87,13 +88,16 @@ import { yerdLocal } from "./runtime-local.js";
  *
  * `base` is the URL the chunks are served under (the served script passes
  * its own directory, from import.meta.url), `importChunk` imports one
- * (import(), which only the served module can call), and `inline` holds
- * chunks to start with the core instead of loading them.
+ * (import(), which only the served module can call), `inline` holds
+ * chunks to start with the core instead of loading them, and `versions` is
+ * each chunk's content hash, put in its URL: a chunk from another deploy
+ * than this core is never loaded against it (see outdated()).
  */
 export function yerdRuntime(
   base: string,
   inline?: Partial<Record<ChunkName, Chunk>>,
   importChunk?: (url: string) => Promise<{ default: Chunk }>,
+  versions?: Partial<Record<ChunkName, string>>,
 ): void {
   // Guard on a symbol: `<div id="yerd">` makes `window.yerd` an element.
   const mark = Symbol.for("yerd.runtime");
@@ -1444,8 +1448,26 @@ export function yerdRuntime(
   // for tests) start with the core instead.
   const chunkHooks: RuntimeHooks = {
     onPage, attribute, notify, runAction, serverNow, clockReady, stream, reconcile,
-    drag, endDrag, carried, filesOf, dropTargets: DROP_TARGETS,
+    drag, endDrag, carried, filesOf, dropTargets: DROP_TARGETS, outdated, runDefault, quiet: () => quieted,
   };
+
+  /**
+   * The server answered a chunk request for an older version than it has:
+   * this page's core is from before a deploy. Reload once to get both from
+   * the same one; if that already happened in the last minute (a server
+   * flapping between versions, say), stay put and say so instead.
+   */
+  function outdated(): void {
+    let last = 0;
+    try {
+      last = Number(sessionStorage.getItem("yerd-outdated")) || 0;
+      sessionStorage.setItem("yerd-outdated", String(Date.now()));
+    } catch {
+      // No storage: reload anyway; the check is only a loop guard.
+    }
+    if (Date.now() - last > 60000) location.reload();
+    else notify("This page is out of date. Reload it to keep going.");
+  }
   const triggers: Array<[ChunkName, string]> = [["cues", "[data-yx-sync], [data-yx-cue]"], ["dnd", DROP_TARGETS], ["local", "yerd-local[data-yx-local]"]];
   const anyTrigger = triggers.map(([, selector]) => selector).join(", ");
   const loading = new Set<ChunkName>();
@@ -1473,7 +1495,8 @@ export function yerdRuntime(
     if (name === "local") holdInput(found);
     if (loading.has(name) || !importChunk) return;
     loading.add(name);
-    importChunk(new URL(`runtime-${name}.js`, base).href).then(
+    const version = versions?.[name];
+    importChunk(new URL(`runtime-${name}.js${version ? `?v=${version}` : ""}`, base).href).then(
       (module) => start(name, module.default),
       (error: unknown) => {
         // Tried again when the page next changes.
@@ -1501,16 +1524,69 @@ export function yerdRuntime(
   // with what its field held then, for the chunk to replay once it has wired
   // the scopes. Their bindings wait for it too: until a handler runs, the
   // server's values are the right ones.
+  //
+  // A click that would follow a link or submit a form, or a submit, can't be
+  // held: the browser acts on it as soon as it's dispatched, before any
+  // replay. When a handler on its way could cancel that, the core cancels it
+  // now and the replay does it afterwards (runDefault), unless a handler
+  // called preventDefault().
   const heldInput: HeldInput[] = [];
   const holding = new Set<string>();
+  let quieted = false;
   function hold(event: Event): void {
-    if (!(event.target as Element).closest?.("yerd-local")) return;
-    const field = event.target as HTMLInputElement;
+    const target = event.target as Element;
+    const scope = target.closest?.("yerd-local");
+    if (!scope) return;
+    const field = target as HTMLInputElement;
+    let deferred = false;
+    if (event.cancelable && !event.defaultPrevented && actsOn(event) && handledOnPath(target, scope, event.type)) {
+      event.preventDefault();
+      deferred = true;
+    }
     heldInput.push({
       event,
       value: typeof field.value === "string" ? field.value : undefined,
       checked: typeof field.checked === "boolean" ? field.checked : undefined,
+      deferred,
     });
+  }
+  /** Whether the browser does something with this event once it's dispatched: follows a link, or submits a form. */
+  function actsOn(event: Event): boolean {
+    if (event.type === "submit") return true;
+    if (event.type !== "click") return false;
+    const target = event.target as Element;
+    return target.closest("a[href]") !== null || target.closest('button:not([type="button"]):not([type="reset"]), input[type="submit"], input[type="image"]') !== null;
+  }
+  /** Whether an element from `target` up to its scope has a handler for `type`. */
+  function handledOnPath(target: Element, scope: Element, type: string): boolean {
+    for (let el: Element | null = target; el; el = el.parentElement) {
+      if (el.hasAttribute(`data-yx-on-${type}`)) return true;
+      if (el === scope) break;
+    }
+    return false;
+  }
+  /** What the browser would have done for a deferred event: follow the link (boosted when it can be), or submit. */
+  function runDefault(event: Event): void {
+    const target = event.target as Element;
+    if (event.type === "submit") {
+      // Its <Local> submit handlers already ran in the replay; the core's own submit handling still gets it.
+      quieted = true;
+      try {
+        (target as HTMLFormElement).requestSubmit((event as SubmitEvent).submitter ?? undefined);
+      } finally {
+        quieted = false;
+      }
+      return;
+    }
+    const link = target.closest<HTMLAnchorElement>("a[href]");
+    if (link) {
+      if (boostable(link)) void load(link.href, true);
+      else if (link.target && link.target !== "_self") window.open(link.href, link.target, "noopener");
+      else location.assign(link.href);
+      return;
+    }
+    const button = target.closest<HTMLButtonElement | HTMLInputElement>("button, input");
+    button?.form?.requestSubmit(button);
   }
   function holdInput(scopes: Element[]): void {
     for (const scope of scopes) {
@@ -1602,12 +1678,36 @@ export function runtimeSource({ chunks = "inline" }: { chunks?: "inline" | "spli
     const { core, chunks: parts } = runtimePieces();
     script =
       chunks === "split"
-        ? `(${core})(new URL(".", import.meta.url).href, undefined, (url) => import(url));\n`
+        ? `(${core})(new URL(".", import.meta.url).href, undefined, (url) => import(url), ${JSON.stringify(Object.fromEntries(RUNTIME_CHUNKS.map((name) => [name, chunkVersion(name)])))});\n`
         : `(${core})("", { ${RUNTIME_CHUNKS.map((name) => `${name}: ${parts[name]}`).join(", ")} });\n`;
     scripts.set(chunks, script);
   }
   return script;
 }
+
+const versions = new Map<ChunkName, string>();
+
+/**
+ * @internal A chunk's content hash, which its URL carries (`?v=`), or
+ * undefined for no such chunk. The core asks for exactly the chunks it was
+ * built with; the server tells a page asking for another version to reload.
+ */
+export function chunkVersion(name: string): string | undefined {
+  if (!Object.hasOwn(CHUNKS, name)) return undefined;
+  const chunk = name as ChunkName;
+  let version = versions.get(chunk);
+  if (version === undefined) {
+    version = createHash("sha256").update(runtimePieces().chunks[chunk]).digest("base64url").slice(0, 10);
+    versions.set(chunk, version);
+  }
+  return version;
+}
+
+/**
+ * @internal What the server sends a page asking for a chunk version it no
+ * longer has: a chunk that only tells the core it's out of date.
+ */
+export const OUTDATED_CHUNK = "export default (hooks) => { hooks.outdated(); };\n";
 
 /** A chunk as the module the core imports (`export default` its function), or undefined when there's no chunk by that name. */
 export function chunkSource(name: string): string | undefined {
