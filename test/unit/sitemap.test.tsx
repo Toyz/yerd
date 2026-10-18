@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import {
-  ILogger, accepts, createGuard, get, group, guards, inject, ndjson, param, post, prerender, resolve, route, service, sitemap, sse, yerd,
+  ILogger, accepts, createGuard, get, group, guards, inject, ndjson, onBoot, param, post, prerender, resolve, route, service, sitemap, sse, yerd,
   type LogRecord, type SitemapOptions,
 } from "@toyz/yerd";
 import { SITEMAP_LIMITS } from "../../src/seo/sitemap.js";
@@ -390,6 +390,22 @@ describe("the build", () => {
     expect(written).toEqual(["/about", "/sitemap.xml", "/robots.txt"]);
     expect(readFileSync(join(dir, "sitemap.xml"), "utf8")).toContain(`<loc>${ORIGIN}/about</loc>`);
     expect(readFileSync(join(dir, "robots.txt"), "utf8")).toContain(`Sitemap: ${ORIGIN}/sitemap.xml`);
+  });
+
+  it("generates with the app started, so @onBoot data is there, even with nothing to prerender", async () => {
+    @service({ lifetime: "singleton" }) class Stock {
+      slugs: string[] = [];
+      @onBoot fill() { this.slugs = ["gnome"]; }
+    }
+    @route("/s/:slug") class Item {
+      @inject(Stock) accessor stock!: Stock;
+      @get page() { return <p />; }
+      @sitemap entries() { return this.stock.slugs.map((slug) => ({ params: { slug } })); }
+    }
+    const dir = outDir();
+    expect(await app([Item], { origin: ORIGIN }, [Stock]).prerender(dir)).toEqual(["/sitemap.xml"]);
+    expect(readFileSync(join(dir, "sitemap.xml"), "utf8")).toContain(`<loc>${ORIGIN}/s/gnome</loc>`);
+    expect(existsSync(join(dir, ".yerd", "prerendered.json"))).toBe(false);
   });
 
   it("writes nothing without an origin, and says so", async () => {

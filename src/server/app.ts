@@ -781,13 +781,17 @@ export class YerdApp {
     this.#writeCssBundle(outDir, base);
     const allowed = this.#options.routes ? new Set(this.#options.routes) : undefined;
     const defs = routeRegistry.filter((d) => PRERENDER.from(d.metadata) && (!allowed || allowed.has(d.ctor)));
-    if (defs.length === 0) return (await this.#sitemap?.write(outDir)) ?? [];
+    // The sitemap is generated with the app started, as it is when served:
+    // services filled in by @onBoot hooks (a catalog, say) have their data.
+    const sitemap = this.#sitemap?.origin ? this.#sitemap : undefined;
+    if (defs.length === 0 && !sitemap) return (await this.#sitemap?.write(outDir)) ?? [];
     const manifest = join(outDir, ".vite", "manifest.json");
     if (existsSync(manifest)) useManifest(manifest, base);
 
     this.#prerenderToken = randomBytes(16).toString("hex");
     const server = await this.listen(0, "127.0.0.1", { handleSignals: false });
     const written: Record<string, string> = {};
+    const extra: string[] = [];
     try {
       for (const def of defs) {
         const options = PRERENDER.from(def.metadata)!;
@@ -830,13 +834,16 @@ export class YerdApp {
           written[path] = file;
         }
       }
-      await mkdir(join(outDir, ".yerd"), { recursive: true });
-      await writeFile(join(outDir, ".yerd", "prerendered.json"), JSON.stringify(written, null, 2));
+      if (defs.length > 0) {
+        await mkdir(join(outDir, ".yerd"), { recursive: true });
+        await writeFile(join(outDir, ".yerd", "prerendered.json"), JSON.stringify(written, null, 2));
+      }
+      if (sitemap) extra.push(...(await sitemap.write(outDir)));
     } finally {
       this.#prerenderToken = undefined;
       await server.close();
     }
-    return [...Object.keys(written), ...((await this.#sitemap?.write(outDir)) ?? [])];
+    return [...Object.keys(written), ...extra];
   }
 
   /**
