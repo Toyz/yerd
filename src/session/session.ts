@@ -38,17 +38,16 @@
  * @session(Cart) accessor cart!: Session<Cart>; // this.cart.add("socks")
  * ```
  *
- * Code handed the plain session (auth hooks, components, functions) takes
- * the same views with `as()`:
+ * Code handed the plain Session (auth hooks, components, functions using
+ * `currentContext().session`) gets the same views with `session.as(...)`:
  *
  * ```ts
  * const cart = currentContext().session.as(Cart); // like @session(Cart)
- * const prefs = currentContext().session.as<{ theme?: "light" | "dark" }>();
+ * const prefs = currentContext().session.as<{ theme?: "light" | "dark" }>(); // a type only
  * ```
  *
- * Optionally, keys every route shares can go on the app-wide `SessionData`
- * interface, which types plain `Session`. Worth it for one or two truly
- * global keys; for anything with behavior, a shape class reads better.
+ * (Optionally, augment the global `SessionData` for keys every route
+ * shares: plain `Session` is typed by it.)
  *
  * Stores: CookieStore (the default; the data lives in the cookie, sealed
  * with AES-256-GCM, ~4KB), MemoryStore (data in this process, the cookie
@@ -73,10 +72,12 @@
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from "node:crypto";
 
 /**
- * The app-wide session shape, optional: plain `Session` (no type argument)
- * and `currentContext().session` are typed by it. Prefer `Session<T>` views
- * and shape classes (`session.as(Cart)` where you only have the plain
- * session); augment this for a key or two every route genuinely shares.
+ * The app-wide session shape, empty unless you augment it. Plain `Session`
+ * (no type argument) and `currentContext().session` are typed by it. Often
+ * you don't need it: `Session<T>` / `@session(Shape)` type a route's view,
+ * and `session.as(Shape)` or `session.as<T>()` type a plain session where
+ * you're handed one (auth hooks, components). Augment it when a few keys
+ * really are app-wide and you'd rather not name a view each time.
  *
  * ```ts
  * declare module "@toyz/yerd" {
@@ -382,7 +383,8 @@ export type SessionFields<D> = Omit<D, keyof SessionApi<D>>;
 /**
  * A class describing a session's shape: data fields (initializers are
  * defaults), getters and methods, with `this` as the session. Pass it to
- * `@session(Shape)` or `@args(session(Shape))`; the constructor takes no
+ * `@session(Shape)`, `@args(session(Shape))`, or `session.as(Shape)` on a
+ * plain session; the constructor takes no
  * arguments and the class itself is never stored, only its data fields.
  *
  * ```ts
@@ -697,7 +699,8 @@ export class SessionApi<D> {
  * ```
  *
  * Beyond values: `flash()` for a one-request notice, `regenerate()` on
- * sign-in, `destroy()` on sign-out, `isNew` and `createdAt`.
+ * sign-in, `destroy()` on sign-out, `isNew` and `createdAt`, and `as()` for
+ * a typed view of a plain session.
  *
  * ```ts
  * @post signOut() {

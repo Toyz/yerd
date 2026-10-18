@@ -98,12 +98,14 @@ export interface YerdContext {
    */
   readonly cookies: Readonly<Record<string, string>>;
   /**
-   * The session (needs app.sessions(...)), typed by the app-wide SessionData.
-   * Take a typed view with `as()`; in a route, `@session accessor session!: Session<T>`.
+   * The session (needs app.sessions(...)), plain: typed by the app-wide
+   * SessionData, empty unless augmented. `as(Shape)` or `as<T>()` gives a
+   * typed view; in a route, `@session accessor session!: Session<T>` types
+   * it per class.
    *
    * ```ts
    * const notice = ctx.session.flash("notice") as string | undefined;
-   * const cart = ctx.session.as(Cart); // the view @session(Cart) gives
+   * const cart = ctx.session.as(Cart); // methods and defaults, like @session(Cart)
    * ```
    */
   readonly session: Session;
@@ -234,10 +236,15 @@ export function outsideRequest<T>(fn: () => T): T {
  * The current request's context, from anywhere in the request's async call
  * chain (handlers, services, components, guards). Throws outside a request.
  *
- * ```ts
+ * ```tsx
  * // Whether this request came from yerd's client runtime rather than a plain form post.
  * export function fromScript(): boolean {
  *   return currentContext().headers["yx"] !== undefined;
+ * }
+ *
+ * // A component reading the session: as() types the plain one.
+ * export function CartBadge() {
+ *   return <span class="badge">{currentContext().session.as(Cart).items.length}</span>;
  * }
  * ```
  */
