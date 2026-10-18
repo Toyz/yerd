@@ -998,8 +998,11 @@ export class YerdApp {
           // otherwise the default does. Prerendering has no request to test.
           let chosen = handler;
           if (variants.length > 0 && !prerendering) {
+            // An @accepts variant needs the type asked for by name while something
+            // else could answer: a browser's `*/*;q=0.8` mustn't pick the JSON one.
+            const fallback = handler !== undefined || variants.some((v) => !v.accepts);
             for (const variant of variants) {
-              if (variant.accepts && choose([variant.accepts], req.headers.accept, false) === undefined) continue;
+              if (variant.accepts && choose([variant.accepts], req.headers.accept, fallback) !== 0) continue;
               if (await this.#matches(variant.when!.test, context)) {
                 chosen = variant;
                 break;
