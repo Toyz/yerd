@@ -95,7 +95,8 @@ type PlainSkip<E extends string, Args extends readonly unknown[]> = E extends Ar
  * argument and the return value at debug level.
  *
  * ```ts
- * @instrument({ name: "charge", level: "info", target: "billing", skip: ["card.cvc"], ret: false })
+ * // Every field of card left out (card.* is a wildcard path); no return value recorded.
+ * @instrument({ name: "charge", level: "info", target: "billing", skip: ["card.*"], ret: false })
  * async charge(orderId: string, card: { number: string; cvc: string }) {
  *   return this.stripe.charge(orderId, card);
  * }
@@ -111,13 +112,22 @@ export interface InstrumentOptions<This = any, Args extends unknown[] = any[], S
   /**
    * Arguments, or fields inside them, to leave out of the span: a parameter
    * name (`"password"`), a position (`"1"`), or a dotted path into either
-   * (`"opts.headers.authorization"`, `"1.items.0.token"`). Checked by the
-   * compiler as far as types allow, and the names when the class loads.
+   * (`"opts.headers.authorization"`, `"1.items.0.token"`). A segment can be
+   * `*`, any one key or index, or `**`, any depth: `"card.*"` (every field of
+   * card), `"*.password"` (password in any argument), `"**.cvc"` (anywhere),
+   * `"items.*.secret"` (in every item). Checked by the compiler as far as
+   * types allow (up to the first wildcard), and the names when the class
+   * loads. For app-wide masking, see `logging({ redact })`.
    *
    * ```ts
    * @instrument({ skip: ["input.password", "1.headers.authorization"] })
    * create(input: Signup, request: { headers: { authorization: string } }) {
    *   return this.users.add(input);
+   * }
+   *
+   * @instrument({ level: "info", skip: ["card.*", "**.cvc", "items.*.secret"] })
+   * charge(card: Card, items: LineItem[]) {
+   *   return this.stripe.charge(card, items);
    * }
    * ```
    */
@@ -266,6 +276,12 @@ export function className(self: unknown): string {
  *   @instrument({ skip: ["password"], level: "info" })
  *   async create(email: string, password: string) {
  *     return { email };
+ *   }
+ *
+ *   // Wildcards: any field of profile's billing, and cvc wherever it shows up.
+ *   @instrument({ skip: ["profile.billing.*", "**.cvc"] })
+ *   async update(id: number, profile: { name: string; billing: { card: string; cvc: string } }) {
+ *     return { id, name: profile.name };
  *   }
  * }
  * ```

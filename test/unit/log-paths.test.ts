@@ -79,6 +79,21 @@ describe("logging({ redact })", () => {
     await app.stop();
   });
 
+  it("masks @instrument arguments too, on top of the method's own skip", async () => {
+    class Payments {
+      @instrument({ level: "info", skip: ["card.number"] })
+      pay(card: { number: string; cvc: string; holder: string }, user: { email: string; name: string }) {
+        return card.holder + user.name;
+      }
+    }
+    const { app, records } = capture({ redact: ["**.cvc", "*.email"] });
+    await app.scope(() => new Payments().pay({ number: "4242", cvc: "123", holder: "Ada" }, { email: "a@b.c", name: "ada" }));
+    const span = records.find((r) => r.kind === "span-enter")!.spans[0]!;
+    // skip removed card.number; redact masked the rest of the secrets.
+    expect(span.fields).toEqual({ card: { cvc: "[redacted]", holder: "Ada" }, user: { email: "[redacted]", name: "ada" } });
+    await app.stop();
+  });
+
   it("refuses a malformed path at boot", async () => {
     const { app } = capture({ redact: ["card..number"] });
     const error = (await app.boot().catch((e: unknown) => e)) as BootError;
