@@ -676,8 +676,13 @@ test("client code: the dashboard's sparkline island loads and draws once it scro
   expect(fetched.some((url) => url.includes("sparkline.client"))).toBe(false);
   await expect(island.locator("canvas")).toHaveCount(0);
 
-  await island.scrollIntoViewIfNeeded();
-  await expect(page.locator("yerd-island.trend canvas.sparkline")).toBeVisible();
+  // The live feed refreshes the Region (and remounts the island with the new line) every few
+  // seconds, so a located element can be swapped out before it's scrolled to: scroll to
+  // whichever island is current, and try again if a refresh lands in between.
+  await expect(async () => {
+    await page.evaluate(() => document.querySelector("yerd-island.trend")?.scrollIntoView({ block: "center" }));
+    await expect(page.locator("yerd-island.trend canvas.sparkline")).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
   await expect(page.locator("yerd-island.trend")).not.toHaveAttribute("data-yx-loading");
   expect(fetched.some((url) => url.includes("sparkline.client"))).toBe(true);
 });
