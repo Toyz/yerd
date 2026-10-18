@@ -80,7 +80,7 @@ Built-in transforms (throw a 400 on bad input):
 | --- | --- |
 | [`toInt`](api:yerd.toInt) | A safe base-10 integer, surrounding spaces trimmed. `"12"` and `" 12 "` yes; `"1.5"`, `"abc"` and `"0x10"` no. |
 | [`toNumber`](api:yerd.toNumber) | A decimal number, surrounding spaces trimmed: `"3.5"`, `"-.5"`, `"1e3"`. Blanks, hex (`"0x10"`), `"Infinity"` and values too big for a number are refused. |
-| [`toBool`](api:yerd.toBool) | `"true"`, `"1"` or `""` are true; `"false"` or `"0"` are false. |
+| [`toBool`](api:yerd.toBool) | `"true"`, `"1"`, `"on"` or `""` are true; `"false"`, `"0"` or `"off"` are false (the same words as `is.boolean`). |
 | [`trim`](api:yerd.trim) / [`lower`](api:yerd.lower) | The trimmed / lowercased string. |
 | [`oneOf("a", "b")`](api:yerd.oneOf) | One of the listed strings; the type is their union. |
 

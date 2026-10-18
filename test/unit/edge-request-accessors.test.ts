@@ -242,7 +242,8 @@ describe("@query with transforms", () => {
     ["bool", "false", ok(false)],
     ["bool", "0", ok(false)],
     ["bool", "TRUE", bad('Expected a boolean, got "TRUE"')],
-    ["bool", "on", bad('Expected a boolean, got "on"')],
+    ["bool", "on", ok(true)],
+    ["bool", "off", ok(false)],
     ["bool", "yes", bad('Expected a boolean, got "yes"')],
     ["tl", "%20%20MiXeD%20", ok("mixed")],
     ["sort", "%20DESC", ok("desc")],
@@ -608,7 +609,7 @@ describe("@file and @files", () => {
     const fd = new FormData();
     fd.append("avatar", png("a.png"));
     fd.append("avatar", png("big.png", 9));
-    expect(await upload(fd)).toEqual({ status: 413, body: "avatar: big.png is larger than 8 bytes" });
+    expect(await upload(fd)).toEqual({ status: 413, body: "avatar: File is larger than 8 bytes" });
   });
 
   it.each<[string, () => FormData, unknown]>([
@@ -629,7 +630,7 @@ describe("@file and @files", () => {
         fd.append("avatar", png("a.png", 9));
         return fd;
       },
-      { status: 413, body: "avatar: a.png is larger than 8 bytes" },
+      { status: 413, body: "avatar: File is larger than 8 bytes" },
     ],
     [
       "a gif",
@@ -638,7 +639,7 @@ describe("@file and @files", () => {
         fd.append("avatar", png("a.gif", 4, "image/gif"));
         return fd;
       },
-      { status: 415, body: "avatar: image/gif isn't accepted (image/png, image/jpeg)" },
+      { status: 415, body: "avatar: File type image/gif isn't accepted (image/png, image/jpeg)" },
     ],
     [
       "an untyped file",
@@ -647,7 +648,7 @@ describe("@file and @files", () => {
         fd.append("avatar", new File(["x"], "x"));
         return fd;
       },
-      { status: 415, body: "avatar: application/octet-stream isn't accepted (image/png, image/jpeg)" },
+      { status: 415, body: "avatar: File type application/octet-stream isn't accepted (image/png, image/jpeg)" },
     ],
     [
       "an extra that isn't an image",
@@ -657,7 +658,7 @@ describe("@file and @files", () => {
         fd.append("extras", png("x.txt", 1, "text/plain"));
         return fd;
       },
-      { status: 415, body: "extras: text/plain isn't accepted (image/*)" },
+      { status: 415, body: "extras: File type text/plain isn't accepted (image/*)" },
     ],
   ])("%s", async (_label, make, expected) => {
     expect(await upload(make())).toEqual(expected);

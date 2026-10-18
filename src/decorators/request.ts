@@ -1,9 +1,12 @@
 import { HttpError } from "../respond/response.js";
-import { createAccessor, type AccessorDecorator, type Resolves } from "./kit.js";
+import { createAccessor, type AccessorDecorator, type AccessorOptions, type Resolves } from "./kit.js";
 import type { YerdContext } from "../server/context.js";
-import { formFields, withFiles, type FormFields } from "../server/body.js";
-import { dto, parse, type DtoClass } from "./dto.js";
+import { withFiles, type FormFields, type ParsedBody } from "../server/body.js";
+import { dto, type DtoClass } from "./dto.js";
+import { fileProblem, isSentFile, parseBool, parseInteger, parseNumber, Rejection, runPipe, steps, type Validator } from "./parse.js";
 import { shapeSession, type Session, type SessionApi, type SessionShape } from "../session/session.js";
+
+export { between, email, length, matches, uuid, type Validator } from "./parse.js";
 
 /**
  * Turns one value into another. Throw an HttpError to reject the request.
@@ -93,21 +96,6 @@ export interface PipeError {
   /** The key and value are the error message TypeScript shows. */
   "transform pipeline error": "each transform must accept the previous one's output";
 }
-
-
-/**
- * Checks a value without changing it. Return `true` (or nothing) to accept,
- * `false` to reject with a generic 400, or a string to reject with that message.
- * Throwing an HttpError also works. Validators see the transformed value and
- * run in order; the first to reject wins.
- *
- * ```ts
- * const even: Validator<number> = (n) => n % 2 === 0 || "Must be even";
- *
- * @query("size", { transform: toInt, validate: [between(2, 64), even] }) accessor size = 8;
- * ```
- */
-export type Validator<T> = (value: T) => boolean | string | void;
 
 /**
  * The value an options object produces: its pipeline's output, or the raw
@@ -207,38 +195,64 @@ type AnyOptions = {
   required?: boolean;
 };
 
-function resolveField(kind: string, name: string, raw: unknown, options: AnyOptions | undefined): unknown {
-  let value: unknown = raw;
-  const pipe = options?.transform;
-  if (pipe) for (const step of typeof pipe === "function" ? [pipe] : pipe) value = step(value);
+/** A field's options, normalized once, when its decorator is made. */
+interface Pipeline {
+  readonly transforms: readonly Transform<any, any>[];
+  readonly validators: readonly Validator<any>[];
+  readonly required: boolean;
+}
 
-  const validate = options?.validate;
-  if (validate) {
-    for (const check of typeof validate === "function" ? [validate] : validate) {
-      const verdict = check(value);
-      if (verdict === false) throw new HttpError(400, `Invalid ${kind}: ${name}`);
-      if (typeof verdict === "string") throw new HttpError(400, verdict);
-    }
+const NO_PIPELINE: Pipeline = { transforms: [], validators: [], required: false };
+// By options object, so two decorators given the same options share one
+// pipeline, and with it the per-request memo (see createAccessor).
+const pipelines = new WeakMap<object, Pipeline>();
+
+function pipelineOf(options: AnyOptions | undefined): Pipeline {
+  if (!options) return NO_PIPELINE;
+  let pipeline = pipelines.get(options);
+  if (!pipeline) {
+    pipeline = { transforms: steps(options.transform as Transform<any, any> | readonly Transform<any, any>[]), validators: steps(options.validate), required: options.required === true };
+    pipelines.set(options, pipeline);
   }
+  return pipeline;
+}
+
+function resolveField(kind: string, name: string, raw: unknown, pipeline: Pipeline): unknown {
+  const value = runPipe(raw, pipeline.transforms, pipeline.validators);
+  if (value instanceof Rejection) throw new HttpError(400, value.message ?? `Invalid ${kind}: ${name}`);
   return value;
 }
 
-function missing(kind: string, name: string, options: AnyOptions | undefined): undefined {
-  if (options?.required) throw new HttpError(400, `Missing required ${kind}: ${name}`);
+function missing(kind: string, name: string, pipeline: Pipeline): undefined {
+  if (pipeline.required) throw new HttpError(400, `Missing required ${kind}: ${name}`);
   return undefined;
 }
 
-const paramAccessor = createAccessor<unknown, [name: string, options?: AnyOptions]>(
-  (ctx, name, options) => {
-    const raw = ctx.params[name];
-    return raw === undefined ? undefined : resolveField("path parameter", name, raw, options);
-  },
-  {
-    name: "param",
-    validate: (route, name) =>
-      route.paramNames.includes(name) ? undefined : `:${name} is not a parameter of ${route.pattern}`,
-  },
-);
+function settle(kind: string, name: string, raw: string | undefined, pipeline: Pipeline): unknown {
+  return raw === undefined ? missing(kind, name, pipeline) : resolveField(kind, name, raw, pipeline);
+}
+
+/**
+ * The accessor behind @param, @query, @header, @cookie and @field: read one
+ * named string from the request (undefined when it wasn't sent), then run the
+ * field's pipeline over it. Each public decorator gives it its typed signature.
+ */
+function stringField(
+  kind: string,
+  read: (ctx: YerdContext, name: string) => string | undefined | Promise<string | undefined>,
+  options: AccessorOptions<[name: string, pipeline: Pipeline]>,
+): (name: string, options: object | undefined) => any {
+  const accessor = createAccessor<unknown, [name: string, pipeline: Pipeline]>((ctx, name, pipeline) => {
+    const raw = read(ctx, name);
+    return raw instanceof Promise ? raw.then((value) => settle(kind, name, value, pipeline)) : settle(kind, name, raw, pipeline);
+  }, options);
+  return (name, options) => accessor(name, pipelineOf(options as AnyOptions | undefined));
+}
+
+const paramField = stringField("path parameter", (ctx, name) => ctx.params[name], {
+  name: "param",
+  validate: (route, name) => (route.paramNames.includes(name) ? undefined : `:${name} is not a parameter of ${route.pattern}`),
+});
 
 /**
  * A path parameter. Boot fails if the route pattern doesn't declare it.
@@ -252,7 +266,7 @@ export function param<const O extends FieldOptions<O> = {}>(
   name: string,
   options?: O,
 ): FieldDecorator<O, FieldOutput<O>> {
-  return paramAccessor(name, options as AnyOptions | undefined) as unknown as FieldDecorator<O, FieldOutput<O>>;
+  return paramField(name, options);
 }
 
 /**
@@ -273,13 +287,7 @@ export function param<const O extends FieldOptions<O> = {}>(
  */
 export const params = createAccessor((ctx): Record<string, string> => ({ ...ctx.params }), { name: "params" });
 
-const queryAccessor = createAccessor<unknown, [name: string, options?: AnyOptions]>(
-  (ctx, name, options) => {
-    const raw = ctx.query.get(name);
-    return raw === null ? missing("query parameter", name, options) : resolveField("query parameter", name, raw, options);
-  },
-  { name: "query" },
-);
+const queryField = stringField("query parameter", (ctx, name) => ctx.query.get(name) ?? undefined, { name: "query" });
 
 /**
  * First value of a query string parameter. Missing means the field's
@@ -295,14 +303,14 @@ export function query<const O extends OptionalFieldOptions<O> = {}>(
   name: string,
   options?: O,
 ): FieldDecorator<O, Optional<O, FieldOutput<O>>> {
-  return queryAccessor(name, options as AnyOptions | undefined) as unknown as FieldDecorator<O, Optional<O, FieldOutput<O>>>;
+  return queryField(name, options);
 }
 
-const headerAccessor = createAccessor<unknown, [name: string, options?: AnyOptions]>(
-  (ctx, name, options) => {
+const headerField = stringField(
+  "header",
+  (ctx, name) => {
     const value = ctx.headers[name.toLowerCase()];
-    const raw = Array.isArray(value) ? value.join(", ") : value;
-    return raw === undefined ? missing("header", name, options) : resolveField("header", name, raw, options);
+    return Array.isArray(value) ? value.join(", ") : value;
   },
   { name: "header" },
 );
@@ -324,7 +332,7 @@ export function header<const O extends OptionalFieldOptions<O> = {}>(
   name: string,
   options?: O,
 ): FieldDecorator<O, Optional<O, FieldOutput<O>>> {
-  return headerAccessor(name, options as AnyOptions | undefined) as unknown as FieldDecorator<O, Optional<O, FieldOutput<O>>>;
+  return headerField(name, options);
 }
 
 /** Options for @body. The pipeline starts from the parsed body (`unknown`). */
@@ -355,13 +363,13 @@ export interface BodyOptions<O = unknown> {
   required?: boolean;
 }
 
-const bodyAccessor = createAccessor<Promise<unknown>, [options?: AnyOptions]>(
-  async (ctx, options) => {
+const bodyAccessor = createAccessor<Promise<unknown>, [pipeline: Pipeline]>(
+  async (ctx, pipeline) => {
     const parsed = await ctx.body();
-    if (parsed.kind === "none") return missing("request body", "body", options);
+    if (parsed.kind === "none") return missing("request body", "body", pipeline);
     // A multipart form's files sit next to its fields, for is.file() in DTOs.
     const value = parsed.kind === "form" ? withFiles(parsed.value, parsed.files) : parsed.value;
-    return resolveField("request body", "body", value, options);
+    return resolveField("request body", "body", value, pipeline);
   },
   { name: "body" },
 );
@@ -390,33 +398,35 @@ export function body<const A extends BodyOptions<A> | DtoClass<unknown> = {}>(
 ): FieldDecorator<A extends DtoClass<unknown> ? {} : A, Promise<BodyValue<A>>, unknown> {
   const options: AnyOptions | undefined =
     typeof schema === "function" ? { transform: dto(schema as DtoClass<unknown>), required: true } : (schema as AnyOptions | undefined);
-  return bodyAccessor(options) as unknown as FieldDecorator<A extends DtoClass<unknown> ? {} : A, Promise<BodyValue<A>>, unknown>;
+  return bodyAccessor(pipelineOf(options)) as unknown as FieldDecorator<A extends DtoClass<unknown> ? {} : A, Promise<BodyValue<A>>, unknown>;
 }
 
-function fieldsOf(value: unknown, kind: string): FormFields | undefined {
-  if (kind === "form") return value as FormFields;
-  if (kind === "json" && typeof value === "object" && value !== null && !Array.isArray(value)) {
-    const fields: FormFields = Object.create(null);
+// A JSON body's fields, converted once per request however many @field accessors read them.
+const jsonFields = new WeakMap<ParsedBody, FormFields>();
+
+function fieldsOf(parsed: ParsedBody): FormFields | undefined {
+  if (parsed.kind === "form") return parsed.value;
+  const value = parsed.value;
+  if (parsed.kind !== "json" || typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  let fields = jsonFields.get(parsed);
+  if (!fields) {
+    fields = Object.create(null) as FormFields;
     for (const [key, v] of Object.entries(value)) {
       if (typeof v === "string") fields[key] = v;
       else if (typeof v === "number" || typeof v === "boolean") fields[key] = String(v);
       else if (Array.isArray(v) && v.every((x) => typeof x === "string")) fields[key] = v;
     }
-    return fields;
+    jsonFields.set(parsed, fields);
   }
-  if (kind === "text") return formFields(new URLSearchParams());
-  return undefined;
+  return fields;
 }
 
-const fieldAccessor = createAccessor<Promise<unknown>, [name: string, options?: AnyOptions]>(
-  async (ctx, name, options) => {
-    const parsed = await ctx.body();
-    const fields = parsed.kind === "none" ? undefined : fieldsOf(parsed.value, parsed.kind);
-    const sent = fields?.[name];
+const formField = stringField(
+  "form field",
+  async (ctx, name) => {
+    const sent = fieldsOf(await ctx.body())?.[name];
     // A repeated field takes its first value, like @query; an empty JSON array is missing.
-    const value = Array.isArray(sent) ? sent[0] : sent;
-    if (value === undefined) return missing("form field", name, options);
-    return resolveField("form field", name, value, options);
+    return Array.isArray(sent) ? sent[0] : sent;
   },
   { name: "field" },
 );
@@ -434,7 +444,7 @@ export function field<const O extends OptionalFieldOptions<O> = {}>(
   name: string,
   options?: O,
 ): FieldDecorator<O, Promise<Optional<O, FieldOutput<O>>>> {
-  return fieldAccessor(name, options as AnyOptions | undefined) as unknown as FieldDecorator<O, Promise<Optional<O, FieldOutput<O>>>>;
+  return formField(name, options);
 }
 
 // ── uploads ──
@@ -475,23 +485,15 @@ export interface FileOptions {
   types?: string[];
 }
 
-function checkFile(name: string, file: File, options: FileOptions | undefined): File {
-  if (options?.maxSize !== undefined && file.size > options.maxSize) {
-    throw new HttpError(413, `${name}: ${file.name || "the file"} is larger than ${options.maxSize} bytes`);
-  }
-  const types = options?.types;
-  if (types && !types.some((t) => (t.endsWith("/*") ? file.type.startsWith(t.slice(0, -1)) : file.type === t))) {
-    throw new HttpError(415, `${name}: ${file.type || "this file type"} isn't accepted (${types.join(", ")})`);
-  }
-  return file;
-}
-
 async function uploads(ctx: YerdContext, name: string, options: FileOptions | undefined): Promise<File[]> {
   const parsed = await ctx.body();
-  // An empty file input still posts a part: no name, no bytes. That's "no file".
-  const found = parsed.kind === "form" ? (parsed.files[name] ?? []).filter((f) => f.size > 0 || f.name !== "") : [];
+  const found = parsed.kind === "form" ? (parsed.files[name] ?? []).filter(isSentFile) : [];
   if (found.length === 0 && options?.required) throw new HttpError(400, `Missing file: ${name}`);
-  return found.map((f) => checkFile(name, f, options));
+  for (const file of found) {
+    const problem = fileProblem(file, options);
+    if (problem) throw new HttpError(problem.status, `${name}: ${problem.message}`);
+  }
+  return found;
 }
 
 const filesAccessor = createAccessor<Promise<File[]>, [name: string, options?: FileOptions]>(uploads, { name: "files" });
@@ -529,39 +531,42 @@ export function file(name: string, options?: FileOptions): AccessorDecorator<Pro
 
 type LineValue<A> = A extends DtoClass<infer T> ? T : A extends { transform: infer T } ? PipeOutput<T, unknown> : unknown;
 
-async function* checkedLines(source: AsyncIterable<unknown>, schema: DtoClass<unknown> | { transform?: Pipe } | undefined) {
+/**
+ * A client error from one line, restated with its line number. `issues`
+ * lists what was wrong, as for a DTO (a failed transform or validator is one
+ * issue at the root). Anything else, a 5xx included, passes through as is.
+ */
+function lineError(line: number, error: unknown): unknown {
+  if (!(error instanceof HttpError) || error.status >= 500) return error;
+  const issues = error.details?.issues ?? [{ path: "(root)", message: error.message }];
+  return new HttpError(error.status, `Line ${line} failed validation`, { details: { line, ...error.details, issues }, cause: error });
+}
+
+async function* checkedLines(source: AsyncIterable<unknown>, pipeline: Pipeline) {
   let line = 0;
   for await (const value of source) {
     line++;
-    if (typeof schema === "function") {
-      try {
-        yield parse(schema, value);
-      } catch (error) {
-        if (error instanceof HttpError && error.details) {
-          throw new HttpError(400, `Line ${line} failed validation`, { details: { line, ...error.details } });
-        }
-        throw error;
-      }
-    } else if (schema?.transform) {
-      let out: unknown = value;
-      const pipe = schema.transform;
-      for (const step of typeof pipe === "function" ? [pipe] : pipe) out = step(out);
-      yield out;
-    } else {
-      yield value;
+    let out: unknown;
+    try {
+      out = runPipe(value, pipeline.transforms, pipeline.validators);
+    } catch (error) {
+      throw lineError(line, error);
     }
+    if (out instanceof Rejection) throw lineError(line, new HttpError(400, out.message ?? "Invalid value"));
+    yield out;
   }
 }
 
-const ndjsonBodyAccessor = createAccessor<AsyncIterable<unknown>, [schema?: DtoClass<unknown> | { transform?: Pipe }]>(
-  (ctx, schema) => checkedLines(ctx.lines(), schema),
+const ndjsonBodyAccessor = createAccessor<AsyncIterable<unknown>, [pipeline: Pipeline]>(
+  (ctx, pipeline) => checkedLines(ctx.lines(), pipeline),
   { name: "ndjsonBody" },
 );
 
 /**
  * A streamed NDJSON request body: an async iterable of values, parsed (and
- * validated, with a DTO class or transform) one line at a time as they arrive.
- * Only each line is size-limited, not the whole upload.
+ * validated, with a DTO class or `transform` / `validate` options) one line
+ * at a time as they arrive. Only each line is size-limited, not the whole
+ * upload. A line that fails stops the stream with a 400 naming the line.
  *
  * ```ts
  * @post @args(ndjsonBody(Row)) async import(rows: AsyncIterable<Row>) {
@@ -569,10 +574,11 @@ const ndjsonBodyAccessor = createAccessor<AsyncIterable<unknown>, [schema?: DtoC
  * }
  * ```
  */
-export function ndjsonBody<const A extends DtoClass<unknown> | { transform?: Pipe } = {}>(
+export function ndjsonBody<const A extends DtoClass<unknown> | Omit<BodyOptions<A>, "required"> = {}>(
   schema?: A,
 ): FieldDecorator<{}, AsyncIterable<LineValue<A>>, unknown> {
-  return ndjsonBodyAccessor(schema) as unknown as FieldDecorator<{}, AsyncIterable<LineValue<A>>, unknown>;
+  const options: AnyOptions | undefined = typeof schema === "function" ? { transform: dto(schema as DtoClass<unknown>) } : (schema as AnyOptions | undefined);
+  return ndjsonBodyAccessor(pipelineOf(options)) as unknown as FieldDecorator<{}, AsyncIterable<LineValue<A>>, unknown>;
 }
 
 /**
@@ -617,13 +623,7 @@ export const session = createAccessor(
   { name: "session" },
 ) as unknown as SessionDecorator;
 
-const cookieAccessor = createAccessor<unknown, [name: string, options?: AnyOptions]>(
-  (ctx, name, options) => {
-    const raw = ctx.cookies[name];
-    return raw === undefined ? missing("cookie", name, options) : resolveField("cookie", name, raw, options);
-  },
-  { name: "cookie" },
-);
+const cookieField = stringField("cookie", (ctx, name) => ctx.cookies[name], { name: "cookie" });
 
 /**
  * A request cookie. Same options as @query: missing means the field's
@@ -642,7 +642,7 @@ export function cookie<const O extends OptionalFieldOptions<O> = {}>(
   name: string,
   options?: O,
 ): FieldDecorator<O, Optional<O, FieldOutput<O>>> {
-  return cookieAccessor(name, options as AnyOptions | undefined) as unknown as FieldDecorator<O, Optional<O, FieldOutput<O>>>;
+  return cookieField(name, options);
 }
 
 /**
@@ -684,8 +684,6 @@ export const request = createAccessor((ctx) => ctx.request, { name: "request" })
 
 // Built-in transforms. Plain functions, so users write their own the same way.
 
-const INTEGER = /^-?\d+$/;
-
 /**
  * Parse a base-10 integer (optional leading minus, digits only). Anything
  * else, or a value beyond Number.MAX_SAFE_INTEGER, is a 400.
@@ -696,10 +694,9 @@ const INTEGER = /^-?\d+$/;
  */
 export const toInt: Transform<string, number> = (input) => {
   // Trimmed, like toNumber: " 42 " from a form is 42.
-  const raw = input.trim();
-  if (!INTEGER.test(raw)) throw new HttpError(400, `Expected an integer, got ${JSON.stringify(input)}`);
-  const n = Number(raw);
-  if (!Number.isSafeInteger(n)) throw new HttpError(400, `Integer out of range: ${raw}`);
+  const n = parseInteger(input);
+  if (n === undefined) throw new HttpError(400, `Expected an integer, got ${JSON.stringify(input)}`);
+  if (!Number.isSafeInteger(n)) throw new HttpError(400, `Integer out of range: ${input.trim()}`);
   return n;
 };
 
@@ -714,27 +711,26 @@ export const toInt: Transform<string, number> = (input) => {
  * ```
  */
 export const toNumber: Transform<string, number> = (raw) => {
-  // Decimal notation only: Number() would also take "Infinity", "0x10" and "1e999".
-  const n = Number(raw);
-  if (!/^\s*-?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?\s*$/i.test(raw) || !Number.isFinite(n)) {
-    throw new HttpError(400, `Expected a number, got ${JSON.stringify(raw)}`);
-  }
+  const n = parseNumber(raw);
+  if (n === undefined) throw new HttpError(400, `Expected a number, got ${JSON.stringify(raw)}`);
   return n;
 };
 
 /**
- * Parse "true", "1" or "" (a bare `?flag`) as true and "false" or "0" as
- * false; anything else is a 400. Case-sensitive. A missing parameter
- * leaves the field's initializer, so default flags to `false`.
+ * Parse "true", "1", "on" or "" (a bare `?flag`) as true and "false", "0" or
+ * "off" as false; anything else is a 400. Case-sensitive. The same words
+ * as is.boolean, so `@field("agree", { transform: toBool })` takes a ticked
+ * checkbox ("on"). A missing value leaves the field's initializer, so default
+ * flags to `false`.
  *
  * ```ts
  * @query("verbose", { transform: toBool }) accessor verbose = false; // ?verbose, ?verbose=1, ?verbose=true
  * ```
  */
 export const toBool: Transform<string, boolean> = (raw) => {
-  if (raw === "true" || raw === "1" || raw === "") return true;
-  if (raw === "false" || raw === "0") return false;
-  throw new HttpError(400, `Expected a boolean, got ${JSON.stringify(raw)}`);
+  const value = parseBool(raw);
+  if (value === undefined) throw new HttpError(400, `Expected a boolean, got ${JSON.stringify(raw)}`);
+  return value;
 };
 
 /**
@@ -770,97 +766,5 @@ export function oneOf<const V extends string>(...values: V[]): Transform<string,
   return (raw) => {
     if (!allowed.has(raw)) throw new HttpError(400, `Expected one of ${values.join(", ")}, got ${JSON.stringify(raw)}`);
     return raw as V;
-  };
-}
-
-// Built-in validators.
-
-/**
- * Numbers within [min, max], inclusive. Rejects with "Must be from 1 to 10
- * (got 12)". Works on accessors after a number transform, and in DTOs.
- *
- * ```ts
- * @query("page", { transform: toInt, validate: between(1, 500) }) accessor page = 1;
- *
- * class Review {
- *   @is.int({ validate: between(1, 10) }) rating!: number;
- * }
- * ```
- */
-export function between(min: number, max: number): Validator<number> {
-  return (n) => (n >= min && n <= max) || `Must be from ${min} to ${max} (got ${n})`;
-}
-
-/**
- * String or array length within [min, max], inclusive. `max` defaults to
- * unlimited, so `length(1)` means "not empty". Put `trim` before it so blank
- * input doesn't count.
- *
- * ```ts
- * class Listing {
- *   @is.string({ transform: trim, validate: length(1, 140) }) title!: string;
- *   @is.array(is.string(), { validate: length(0, 5) }) tags: string[] = [];
- * }
- * ```
- */
-export function length(min: number, max = Infinity): Validator<string | readonly unknown[]> {
-  return (value) => {
-    if (value.length >= min && value.length <= max) return true;
-    if (value.length === 0) return "Can't be empty";
-    const unit = typeof value === "string" ? "characters" : "items";
-    if (max === Infinity) return `Must be at least ${min} ${unit} (got ${value.length})`;
-    if (min <= 0) return `Must be at most ${max} ${unit} (got ${value.length})`;
-    return `Must be ${min} to ${max} ${unit} (got ${value.length})`;
-  };
-}
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// Deliberately loose: one @, no spaces, a dot in the domain. The only real check is sending mail to it.
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-/**
- * A UUID (any case), optionally of one version: `uuid()`, `uuid(4)`, `uuid(7)`.
- * For params and queries; DTOs have `is.uuid()`, which also lowercases.
- *
- * ```ts
- * @route("/orders/:id")
- * export class Order {
- *   @param("id", { validate: uuid(4) }) accessor id!: string;
- * }
- * ```
- */
-export function uuid(version?: number): Validator<string> {
-  return (value) => {
-    if (!UUID.test(value)) return "Expected a UUID";
-    if (version !== undefined && value[14]!.toLowerCase() !== version.toString(16)) return `Expected a version ${version} UUID`;
-    return true;
-  };
-}
-
-/**
- * A plausible email address (one @, a dot in the domain, no spaces, at most
- * 254 characters). Loose on purpose: sending mail to it is the only real
- * check. For params, queries and fields; DTOs have `is.email()`.
- *
- * ```ts
- * @query("notify", { transform: trim, validate: email() }) accessor notify: string | undefined;
- * ```
- */
-export function email(): Validator<string> {
-  return (value) => (value.length <= 254 && EMAIL.test(value)) || "Expected an email address";
-}
-
-/**
- * String matching a regular expression, rejecting with `message` (or a
- * generic one). Anchor the pattern (`^...$`) to match the whole value.
- *
- * ```ts
- * @query("ref", { validate: matches(/^[A-Z]{3}-\d{4}$/, "Expected a code like ABC-1234") }) accessor ref: string | undefined;
- * ```
- */
-export function matches(pattern: RegExp, message?: string): Validator<string> {
-  return (value) => {
-    pattern.lastIndex = 0;
-    return pattern.test(value) || (message ?? "Isn't in the expected format");
   };
 }

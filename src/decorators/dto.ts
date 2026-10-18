@@ -20,8 +20,8 @@
 import { HttpError } from "../respond/response.js";
 import { createKey, metadataOf } from "./keys.js";
 import { assertPublicInstance } from "./util.js";
-import type { FieldOutput, IsValidPipe, Pipe, PipeError, Transform, Validator } from "./request.js";
-import { email, uuid } from "./request.js";
+import type { FieldOutput, IsValidPipe, Pipe, PipeError, Transform } from "./request.js";
+import { email, fileProblem, parseBool, parseInteger, parseNumber, Rejection, runPipe, steps, uuid, type Validator } from "./parse.js";
 
 /**
  * One problem found while validating, with a path like `address.city` or
@@ -47,6 +47,24 @@ export interface Issue {
 const INVALID: unique symbol = Symbol("yerd.invalid");
 
 /**
+ * Where a value sits, as Spec.parse is told: a path string, or, inside nested
+ * DTOs and arrays, a parent and a key, joined into `address.city` or
+ * `tags[2]` only when there is an issue to report.
+ */
+export type Path = string | { readonly parent: Path; readonly key: string | number };
+
+function pathText(path: Path): string {
+  if (typeof path === "string") return path;
+  const parent = pathText(path.parent);
+  if (typeof path.key === "number") return `${parent}[${path.key}]`;
+  return parent ? `${parent}.${path.key}` : path.key;
+}
+
+function child(parent: Path, key: string | number): Path {
+  return parent === "" && typeof key === "string" ? key : { parent, key };
+}
+
+/**
  * How to check and convert one value. Every `is.*` decorator carries one as
  * `.spec`. Apps rarely touch it; it's how `is.array` checks its items, and it
  * lets tests or tooling run one rule on its own.
@@ -61,7 +79,7 @@ export interface Spec<T> {
   /** Whether a missing value is allowed. */
   readonly optional: boolean;
   /** Check and convert `value`; on failure, push to `issues` and return the INVALID marker. */
-  parse(value: unknown, path: string, issues: Issue[]): T | typeof INVALID;
+  parse(value: unknown, path: Path, issues: Issue[]): T | typeof INVALID;
 }
 
 interface DtoField {
@@ -159,42 +177,34 @@ export interface FileRules {
   types?: readonly string[];
 }
 
-function fileProblem(file: File, rules: FileRules | undefined): string | undefined {
-  if (rules?.maxSize !== undefined && file.size > rules.maxSize) return `File is larger than ${rules.maxSize} bytes`;
-  const types = rules?.types;
-  if (types && !types.some((t) => (t.endsWith("/*") ? file.type.startsWith(t.slice(0, -1)) : file.type === t))) {
-    return `File type ${file.type || "(unknown)"} isn't accepted (${types.join(", ")})`;
-  }
-  return undefined;
-}
-
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 type AnyIsOptions = { optional?: boolean; transform?: Pipe; validate?: Validator<any> | readonly Validator<any>[] };
 
-function finish(input: unknown, path: string, issues: Issue[], options: AnyIsOptions | undefined): unknown {
-  let value = input;
+/** An is.* decorator's transforms and validators, normalized once, when the decorator is made. */
+interface Pipeline {
+  readonly transforms: readonly Transform<any, any>[];
+  readonly validators: readonly Validator<any>[];
+}
+
+function pipelineOf(options: AnyIsOptions | undefined): Pipeline {
+  return { transforms: steps(options?.transform as Transform<any, any> | readonly Transform<any, any>[] | undefined), validators: steps(options?.validate) };
+}
+
+function finish(input: unknown, path: Path, issues: Issue[], pipeline: Pipeline): unknown {
+  if (pipeline.transforms.length === 0 && pipeline.validators.length === 0) return input;
   try {
-    const transforms = options?.transform;
-    if (transforms) for (const step of typeof transforms === "function" ? [transforms] : transforms) value = step(value);
-    const validators = options?.validate;
-    if (validators) {
-      for (const check of typeof validators === "function" ? [validators] : validators) {
-        const verdict = check(value);
-        if (verdict === false) return issue(issues, path, "Invalid value");
-        if (typeof verdict === "string") return issue(issues, path, verdict);
-      }
-    }
-    return value;
+    const value = runPipe(input, pipeline.transforms, pipeline.validators);
+    return value instanceof Rejection ? issue(issues, path, value.message ?? "Invalid value") : value;
   } catch (error) {
     return issue(issues, path, messageOf(error));
   }
 }
 
-function issue(issues: Issue[], path: string, message: string): typeof INVALID {
-  issues.push({ path: path || "(root)", message });
+function issue(issues: Issue[], path: Path, message: string): typeof INVALID {
+  issues.push({ path: pathText(path) || "(root)", message });
   return INVALID;
 }
 
@@ -212,15 +222,17 @@ function makeDecorator<T>(spec: Spec<T>): IsDecorator<T> {
 }
 
 function primitive<B>(check: (value: unknown) => B | typeof INVALID, expected: string) {
-  return <const O extends IsOptions<B, O> = {}>(options?: O): Checked<O, B> =>
-    makeDecorator({
+  return <const O extends IsOptions<B, O> = {}>(options?: O): Checked<O, B> => {
+    const pipeline = pipelineOf(options);
+    return makeDecorator({
       optional: options?.optional ?? false,
       parse(value, path, issues) {
         const base = check(value);
         if (base === INVALID) return issue(issues, path, `Expected ${expected}`);
-        return finish(base, path, issues, options);
+        return finish(base, path, issues, pipeline);
       },
     }) as unknown as Checked<O, B>;
+  };
 }
 
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/i;
@@ -233,8 +245,6 @@ function sameUtcDay(year: number, month: number, day: number): boolean {
   return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
 }
 
-const INTEGER = /^-?\d+$/;
-const NUMBER = /^-?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i;
 
 /**
  * Field decorators for DTO classes. Numbers and booleans also accept their
@@ -279,12 +289,8 @@ export const is = {
    * ```
    */
   int: primitive<number>((v) => {
-    if (typeof v === "number") return Number.isSafeInteger(v) ? v : INVALID;
-    if (typeof v === "string" && INTEGER.test(v.trim())) {
-      const n = Number(v.trim());
-      return Number.isSafeInteger(n) ? n : INVALID;
-    }
-    return INVALID;
+    const n = typeof v === "string" ? parseInteger(v) : v;
+    return typeof n === "number" && Number.isSafeInteger(n) ? n : INVALID;
   }, "an integer"),
 
   /**
@@ -295,28 +301,22 @@ export const is = {
    * ```
    */
   number: primitive<number>((v) => {
-    if (typeof v === "number") return Number.isFinite(v) ? v : INVALID;
-    if (typeof v === "string" && NUMBER.test(v.trim())) {
-      // "1e400" passes the pattern but overflows to Infinity.
-      const n = Number(v);
-      return Number.isFinite(n) ? n : INVALID;
-    }
-    return INVALID;
+    const n = typeof v === "string" ? parseNumber(v) : v;
+    return typeof n === "number" && Number.isFinite(n) ? n : INVALID;
   }, "a number"),
 
   /**
-   * A boolean, or "true" / "1" / "on" and "false" / "0" / "off". An unchecked
-   * checkbox sends nothing, so give the field a default or `optional`.
+   * A boolean, or "true" / "1" / "on" / "" and "false" / "0" / "off", the
+   * same words as toBool. An unchecked checkbox sends nothing, so give the
+   * field a default or `optional`.
    *
    * ```ts
    * @is.boolean() agree = false; // <input type="checkbox" name="agree"> sends "on" when ticked
    * ```
    */
   boolean: primitive<boolean>((v) => {
-    if (typeof v === "boolean") return v;
-    if (v === "true" || v === "1" || v === "on") return true;
-    if (v === "false" || v === "0" || v === "off") return false;
-    return INVALID;
+    const b = typeof v === "string" ? parseBool(v) : v;
+    return typeof b === "boolean" ? b : INVALID;
   }, "a boolean"),
 
   /**
@@ -328,11 +328,12 @@ export const is = {
    */
   oneOf<const V extends string, const O extends IsOptions<V, O> = {}>(values: readonly V[], options?: O): Checked<O, V> {
     const allowed = new Set<string>(values);
+    const pipeline = pipelineOf(options);
     return makeDecorator({
       optional: options?.optional ?? false,
       parse(value, path, issues) {
         if (typeof value !== "string" || !allowed.has(value)) return issue(issues, path, `Expected one of ${values.join(", ")}`);
-        return finish(value, path, issues, options);
+        return finish(value, path, issues, pipeline);
       },
     }) as unknown as Checked<O, V>;
   },
@@ -346,11 +347,13 @@ export const is = {
    * ```
    */
   object<T, const O extends IsOptions<T, O> = {}>(dto: DtoClass<T>, options?: O): Checked<O, T> {
+    dtoFields(dto);
+    const pipeline = pipelineOf(options);
     return makeDecorator({
       optional: options?.optional ?? false,
       parse(value, path, issues) {
         const parsed = parseDto(dto, value, path, issues);
-        return parsed === INVALID ? INVALID : finish(parsed, path, issues, options);
+        return parsed === INVALID ? INVALID : finish(parsed, path, issues, pipeline);
       },
     }) as unknown as Checked<O, T>;
   },
@@ -367,6 +370,7 @@ export const is = {
     item: IsDecorator<T>,
     options?: O,
   ): Checked<O, T[]> {
+    const pipeline = pipelineOf(options);
     return makeDecorator({
       optional: options?.optional ?? false,
       parse(value, path, issues) {
@@ -374,9 +378,9 @@ export const is = {
         if (options?.min !== undefined && list.length < options.min) return issue(issues, path, `Expected at least ${options.min} items`);
         if (options?.max !== undefined && list.length > options.max) return issue(issues, path, `Expected at most ${options.max} items`);
         const before = issues.length;
-        const out = list.map((v, i) => item.spec.parse(v, `${path}[${i}]`, issues));
+        const out = list.map((v, i) => item.spec.parse(v, child(path, i), issues));
         if (issues.length > before) return INVALID;
-        return finish(out, path, issues, options);
+        return finish(out, path, issues, pipeline);
       },
     }) as unknown as Checked<O, T[]>;
   },
@@ -394,13 +398,14 @@ export const is = {
    * ```
    */
   file<const O extends IsOptions<File, O> & FileRules = {}>(options?: O): Checked<O, File> {
+    const pipeline = pipelineOf(options);
     return makeDecorator({
       optional: options?.optional ?? false,
       parse(value, path, issues) {
         if (!(value instanceof File)) return issue(issues, path, Array.isArray(value) ? "Expected one file" : "Expected a file");
         const problem = fileProblem(value, options);
-        if (problem) return issue(issues, path, problem);
-        return finish(value, path, issues, options);
+        if (problem) return issue(issues, path, problem.message);
+        return finish(value, path, issues, pipeline);
       },
     }) as unknown as Checked<O, File>;
   },
@@ -414,6 +419,7 @@ export const is = {
    * ```
    */
   files<const O extends IsOptions<File[], O> & FileRules & { min?: number; max?: number } = {}>(options?: O): Checked<O, File[]> {
+    const pipeline = pipelineOf(options);
     return makeDecorator({
       optional: options?.optional ?? false,
       parse(value, path, issues) {
@@ -424,10 +430,10 @@ export const is = {
         const before = issues.length;
         list.forEach((f, i) => {
           const problem = fileProblem(f as File, options);
-          if (problem) issue(issues, `${path}[${i}]`, problem);
+          if (problem) issue(issues, child(path, i), problem.message);
         });
         if (issues.length > before) return INVALID;
-        return finish(list, path, issues, options);
+        return finish(list, path, issues, pipeline);
       },
     }) as unknown as Checked<O, File[]>;
   },
@@ -477,9 +483,8 @@ export const is = {
   url<const O extends IsOptions<string, O> & { protocols?: readonly string[] } = {}>(options?: O): Checked<O, string> {
     const protocols = (options?.protocols ?? ["http", "https"]).map((p) => p.replace(/:$/, "").toLowerCase() + ":");
     return primitive<string>((v) => {
-      if (typeof v !== "string" || !URL.canParse(v.trim())) return INVALID;
-      const parsed = new URL(v.trim());
-      return protocols.includes(parsed.protocol) ? parsed.href : INVALID;
+      const parsed = typeof v === "string" ? URL.parse(v.trim()) : null;
+      return parsed && protocols.includes(parsed.protocol) ? parsed.href : INVALID;
     }, `a ${protocols.map((p) => p.slice(0, -1)).join(" or ")} URL`)(options as never) as unknown as Checked<O, string>;
   },
 
@@ -523,6 +528,7 @@ export const is = {
    * ```
    */
   custom<T, const O extends IsOptions<T, O> = {}>(parse: (value: unknown) => T, options?: O): Checked<O, T> {
+    const pipeline = pipelineOf(options);
     return makeDecorator({
       optional: options?.optional ?? false,
       parse(value, path, issues) {
@@ -532,7 +538,7 @@ export const is = {
         } catch (error) {
           return issue(issues, path, messageOf(error));
         }
-        return finish(parsed, path, issues, options);
+        return finish(parsed, path, issues, pipeline);
       },
     }) as unknown as Checked<O, T>;
   },
@@ -544,18 +550,28 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
-function parseDto<T>(dto: DtoClass<T>, raw: unknown, path: string, issues: Issue[]): T | typeof INVALID {
-  if (!isPlainObject(raw)) return issue(issues, path, "Expected an object");
+/**
+ * A DTO class's is.* fields. A class without any can't validate anything, so
+ * it's a TypeError, raised where the class is handed over (`@body(Dto)`,
+ * is.object(Dto), dto(Dto)) rather than on the first request.
+ */
+function dtoFields(dto: DtoClass<unknown>): readonly DtoField[] {
   const fields = DTO_FIELDS.from(metadataOf(dto));
   if (!fields || fields.length === 0) {
     throw new TypeError(`${dto.name} has no is.* field decorators, so it can't validate anything`);
   }
+  return fields;
+}
+
+function parseDto<T>(dto: DtoClass<T>, raw: unknown, path: Path, issues: Issue[]): T | typeof INVALID {
+  const fields = dtoFields(dto);
+  if (!isPlainObject(raw)) return issue(issues, path, "Expected an object");
   // `new` runs field initializers, which double as defaults. Only declared
   // fields are copied over; unknown keys in the input are dropped.
   const instance = new dto() as Record<string, unknown>;
   const before = issues.length;
   for (const { key, spec } of fields) {
-    const at = path ? `${path}.${key}` : key;
+    const at = child(path, key);
     const value = Object.hasOwn(raw, key) ? raw[key] : undefined;
     if (value === undefined) {
       if (instance[key] === undefined) {
@@ -610,5 +626,6 @@ export function parse<T>(dto: DtoClass<T>, raw: unknown): T {
  * ```
  */
 export function dto<T>(cls: DtoClass<T>): Transform<unknown, T> {
+  dtoFields(cls);
   return (raw) => parse(cls, raw);
 }

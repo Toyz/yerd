@@ -147,7 +147,7 @@ describe("is.boolean", () => {
     ["TRUE", { error: "Expected a boolean" }],
     ["yes", { error: "Expected a boolean" }],
     [" true", { error: "Expected a boolean" }],
-    ["", { error: "Expected a boolean" }],
+    ["", { ok: true }],
     [1, { error: "Expected a boolean" }],
     [0, { error: "Expected a boolean" }],
     [null, { error: "Expected a boolean" }],
