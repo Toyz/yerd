@@ -430,8 +430,9 @@ node:http request                    src/server/app.ts (handle)
        no match: static mounts, else 404 error page
   -> cross-site check (unsafe methods) crossSiteReason, see AUTH.md
   -> RequestContext + DI Scope         src/server/request-context.ts
-  -> session load (the CSRF nonce is created when a token is first signed)
   -> ALS.run(ctx, ...)                 src/server/context.ts   (one async context for request + DI scope)
+  -> async session store read          only for a store that isn't `sync`, a session cookie, and no `session: false`;
+                                       otherwise the session opens (unseal, sync store get) on first use
   -> middleware (app.use)
   -> action? (_yx in a form POST)      verify token, class guards + action's own guards, run it
   -> app, group, route, class, method guards   (first non-true result wins)
@@ -442,7 +443,8 @@ node:http request                    src/server/app.ts (handle)
        JSX? wrap in root > group > route layouts, stream render
   -> first chunk rendered              (an error here still becomes the error page)
   -> on throw: the route's @catches, then app.onError, then the error page
-  -> session commit                    (skipped when the handler crashed with a non-HttpError)
+  -> session commit                    (only a session something opened; skipped when the handler crashed with a non-HttpError;
+                                        a session's first save carries its CSRF nonce)
   -> ServerResponse; scope disposed
 ```
 
@@ -705,7 +707,7 @@ yerd/
       decorators.ts       @service @singleton @scoped @transient @inject @maybe @onBoot @onShutdown @every @hosted
     server/
       app.ts              YerdApp: boot validation, routing pipeline, CSRF check, error pages, start/stop, listen
-      request-context.ts  RequestContext (the YerdContext), CSRF nonce, action token signing
+      request-context.ts  RequestContext (the YerdContext), lazy session, CSRF nonce lookup, action token signing
       context.ts          YerdContext type, ALS, currentContext(), setMeta()
       body.ts             json / form / multipart / text / ndjson / bytes with size limits
       cookies.ts          cookie parsing and serializing
@@ -872,7 +874,8 @@ runtime cache for boosted links, `<link rel=prefetch>` otherwise, JSON
 prefetch answered by `yerd.net.fetch()`); see DYNAMICS.md. CSRF: every unsafe
 method checked by Sec-Fetch-Site, Origin, then Referer (`csrf`,
 `trustedOrigins`, `trustProxy`), action tokens with an expiry (`actionTtl`)
-and a per-session nonce hash, the last `_yx` wins so `formaction={action}`
+and a per-session nonce hash (unbound for visitors without a session, so
+forms never start one), the last `_yx` wins so `formaction={action}`
 works inside action forms; see AUTH.md. Auth: `createAuth` session-key
 clashes throw, `login(user)`, clear errors without `app.sessions()`;
 sessions: `trustProxy`, `secure`, `MemoryStore({ maxSize, sweepInterval })`,

@@ -585,10 +585,19 @@ describe("safeNext", () => {
   });
 });
 
+/** Writes something to the session, so the visitor has one. */
+@route("/edge/visit")
+class Visit {
+  @post go() {
+    currentContext().session.set("visited" as never, true as never);
+    return 204;
+  }
+}
+
 describe("session-bound tokens", () => {
   let sessioned: RunningServer;
   beforeAll(async () => {
-    sessioned = await yerd({ routes: [Edge], services: [], handleSignals: false, secret: SECRET }).sessions({}).listen(0, "127.0.0.1");
+    sessioned = await yerd({ routes: [Edge, Visit], services: [], handleSignals: false, secret: SECRET }).sessions({}).listen(0, "127.0.0.1");
   });
   afterAll(() => sessioned.close());
 
@@ -608,17 +617,28 @@ describe("session-bound tokens", () => {
     };
   }
 
+  /** A token from the page, for a visitor who has a session (one is started first if they don't). */
   async function addToken(b: ReturnType<typeof browser>): Promise<string> {
+    if (!b.jar) await b.fetch("/edge/visit", { method: "POST" });
     const html = await (await b.fetch("/edge")).text();
     return /name="_yx" value="([^"]+)"/.exec(html)![1]!;
   }
 
-  it("a page gives the visitor a session and its tokens carry the session's tag", async () => {
+  it("a visitor with a session gets tokens that carry the session's tag", async () => {
     const b = browser();
     const t = await addToken(b);
     expect(b.jar).toMatch(/^yerd_session=/);
     const payload = JSON.parse(Buffer.from(t.split(".")[0]!, "base64url").toString()) as TokenPayload;
     expect(payload.s).toMatch(/^[\w-]{22}$/);
+    expect(typeof payload.e).toBe("number");
+  });
+
+  it("a visitor without one gets an unbound token and no session", async () => {
+    const r = await fetch(sessioned.url + "/edge", { headers: { accept: "text/html" } });
+    expect(r.headers.getSetCookie()).toEqual([]);
+    const t = /name="_yx" value="([^"]+)"/.exec(await r.text())![1]!;
+    const payload = JSON.parse(Buffer.from(t.split(".")[0]!, "base64url").toString()) as TokenPayload;
+    expect(payload.s).toBeUndefined();
     expect(typeof payload.e).toBe("number");
   });
 
@@ -649,7 +669,7 @@ describe("session-bound tokens", () => {
     expect(r.status).toBe(403);
   });
 
-  it("a token without a session tag is refused while sessions are on", async () => {
+  it("a token without a session tag is refused for a visitor who has a session", async () => {
     const b = browser();
     await addToken(b);
     const r = await b.fetch("/edge", { method: "POST", body: fields({ _yx: token("remove", { id: "x" }) }) });

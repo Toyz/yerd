@@ -112,9 +112,9 @@ class's lifetime.
 
 **API.** values as properties (`session.cart`, `session.cart = x`, assigning
 `undefined` removes), `get(key)`, `set(key, value)`, `delete(key)`, `clear()`,
-`flash(key, value)` / `flash(key)` (readable on the next request only, then
-gone, which pairs with the post/redirect/get flow actions already use),
-`regenerate()`, `destroy()`, `isNew`, `createdAt`. Keys and value types come
+`flash(key, value)` / `flash(key)` (readable on the next request that uses
+the session only, then gone, which pairs with the post/redirect/get flow
+actions already use), `regenerate()` (new id and CSRF nonce), `destroy()`, `isNew`, `createdAt`. Keys and value types come
 from `Session<T>`'s `T`, or the merged `SessionData` interface for plain
 `Session`, so `session.cartt` is a compile error. `@session(Cart)` views the
 session through a class: its methods, getters and setters run with `this` as
@@ -128,25 +128,43 @@ dropped.
 `regenerate()`: 32 random bytes by default, or `sessions({ generateId })`
 (sync or async; must be unique and non-empty; refused with a CookieStore).
 
-**Lazy and dirty-tracked.** Nothing is written back unless it changed (set,
-or changed in place: the data is compared to what was loaded) (or
-`rolling` needs the expiry bumped). A page that never touches the session
-sends no `Set-Cookie`. A request whose handler crashed (anything but an
-`HttpError`) skips the commit, so a half-done login or update doesn't stick.
+**Lazy and dirty-tracked.** The session is opened on first use
+(`ctx.session`, `@session`, auth middleware, signing or checking an action
+token), synchronously: the cookie is unsealed and a cookie or `sync` store
+read right then. A store whose `get` may be async is read up front instead,
+started when a request carrying a session cookie is routed and awaited
+before middleware. A request that never uses the session costs nothing: no
+unseal, no store read, no commit, so no rolling refresh and no flash
+consumed either. Nothing is written back unless it changed (set, or changed
+in place: the data is compared to what was loaded) (or `rolling` needs the
+expiry bumped). A page that never touches the session sends no
+`Set-Cookie`. A request whose handler crashed (anything but an `HttpError`)
+skips the commit, so a half-done login or update doesn't stick.
+
+**Opting out.** `session: false` on a route or group (`@route(path, {
+session: false })`, inherited, the deepest setting wins) means the session
+is never opened or committed there, even with an async store. `ctx.session`
+throws naming the route and the option, `@session` refuses to boot, auth
+middleware sees nobody signed in, and the route's action tokens aren't
+bound to a session. For JSON APIs and webhooks.
 
 **Stores.** One small interface, passed as `app.sessions({ store })`:
 
 ```ts
 interface SessionStore {
-  /** "cookie" stores keep the sealed record in the cookie itself; "id" stores keep an id there. */
-  readonly kind: "cookie" | "id";
+  /** "id" stores keep an id in the cookie (the record in the cookie itself is CookieStore). */
+  readonly kind: "id";
+  /** true when get() never returns a promise: read only when the session is used. */
+  readonly sync?: boolean;
   get(id: string): SessionRecord | undefined | Promise<SessionRecord | undefined>;
   set(id: string, record: SessionRecord, ttlMs: number): void | Promise<void>;
   destroy(id: string): void | Promise<void>;
 }
 ```
 
-Methods may be sync or async. Built in:
+Methods may be sync or async. A store that isn't `sync` is read before
+middleware for every request carrying a session cookie (except `session:
+false` routes), since using the session is synchronous. Built in:
 
 | Store         | Where data lives                    | For                              |
 |---------------|-------------------------------------|----------------------------------|
@@ -171,7 +189,7 @@ inside the cookie. Server-side stores key by a SHA-256 of the ID, so a leaked
 store dump can't be replayed as cookies.
 
 **Expiry.** Idle timeout (`maxAge`, ms, default 14 days, refreshed when
-`rolling`, the default) plus an absolute lifetime (`absoluteMaxAge`, ms,
+`rolling`, the default, by requests that use the session) plus an absolute lifetime (`absoluteMaxAge`, ms,
 default 30 days) that rolling never extends.
 
 **Secrets.** The `secret` option (a string, or a list newest first), else
@@ -276,7 +294,15 @@ cross-site:
    so it can't be carrying a victim's cookies by accident (curl,
    server-to-server).
 
-Options on `yerd({ ... })`: `csrf: false` turns the check off,
+This check is the primary CSRF defense for every unsafe request. Action
+tokens bound to a session back it up for visitors who have one; tokens
+rendered for visitors without a session are unbound (below), so for them
+the check and `SameSite=Lax` are the defense.
+
+Options on `yerd({ ... })`: `csrf: false` turns the check off (plain POST
+handlers, actions posted by visitors without a session, login forms
+included, and prerendered tokens are then open to cross-site posts; an
+action for a visitor with a session still needs a token bound to it),
 `trustedOrigins: ["https://admin.example.com"]` allows other origins,
 `trustProxy: true` believes `X-Forwarded-Host` (and `X-Forwarded-Proto` for
 session cookies). Only turn `trustProxy` on behind a proxy that sets those
@@ -288,15 +314,24 @@ also carries:
 
 - **an expiry**, `actionTtl` seconds after render (default 86400, one day);
   an expired token is a 403 ("This form has expired; reload the page");
-- **when sessions are on, a hash of a per-session nonce.** The nonce lives in
-  the session under `__yerd_csrf` (random, 18 bytes) and is created when the
-  first token is signed for that session, so pages without forms never start
-  a session. It must be saved before the session cookie goes out with the
-  headers: a page renders everything it can without waiting on I/O first, and
-  if it's still streaming when the headers go (or it's an event stream), the
-  nonce is created then, since a later part may render a form. A token whose
-  nonce hash doesn't match the session is a 403. Tokens carry the hash, not
-  the nonce, so page source says nothing about the session.
+- **when sessions are on and the visitor has a session, a hash of its
+  nonce.** The nonce lives in the session under `__yerd_csrf` (random, 18
+  bytes). Every session gets one when its cookie is first issued: minted on
+  its first write (so forms rendered later in that request are bound), anew
+  on `regenerate()` and after `clear()`, and by the commit for a session
+  saved before nonces existed (it's rewritten once to keep it). Signing a
+  token never creates one, so forms never start a session or set a cookie,
+  however a page streams. A token whose nonce hash doesn't match the
+  session's is a 403. Tokens carry the hash, not the nonce, so page source
+  says nothing about the session.
+- **otherwise, nothing (unbound).** A token signed for a visitor without a
+  session (no cookie, or one that doesn't open) has no `s`. It's accepted only
+  from a request that still has no session, on its signature, expiry and the
+  cross-site check; once the visitor has a session it's a 403 like another
+  session's token (`yx-stale`, so the runtime refreshes). That's what makes
+  a login form work for a new visitor, and what makes pages from before a
+  login go stale after it. On a `session: false` route, tokens aren't
+  checked against a session at all.
 
 Tokens in **prerendered** pages carry neither (they were built for nobody):
 they're accepted on their signature and the cross-site check alone.
@@ -372,6 +407,8 @@ Planned: `FileStore`, `token.ts` (HS256 JWT, API keys), `<Authorized>`.
 - `safeNext` rejects `//x`, `/\x`, `https://x`, `javascript:`.
 - JWT with `alg: none`, `alg: HS512`, expired, or not-yet-valid is rejected (when JWTs land).
 - Action posted without a valid token, with an expired one, with one made for another session, or with a foreign `Origin` / `Sec-Fetch-Site`, is rejected.
+- An unbound token (rendered for a visitor without a session) is rejected once that visitor has a session; pages with action forms, streamed or not, set no cookie for a visitor without one.
+- A request that never uses the session doesn't unseal its cookie or read a `sync` store; a `session: false` route never reads any store.
 - A second `createAuth` without its own `sessionKey` throws.
 - A guarded class rejects its `@action` methods, not just its `@get`.
 - `verifyPassword(x, undefined)` takes roughly as long as a real check.

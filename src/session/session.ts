@@ -102,6 +102,20 @@ export interface SessionData {}
 type Data = Record<string, unknown>;
 
 /**
+ * The session field holding the per-session CSRF nonce (action tokens carry
+ * a hash of it). Every session that gets a cookie has one: it's minted on
+ * the session's first write, anew on regenerate(), or by the session
+ * manager when it saves a session that lacks one. Reading a session, or
+ * signing a token, never creates it.
+ */
+export const CSRF_FIELD = "__yerd_csrf";
+
+/** The session manager's hook: give the session a CSRF nonce if it has none. */
+export const ENSURE_NONCE: unique symbol = Symbol("yerd.session.ensureNonce");
+
+const newNonce = (): string => randomBytes(18).toString("base64url");
+
+/**
  * What a SessionStore saves for one session. Plain JSON: a store can write it
  * as a string and hand back the parsed object.
  *
@@ -128,6 +142,14 @@ export interface SessionRecord {
  * `sessions({ generateId })` when given, else 32 random bytes; the store
  * just keys records by them.
  *
+ * A session is read when something first uses it (ctx.session, @session,
+ * auth, an action form), and that use is synchronous. So a store whose
+ * get() may return a promise has its read started as soon as a request
+ * with a session cookie is routed, and awaited before middleware runs
+ * (`session: false` routes skip it). A store whose get() always answers at
+ * once says so with `sync: true`, and is read only when the session is
+ * used, like MemoryStore.
+ *
  * ```ts
  * export class RedisStore implements SessionStore {
  *   readonly kind = "id";
@@ -151,7 +173,14 @@ export interface SessionRecord {
 export interface SessionStore {
   /** Always "id": the cookie keeps the sealed id, the store the record. (Keeping the record in the cookie itself is CookieStore.) */
   readonly kind: "id";
-  /** The record for `id`, or undefined when unknown or expired. */
+  /**
+   * true when get() always returns the record itself, never a promise (an
+   * in-process map, a synchronous SQLite driver): the store is then read
+   * only when the session is used, not up front for every request that
+   * carries a session cookie. A promise from a `sync` store is an error.
+   */
+  readonly sync?: boolean;
+  /** The record for `id`, or undefined when unknown or expired; or a promise of it, unless the store is `sync`. */
   get(id: string): SessionRecord | undefined | Promise<SessionRecord | undefined>;
   /** Save `record` under `id`, replacing any old one; it may be dropped after `ttlMs`. */
   set(id: string, record: SessionRecord, ttlMs: number): void | Promise<void>;
@@ -217,6 +246,8 @@ const DEV_SERVER = Symbol.for("yerd.devServer");
  */
 export class MemoryStore implements SessionStore {
   readonly kind = "id" as const;
+  /** get() answers at once, so a session is read only when it's used. */
+  readonly sync = true;
   // Insertion order is save order: set() re-inserts, so the first entry is the least recently saved.
   readonly #records: Map<string, { record: SessionRecord; expires: number }>;
   readonly #maxSize: number;
@@ -600,6 +631,21 @@ export class SessionApi<D> {
   }
 
   /** @internal */
+  [ENSURE_NONCE](): void {
+    this.#mint(false);
+  }
+
+  /**
+   * A write makes the session real (it'll get a cookie), so it gets its CSRF
+   * nonce now rather than when it's saved: action forms rendered later in
+   * the same request are bound to it. `fresh` replaces one it has
+   * (regenerate: tokens made before a sign-in stop working).
+   */
+  #mint(fresh: boolean): void {
+    if (fresh || typeof this.#data[CSRF_FIELD] !== "string") this.#data[CSRF_FIELD] = newNonce();
+  }
+
+  /** @internal */
   [ADOPT](key: string, value: unknown): void {
     this.#data[key] = value;
     this.#base[key] = structuredClone(value);
@@ -624,8 +670,8 @@ export class SessionApi<D> {
 
   /**
    * True when this request started without a session (no cookie, or one that
-   * was expired or invalid). Fixed for the request: setting values (yerd sets
-   * the CSRF nonce when it first signs an action token) doesn't change it.
+   * was expired or invalid). Fixed for the request: setting values doesn't
+   * change it.
    */
   get isNew(): boolean {
     return this.#isNew;
@@ -641,6 +687,7 @@ export class SessionApi<D> {
     this.#revive();
     this.#data[key] = value;
     this.#dirty = true;
+    if (key !== CSRF_FIELD) this.#mint(false);
   }
 
   /** Remove a value. */
@@ -651,15 +698,22 @@ export class SessionApi<D> {
     }
   }
 
-  /** Remove every value but keep the session (same id, same creation time). Use destroy() to end it. */
+  /**
+   * Remove every value but keep the session (same id, same creation time).
+   * The CSRF nonce goes too: it gets a new one, and open forms stop working.
+   * Use destroy() to end it.
+   */
   clear(): void {
     this.#data = bag();
     this.#dirty = true;
   }
 
   /**
-   * `flash(key, value)` keeps a value for the next request only (a notice after
-   * a redirect). `flash(key)` reads (and consumes) one set by the previous request.
+   * `flash(key, value)` keeps a value for the next request that uses the
+   * session only (a notice after a redirect): read or not there, it's gone
+   * after it. `flash(key)` reads (and consumes) one set by such a request.
+   * Requests that never touch the session (an API call, an image) don't
+   * count.
    */
   flash(key: string): unknown;
   flash(key: string, value: unknown): void;
@@ -675,14 +729,20 @@ export class SessionApi<D> {
     this.#revive();
     this.#outgoingFlash[key] = value;
     this.#dirty = true;
+    this.#mint(false);
     return undefined;
   }
 
-  /** New id, same data. Call on login, so a session id set before login can't be reused (fixation). */
+  /**
+   * New id, same data, new CSRF nonce. Call on login, so a session id set
+   * before login can't be reused (fixation); action forms rendered before
+   * it stop working too (with the client runtime, the page refreshes itself).
+   */
   regenerate(): void {
     this.#revive();
     this.#regenerated = true;
     this.#dirty = true;
+    this.#mint(true);
   }
 
   /** Drop the session and its cookie. Setting values afterwards starts a new one. */
@@ -792,9 +852,11 @@ export interface SessionOptions {
    */
   absoluteMaxAge?: number;
   /**
-   * Refresh the idle expiry on activity (the cookie is re-sent at most every
-   * tenth of `maxAge`). Default true. Off, a session ends `maxAge` after it
-   * was last changed, however often it's read.
+   * Refresh the idle expiry on activity: requests that use the session
+   * (read it, sign in through auth, render an action form) re-send the
+   * cookie, at most every tenth of `maxAge`. A request that never touches
+   * the session doesn't extend it. Default true. Off, a session ends
+   * `maxAge` after it was last changed, however often it's read.
    *
    * ```ts
    * app.sessions({ rolling: false, maxAge: 8 * 60 * 60 * 1000 });

@@ -171,12 +171,16 @@ describe("action tokens across sign-in", () => {
     /name="_yx" value="([^"]+)"/.exec(await (await c("/act", { headers: { accept: "text/html" } })).text())![1]!;
   const submit = (c: ReturnType<typeof client>, token: string) => c("/act", { method: "POST", body: new URLSearchParams({ _yx: token }), headers: { yx: "1" } });
 
-  it("a form rendered for a guest still works after that guest signs in (the session carries on)", async () => {
+  it("a form rendered for a guest goes stale once that guest signs in, and a fresh one works", async () => {
     const c = client();
-    const token = await tokenFrom(c);
+    // No session yet: the token is unbound, and works while there's still none.
+    const unbound = await tokenFrom(c);
+    expect(await (await submit(c, unbound)).text()).toBe("ok anon");
     await c("/signin?as=ada", { method: "POST" });
-    const r = await submit(c, token);
-    expect(await r.text()).toBe("ok ada");
+    const r = await submit(c, unbound);
+    expect(r.status).toBe(403);
+    expect(r.headers.get("yx-stale")).toBe("1");
+    expect(await (await submit(c, await tokenFrom(c))).text()).toBe("ok ada");
   });
 
   it("a form rendered for one user stops working once someone else signs in on that browser", async () => {

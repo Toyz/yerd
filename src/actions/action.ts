@@ -26,6 +26,7 @@ import { currentContext, type YerdContext } from "../server/context.js";
 import { sentFiles, withFiles, type FormFields, type FormFiles } from "../server/body.js";
 import { isDevelopment } from "../server/http.js";
 import { parse, type DtoClass } from "../decorators/dto.js";
+import { CSRF_FIELD } from "../session/session.js";
 
 /**
  * The submitted form fields, with typed getters. An @action method gets it as
@@ -698,12 +699,14 @@ export interface TokenPayload {
   h?: HoleSource[];
   /** expiry, unix seconds; absent on prerendered pages */
   e?: number;
-  /** tag of the session's CSRF nonce; ties the token to one visitor's session */
+  /**
+   * tag of the session's CSRF nonce; ties the token to one visitor's session.
+   * Absent when the page was rendered for a visitor with no session (unbound).
+   */
   s?: string;
 }
 
-/** The session field holding the per-session CSRF nonce. */
-export const CSRF_FIELD = "__yerd_csrf";
+export { CSRF_FIELD };
 
 declare module "../session/session.js" {
   interface SessionData {
@@ -731,15 +734,20 @@ export function csrfTag(nonce: string): string {
 
 /**
  * Check a verified token against the request: not expired, and made for this
- * session. Tokens without an expiry come from prerendered pages (built with
- * no visitor), and are accepted on their signature and the origin check alone.
+ * session. A token bound to a session (`s`) needs that session's nonce; an
+ * unbound one, signed for a visitor who had no session, is taken only from
+ * a request that still has none (so it rests on the signature, the expiry
+ * and the cross-site check), and refused once the visitor has a session,
+ * like a token for someone else's. Tokens without an expiry come from
+ * prerendered pages (built with no visitor), and are accepted on their
+ * signature and the origin check alone.
  */
 export function checkActionToken(payload: TokenPayload, sessionNonce: string | undefined, sessionsOn: boolean): void {
   if (payload.e === undefined) return;
   if (payload.e < Date.now() / 1000) throw new HttpError(403, "This form has expired; reload the page and try again");
-  if (sessionsOn && (payload.s === undefined || sessionNonce === undefined || payload.s !== csrfTag(sessionNonce))) {
-    throw new HttpError(403, "This form was made for a different session; reload the page and try again");
-  }
+  if (!sessionsOn) return;
+  const matches = payload.s === undefined ? sessionNonce === undefined : sessionNonce !== undefined && payload.s === csrfTag(sessionNonce);
+  if (!matches) throw new HttpError(403, "This form was made for a different session; reload the page and try again");
 }
 
 function mac(secret: string, data: string): string {

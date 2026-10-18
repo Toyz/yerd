@@ -111,7 +111,8 @@ describe("Session object", () => {
     expect(read("id")).toBe("data-id");
     expect(s instanceof Session).toBe(true);
     s.items = ["a"];
-    expect(s.state.record.data).toEqual({ id: "data-id", items: ["a"] });
+    // The first write gave it its CSRF nonce too.
+    expect(s.state.record.data).toEqual({ id: "data-id", items: ["a"], __yerd_csrf: expect.any(String) });
     delete s.items;
     expect(s.get("items")).toBeUndefined();
   });

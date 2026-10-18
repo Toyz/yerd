@@ -181,6 +181,22 @@ export interface RouteOptions {
   meta?: PageMeta;
   /** Guards (names or value guards) run before every handler and action of this route, after group guards. */
   guards?: GuardSpec[];
+  /**
+   * false: this route has no session. Its session cookie is never opened,
+   * read from the store or written back, even with an async store; reading
+   * ctx.session (or a `@session` accessor, which refuses to boot here)
+   * throws, auth middleware sees nobody signed in, and its actions' tokens
+   * aren't bound to a session. For JSON APIs and other routes that never
+   * need one. Default: the group's setting, else true.
+   *
+   * ```ts
+   * @route("/api/stats", { session: false })
+   * class Stats {
+   *   @get read() { return { up: true }; }
+   * }
+   * ```
+   */
+  session?: boolean;
 }
 
 /**
@@ -209,6 +225,17 @@ export interface GroupOptions {
   meta?: PageMeta;
   /** Guards run before every member route, outer groups first. */
   guards?: GuardSpec[];
+  /**
+   * false: member routes have no session (see RouteOptions.session). A
+   * nested group's or a route's own setting wins. Default: the parent
+   * group's setting, else true.
+   *
+   * ```ts
+   * @group("/api", { session: false })
+   * class Api {}
+   * ```
+   */
+  session?: boolean;
 }
 
 
@@ -688,9 +715,11 @@ export interface ResolvedRoute {
   meta: PageMeta;
   /** Group guards outermost first, then the route's `guards` option. */
   guards: GuardSpec[];
+  /** Whether the route has a session: its `session` option, else the nearest group's, else true. */
+  session: boolean;
 }
 
-/** Walk a route's group chain: prefixes concatenate, layouts nest, meta merges (deeper wins). */
+/** Walk a route's group chain: prefixes concatenate, layouts nest, meta merges and `session` is inherited (deeper wins). */
 export function resolveRoute(def: RouteDef): ResolvedRoute {
   const chain: GroupDef[] = [];
   const seen = new Set<Function>();
@@ -728,5 +757,9 @@ export function resolveRoute(def: RouteDef): ResolvedRoute {
   if (own?.isolated) isolated = true;
   layouts = applyLayouts(layouts, own);
   guards.push(...(def.options.guards ?? []));
-  return { pattern: joinPaths(prefix, def.pattern), layouts, isolated, meta: { ...meta, ...def.options.meta }, guards };
+  // The deepest setting wins: the route's own, else the nearest group's.
+  let session = true;
+  for (const g of chain) session = g.options.session ?? session;
+  session = def.options.session ?? session;
+  return { pattern: joinPaths(prefix, def.pattern), layouts, isolated, meta: { ...meta, ...def.options.meta }, guards, session };
 }

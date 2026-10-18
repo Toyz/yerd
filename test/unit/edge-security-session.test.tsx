@@ -269,12 +269,16 @@ describe("isNew", () => {
   });
   afterAll(() => server.close());
 
-  it("is true on a first page visit even when the page's form sets the CSRF nonce", async () => {
+  it("stays true across visits to a page with a form: forms don't start a session", async () => {
     const c = client(server.url);
-    const first = await (await c.fetch("/with-action", { headers: { accept: "text/html" } })).text();
-    expect(first).toContain('<p id="new">true</p>');
+    const first = await c.fetch("/with-action", { headers: { accept: "text/html" } });
+    expect(await first.text()).toContain('<p id="new">true</p>');
+    expect(first.headers.getSetCookie()).toEqual([]);
     const second = await (await c.fetch("/with-action", { headers: { accept: "text/html" } })).text();
-    expect(second).toContain('<p id="new">false</p>');
+    expect(second).toContain('<p id="new">true</p>');
+    await c.ops("set:name=ada");
+    const third = await (await c.fetch("/with-action", { headers: { accept: "text/html" } })).text();
+    expect(third).toContain('<p id="new">false</p>');
   });
 
   it("stays true for the whole first request, even after a set()", async () => {
@@ -301,6 +305,12 @@ describe("isNew", () => {
 
 describe("Session objects directly", () => {
   const fresh = () => new Session<Record<string, unknown>>(undefined, undefined) as unknown as Session & Record<string, unknown>;
+  /** What the session would save, as JSON, without the CSRF nonce its first write mints. */
+  const values = (s: Session) => {
+    const { __yerd_csrf, ...rest } = JSON.parse(JSON.stringify(s.state.record.data)) as Record<string, unknown>;
+    expect(typeof __yerd_csrf).toBe("string");
+    return rest;
+  };
 
   it("doesn't find Object.prototype members as values", () => {
     const s = fresh();
@@ -322,7 +332,7 @@ describe("Session objects directly", () => {
     const s = fresh();
     s.set("__proto__" as "name", { admin: true } as never);
     expect(s.get("admin" as "name")).toBeUndefined();
-    expect(JSON.parse(JSON.stringify(s.state.record.data))).toEqual(JSON.parse('{"__proto__":{"admin":true}}'));
+    expect(values(s)).toEqual(JSON.parse('{"__proto__":{"admin":true}}'));
   });
 
   it("loads a record carrying a __proto__ key as plain data", () => {
@@ -339,7 +349,7 @@ describe("Session objects directly", () => {
     expect("name" in s).toBe(true);
     s.name = undefined;
     expect("name" in s).toBe(false);
-    expect(Object.keys(s.state.record.data)).toEqual([]);
+    expect(Object.keys(values(s))).toEqual([]);
     s.n = 0;
     expect("n" in s).toBe(true); // falsy but present
     delete s.n;
@@ -351,7 +361,7 @@ describe("Session objects directly", () => {
     s.set("a" as "name", null as never);
     s.set("b" as "name", false as never);
     s.set("c" as "name", "" as never);
-    expect(JSON.parse(JSON.stringify(s.state.record.data))).toEqual({ a: null, b: false, c: "" });
+    expect(values(s)).toEqual({ a: null, b: false, c: "" });
   });
 
   it("symbol-keyed properties never reach the saved data", () => {

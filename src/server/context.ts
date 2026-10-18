@@ -28,6 +28,11 @@ export interface RouteInfo {
   readonly paramNames: readonly string[];
   /** The route class's name, for messages. */
   readonly className: string;
+  /**
+   * false when the route (or its group) opted out of sessions with
+   * `session: false`: ctx.session throws there, and auth sees nobody signed in.
+   */
+  readonly session?: boolean;
 }
 
 /**
@@ -101,7 +106,8 @@ export interface YerdContext {
    * The session (needs app.sessions(...)), plain: typed by the app-wide
    * SessionData, empty unless augmented. `as(Shape)` or `as<T>()` gives a
    * typed view; in a route, `@session accessor session!: Session<T>` types
-   * it per class.
+   * it per class. Opened the first time it's read, so a request that never
+   * reads it costs nothing; throws on a `session: false` route.
    *
    * ```ts
    * const notice = ctx.session.flash("notice") as string | undefined;

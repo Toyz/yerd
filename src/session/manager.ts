@@ -2,7 +2,7 @@ import type { IncomingMessage } from "node:http";
 import type { Outgoing } from "../respond/coerce.js";
 import { serializeCookie } from "../server/cookies.js";
 import { requestIsHttps } from "../server/http.js";
-import { CookieStore, DAY, Session, newSessionId, sealFor, unsealFor, type SessionOptions, type SessionRecord, type SessionStore } from "./session.js";
+import { CSRF_FIELD, CookieStore, DAY, ENSURE_NONCE, Session, newSessionId, sealFor, unsealFor, type SessionOptions, type SessionRecord, type SessionStore } from "./session.js";
 
 /** What the cookie carries, always sealed: the record itself (cookie store) or an id (id stores). */
 interface CookiePayload {
@@ -17,6 +17,14 @@ interface CookiePayload {
 }
 
 const COOKIE_LIMIT = 4000;
+
+const fresh = (secure: boolean): LoadedSession => ({ session: new Session(undefined, undefined), payload: undefined, secure });
+
+/** Whether session data holds anything besides the CSRF nonce. */
+function hasValues(data: Record<string, unknown>): boolean {
+  for (const key in data) if (key !== CSRF_FIELD) return true;
+  return false;
+}
 
 export interface LoadedSession {
   session: Session;
@@ -33,7 +41,10 @@ export function checkSessionOptions(options: SessionOptions): void {
   if (options.cookieName !== undefined) serializeCookie(options.cookieName, "");
 }
 
-/** Loads a request's session before the handler and writes it back after. */
+/**
+ * Opens a request's session from its cookie (when something first uses it;
+ * see RequestContext) and writes it back after the handler.
+ */
 export class SessionManager {
   readonly #store: SessionStore | CookieStore;
   readonly #maxAge: number;
@@ -70,7 +81,25 @@ export class SessionManager {
     return secure ? `__Host-${this.#name}` : this.#name;
   }
 
-  async load(req: IncomingMessage, cookies: Record<string, string>): Promise<LoadedSession> {
+  /**
+   * Whether a session can be read synchronously whenever it's first used:
+   * the cookie store, or an id store that says its get() is `sync`. Other
+   * stores are read up front (see readsUpFront in RequestContext).
+   */
+  get readsOnUse(): boolean {
+    return this.#store.kind === "cookie" || this.#store.sync === true;
+  }
+
+  /** Whether the request carries a cookie by the session's name (valid or not: it isn't opened). */
+  hasCookie(req: IncomingMessage, cookies: Record<string, string>): boolean {
+    return cookies[this.#cookieName(this.#secure(req))] !== undefined;
+  }
+
+  /**
+   * The request's session: a fresh one unless the cookie opens to a live
+   * session. Synchronous except when an id store's get() returns a promise.
+   */
+  load(req: IncomingMessage, cookies: Record<string, string>): LoadedSession | Promise<LoadedSession> {
     const secure = this.#secure(req);
     const raw = cookies[this.#cookieName(secure)];
     const now = Date.now();
@@ -78,14 +107,22 @@ export class SessionManager {
     // Written as "not unexpired" so a payload or record without a usable time
     // (a malformed payload, a custom store's bad record) counts as expired
     // rather than never expiring.
-    if (!payload || !(payload.e >= now)) return { session: new Session(undefined, undefined), payload: undefined, secure };
-
-    let record: SessionRecord | undefined;
-    if (this.#store.kind === "cookie") record = payload.r;
-    else if (payload.i) record = await this.#store.get(payload.i);
-    if (!record || !(record.createdAt + this.#absolute >= now)) {
-      return { session: new Session(undefined, undefined), payload: undefined, secure };
+    if (!payload || !(payload.e >= now)) return fresh(secure);
+    if (this.#store.kind === "cookie") return this.#opened(payload.r, payload, secure, now);
+    if (!payload.i) return fresh(secure);
+    const got = this.#store.get(payload.i);
+    if (typeof (got as PromiseLike<unknown> | undefined)?.then !== "function") return this.#opened(got as SessionRecord | undefined, payload, secure, now);
+    // Any thenable a store hands back, as a real promise (callers test for one).
+    const pending = Promise.resolve(got);
+    if (this.#store.sync) {
+      void pending.catch(() => {});
+      throw new TypeError("The session store says it's sync, but its get() returned a promise; drop `sync: true` from it");
     }
+    return pending.then((record) => this.#opened(record, payload, secure, now));
+  }
+
+  #opened(record: SessionRecord | undefined, payload: CookiePayload, secure: boolean, now: number): LoadedSession {
+    if (!record || !(record.createdAt + this.#absolute >= now)) return fresh(secure);
     return { session: new Session(record, payload.i), payload, secure };
   }
 
@@ -95,7 +132,8 @@ export class SessionManager {
     const name = this.#cookieName(secure);
     const now = Date.now();
 
-    const empty = Object.keys(state.record.data).length === 0 && Object.keys(state.record.flash).length === 0;
+    // The CSRF nonce alone isn't something to keep.
+    const empty = !hasValues(state.record.data) && Object.keys(state.record.flash).length === 0;
     // Destroyed and started again with nothing in it (a bare regenerate()) is still destroyed.
     if (state.destroyed || (state.replaced && empty)) {
       if (session.id && this.#store.kind === "id") await this.#store.destroy(session.id);
@@ -104,9 +142,16 @@ export class SessionManager {
     }
 
     const refreshDue = payload !== undefined && this.#rolling && now - payload.s > this.#maxAge / 10;
-    if (!state.dirty && !refreshDue && !state.hadIncomingFlash) return;
+    // Every session that gets a cookie has a CSRF nonce. A new one usually got
+    // it on its first write; one changed only in place (a shape default pushed
+    // to) gets it here. One saved before it had a nonce (an older yerd) gets
+    // one too, and is written to keep it: until then its visitor counts as
+    // having no session for action tokens.
+    const nonceless = typeof state.record.data[CSRF_FIELD] !== "string";
+    if (!(payload !== undefined && nonceless) && !state.dirty && !refreshDue && !state.hadIncomingFlash) return;
     // Nothing to keep and nothing to clear: don't hand out empty sessions.
     if (!payload && empty) return;
+    if (nonceless) session[ENSURE_NONCE]();
 
     const remainingAbsolute = state.record.createdAt + this.#absolute - now;
     const ttl = Math.max(0, Math.min(this.#maxAge, remainingAbsolute));

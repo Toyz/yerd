@@ -146,6 +146,8 @@ export interface Auth<User> {
   /**
    * Loads the signed-in user once per request. `app.use(auth)` installs it
    * (passing the auth itself is the same as passing this). Needs sessions.
+   * It reads the session on every request it runs for, except on
+   * `session: false` routes, where nobody is signed in.
    *
    * ```ts
    * yerd().sessions().use(auth.middleware);
@@ -308,6 +310,8 @@ export function createAuth<User>(options: AuthOptions<User>): Auth<User> {
   claimedKeys.add(userKey);
 
   const sessionOf = (ctx: YerdContext): Session => {
+    // Its own error names the route and the option.
+    if (ctx.route.session === false) return ctx.session;
     try {
       return ctx.session;
     } catch (error) {
@@ -319,8 +323,9 @@ export function createAuth<User>(options: AuthOptions<User>): Auth<User> {
   const setUser = (ctx: YerdContext, user: User | undefined) => ctx.memo.set(loaded, { user });
 
   const middleware: Middleware = async (ctx, next) => {
-    // Build-time prerendering has no visitor: nobody is signed in.
-    if (ctx.prerendering) {
+    // Build-time prerendering has no visitor, and a `session: false` route
+    // no session to sign in with: nobody is signed in.
+    if (ctx.prerendering || ctx.route.session === false) {
       setUser(ctx, undefined);
       return next();
     }

@@ -113,8 +113,9 @@ The group's options:
 | `meta` | Page metadata inherited by members; a route's own `meta` wins per key. |
 | `group` | A parent group, for nesting. |
 | `inheritLayouts` | `false` starts the layout chain fresh (see below). Default `true`. |
+| `session` | `false`: member routes have no session, and their session cookie is never read (see [routes without a session](09-sessions-and-auth.md#routes-without-a-session)). `@route` takes it too. |
 
-Groups nest: prefixes join, layouts nest outer to inner, meta merges with the deeper value winning, and guards run outer first.
+Groups nest: prefixes join, layouts nest outer to inner, meta merges with the deeper value winning, guards run outer first, and the deepest `session` setting wins.
 
 ```tsx
 import { get, group, route, type LayoutProps } from "@toyz/yerd";
@@ -279,7 +280,7 @@ export const app = yerd().use(timing);
 - [Middleware](api:yerd.Middleware) gets the request context and `next`. `next()` resolves to the response: `status`, `headers` (lowercase names), `body` and `cookies`. Change them and return it.
 - Several run in the order you `use()` them, the first outermost.
 - It runs for requests that matched a route. 404s, 405s, static files and refused cross-site posts never reach it.
-- The session is loaded and the DI scope is ready, so `currentContext()`, `resolve()` and `ctx.session` work.
+- The DI scope is ready and the session can be read, so `currentContext()`, `resolve()` and `ctx.session` work (the session opens the first time something reads it; on a `session: false` route there's none).
 - Errors thrown by the handler come out of `next()`, so a `try`/`catch` around it sees them. A throw from the middleware itself is handled like a handler's: `@catches`, then `app.onError`, then the error page.
 - To turn a request away, prefer a guard (it can redirect or return any response). Middleware can throw an [`HttpError`](api:yerd.HttpError).
 

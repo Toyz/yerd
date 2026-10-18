@@ -621,10 +621,16 @@ export interface SessionDecorator extends Resolves<Session<any>> {
  * @session(Cart) accessor cart!: Session<Cart>;
  * this.cart.add("socks"); // this.cart.count is 1, and it's saved
  * ```
+ *
+ * The session is opened when the field is first read, not before. A route
+ * with `session: false` has none, so using it there refuses to boot.
  */
 export const session = createAccessor(
   (ctx, shape?: SessionShape) => (shape ? shapeSession(ctx.session, shape) : ctx.session),
-  { name: "session" },
+  {
+    name: "session",
+    validate: (route) => (route.session === false ? `${route.pattern} has \`session: false\` (on the route or its group), so there's no session to read` : undefined),
+  },
 ) as unknown as SessionDecorator;
 
 const cookieField = stringField("cookie", (ctx, name) => ctx.cookies[name], { name: "cookie" });

@@ -102,18 +102,20 @@ class Anon {
 }
 
 describe("saving the session", () => {
-  it("skips the commit for a visitor with no cookie whose session nothing touched", async () => {
+  it("skips the commit whenever nothing opened the session, cookie or not", async () => {
     const commit = vi.spyOn(SessionManager.prototype, "commit");
     try {
       const app = yerd({ routes: [Anon, SignIn], services: [], handleSignals: false, secret: SECRET }).sessions();
       const r = await app.request("/anon");
       expect(r.headers.getSetCookie()).toEqual([]);
       expect(commit).not.toHaveBeenCalled();
-      // Used sessions, and incoming ones (a rolling refresh, unread flash), still commit.
       const client = app.client();
       await client.request("/sign-in", { method: "POST" });
       expect(commit).toHaveBeenCalledTimes(1);
+      // A session cookie came in, but the handler never read the session.
       await client.request("/anon");
+      expect(commit).toHaveBeenCalledTimes(1);
+      await client.request("/sign-in", { method: "POST" });
       expect(commit).toHaveBeenCalledTimes(2);
     } finally {
       commit.mockRestore();

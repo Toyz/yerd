@@ -147,6 +147,11 @@ class Reset {
     this.session.destroy();
     return 204;
   }
+  /** PUT starts a session (forms alone don't). */
+  @put start() {
+    this.session.hits = 0;
+    return 204;
+  }
 }
 
 function client(base: string) {
@@ -163,7 +168,9 @@ function client(base: string) {
       for (const c of r.headers.getSetCookie()) jar = /Max-Age=0/.test(c) ? "" : c.split(";")[0]!;
       return r;
     },
+    /** A token from the page, bound to this client's session (started first if it has none). */
     async token(path = "/form") {
+      if (!jar) await this.fetch("/reset", { method: "PUT", headers: { "sec-fetch-site": "same-origin" } });
       const html = await (await this.fetch(path, { headers: { accept: "text/html" } })).text();
       return /name="_yx" value="([^"]+)"/.exec(html)![1]!;
     },
@@ -284,8 +291,14 @@ describe("action posts in a running app with sessions", () => {
   it("refuses a token whose session tag is missing, or forged for a nonce it can't know", async () => {
     const c = client(server.url);
     await c.token();
+    // Unbound (made for a visitor without a session): refused once there is one, stale like another session's.
     const noTag = signAction(SECRET, { c: "Form", a: "bump", p: {}, e: Math.floor(Date.now() / 1000) + 60 });
     expect((await c.fetch("/form", post_(noTag))).status).toBe(403);
+    const scripted = await c.fetch("/form", post_(noTag, { yx: "1" }));
+    expect(scripted.status).toBe(403);
+    expect(scripted.headers.get("yx-stale")).toBe("1");
+    // With no session at all, the same token is fine.
+    expect((await fetch(server.url + "/form", post_(noTag, { yx: "1" }))).status).toBe(200);
     const guessed = signAction(SECRET, { c: "Form", a: "bump", p: {}, e: Math.floor(Date.now() / 1000) + 60, s: csrfTag("guess") });
     expect((await c.fetch("/form", post_(guessed))).status).toBe(403);
   });
@@ -390,5 +403,29 @@ describe("csrf: false", () => {
     expect(cross.status).toBe(200);
     const forged = await fetch(server.url + "/nosession", { method: "POST", body: new URLSearchParams({ _yx: "x.y" }), headers: { yx: "1" } });
     expect(forged.status).toBe(400);
+  });
+});
+
+describe("csrf: false with sessions", () => {
+  let server: RunningServer;
+  beforeAll(async () => {
+    server = await yerd({ routes: [Form, Reset], services: [], handleSignals: false, secret: SECRET, csrf: false }).sessions().listen(0, "127.0.0.1");
+  });
+  afterAll(() => server.close());
+
+  it("leaves a visitor without a session to the token alone, but a session still needs its own token", async () => {
+    // An attacker's unbound token, from a visit without a cookie.
+    const html = await (await fetch(server.url + "/form", { headers: { accept: "text/html" } })).text();
+    const unbound = /name="_yx" value="([^"]+)"/.exec(html)![1]!;
+    expect(verifyAction([SECRET], unbound).s).toBeUndefined();
+    // Posted cross-site for a victim without a session: nothing stops it.
+    expect((await fetch(server.url + "/form", post_(unbound, { "sec-fetch-site": "cross-site", yx: "1" }))).status).toBe(200);
+    // For a victim with a session, the token isn't theirs.
+    const victim = client(server.url);
+    await victim.token();
+    calls.length = 0;
+    const r = await victim.fetch("/form", post_(unbound, { "sec-fetch-site": "cross-site", yx: "1" }));
+    expect(r.status).toBe(403);
+    expect(calls).toEqual([]);
   });
 });

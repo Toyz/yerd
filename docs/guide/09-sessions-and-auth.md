@@ -140,18 +140,38 @@ The interface is global, so every key on it is visible (and writable) from every
 | `session.key` / `session.key = value` | read and write a value (`undefined` removes it); a shape class adds its own methods |
 | `get(key)` / `set(key, value)` | the same, by name |
 | `delete(key)` / `clear()` | remove one value / all of them (sign-in and the CSRF nonce included, so open forms stop working) |
-| `flash(key, value)` | keep a value for the next request only (a notice after a redirect) |
-| `flash(key)` | read and consume a flash set by the previous request |
-| `regenerate()` | new session id, same data; do this on login |
+| `flash(key, value)` | keep a value for the next request that uses the session only (a notice after a redirect) |
+| `flash(key)` | read and consume a flash set by the previous request that used the session |
+| `regenerate()` | new session id and CSRF nonce, same data; do this on login |
 | `destroy()` | drop the session and its cookie; setting a value afterwards starts a fresh one |
 | `isNew`, `createdAt` | whether the request arrived without a session; when it was created |
 
 HTML pages sent to someone with a session get `Cache-Control: private, no-cache` (unless the handler set its own), so a shared cache or the browser's Back button can't show a signed-in page to the wrong person, or a signed-out page after signing in.
 
-Changes are saved after the handler runs, including ones made in place. A request that changed nothing sends no cookie (unless a rolling session is due for a refresh).
+The session is opened the first time something uses it (`ctx.session`, a `@session` field, auth middleware, an action form), not before: a request that never touches it doesn't unseal the cookie or read the store. Changes are saved after the handler runs, including ones made in place. A request that changed nothing sends no cookie, unless a rolling session it used is due for a refresh; a request that never used the session doesn't refresh it, and doesn't use up a flash either.
 
 > [!NOTE]
-> Action tokens are bound to a per-session nonce, so a page that renders an action form starts a session for a first-time visitor (a cookie, and `Cache-Control: private, no-cache` on the page) even if your code writes nothing. Pages without forms don't: the nonce is created when the first token is signed. One exception: the session cookie goes out with the headers, so a streamed page that still has parts to render at that point (an async component waiting on I/O) gets the nonce then, in case a later part renders a form. See [action tokens](15-security.md#action-tokens).
+> Rendering action forms never starts a session. A visitor who has one gets tokens bound to its CSRF nonce; a first-time visitor gets unbound tokens and no cookie, so pages with forms stay cacheable for them however they stream. A session gets its nonce when it's first written, so the action that starts it (an add-to-cart, a login) answers with bound forms. See [action tokens](15-security.md#action-tokens).
+
+## Routes without a session
+
+`session: false` on a route or a group means the session is never opened or saved there, whatever cookie comes in: no unsealing, no store read (even for an async store, which is otherwise read before middleware for every request carrying a session cookie), no `Set-Cookie`. It suits JSON APIs and webhooks. A route's own setting wins over its group's.
+
+```ts
+import { get, group, route } from "@toyz/yerd";
+
+@group("/api", { session: false })
+class Api {}
+
+@route("/stats", { group: Api })
+export class Stats {
+  @get read() {
+    return { up: true };
+  }
+}
+```
+
+There, `ctx.session` throws an error naming the route and the option, a `@session` field refuses to boot, auth middleware sees nobody signed in (so `auth.required` turns requests away), and action tokens for the route's actions aren't bound to a session. Layouts and error pages rendered for the route can't read the session either.
 
 > [!NOTE]
 > If a request ends in an unhandled crash (anything other than an `HttpError`), the session isn't saved. A half-finished login or update never sticks.
@@ -176,7 +196,7 @@ export const app = yerd().sessions({
 | `store` | `new CookieStore()` | where the data lives |
 | `maxAge` | 14 days | idle lifetime in ms |
 | `absoluteMaxAge` | 30 days | lifetime from creation in ms, never extended |
-| `rolling` | `true` | refresh the idle expiry on activity |
+| `rolling` | `true` | refresh the idle expiry on requests that use the session |
 | `cookieName` | `"yerd_session"` | cookie name (gets a `__Host-` prefix over HTTPS) |
 | `secure` | auto | force the `Secure` flag on or off; by default it's on when the request came over HTTPS |
 | `trustProxy` | the app's `trustProxy` | believe `X-Forwarded-Proto` when deciding whether the request was HTTPS |
@@ -194,7 +214,7 @@ Cookies are always `HttpOnly`, `SameSite=Lax` and `Path=/`.
 | --- | --- | --- |
 | `CookieStore` (default) | small sessions (an id, a theme, a short cart), any number of instances, no infrastructure | ~4 KB after sealing: a bigger session is a 500 naming the size. Can't revoke a session server-side before it expires |
 | `MemoryStore` | dev, tests, one process | lost on restart; each instance has its own |
-| your own `SessionStore` | several instances, big sessions, "sign out everywhere" | one store lookup per request with a session |
+| your own `SessionStore` | several instances, big sessions, "sign out everywhere" | one store lookup per request carrying a session cookie (read before middleware, since `ctx.session` is synchronous), unless the store is `sync` or the route has `session: false` |
 
 ### Your own store
 
@@ -250,8 +270,8 @@ export const app = yerd().sessions({ store: new KvSessionStore(kv) }); // kv: yo
 - `get` returns `undefined` for an unknown or expired id; yerd then starts a fresh session.
 - `set` replaces the whole record. `ttlMs` is how long it may live: the idle `maxAge`, capped by what's left of `absoluteMaxAge`. Letting the database expire it keeps the store from filling up.
 - `destroy` runs on logout and when the id is rotated (`regenerate()`, login).
-- The record is JSON-safe (`data`, `flash`, `createdAt`), so `JSON.stringify` is all the serializing it needs.
-- Methods may be sync or async.
+- The record is JSON-safe (`data`, `flash`, `createdAt`), so `JSON.stringify` is all the serializing it needs. `data` includes yerd's CSRF nonce (`__yerd_csrf`).
+- Methods may be sync or async. Using the session is synchronous, so an async `get` is started as soon as a request carrying a session cookie is routed and awaited before middleware runs, whether or not the handler then uses the session (`session: false` routes skip it). A store whose `get` always answers at once (an in-process cache, a synchronous SQLite driver) should say `readonly sync = true`: it's then read only when the session is used, like `MemoryStore`.
 
 To sign a user out everywhere, have the store keep an index of sessions per user: `set` sees the record's data, signed-in user id included (under `createAuth`'s `sessionKey`, `"__yerd_uid"` by default), so it can remember which keys belong to whom and delete them all.
 

@@ -47,6 +47,8 @@ export const app = yerd({
 });
 ```
 
+This check is the main CSRF defense, for every unsafe request, with or without actions. [Action tokens](#action-tokens) add to it, but a form rendered for a visitor without a session carries a token that isn't tied to anyone, so for those visitors the check (and `SameSite` cookies) is what stops another site posting it. With `csrf: false`, plain POST handlers, actions posted by visitors without a session (a login form: login CSRF) and prerendered tokens are open to cross-site posts; an action posted for a visitor with a session still needs a token bound to that session, which another site can't get. Only turn it off when something in front of the app does the same job.
+
 > [!NOTE]
 > `same-site` counts as cross-site: `shop.example.com` can't post to `api.example.com` unless it's in `trustedOrigins`. A subdomain you don't control fully (user content, a marketing site) shouldn't be able to post with your users' cookies.
 
@@ -58,8 +60,9 @@ Every action form (and every element with an `action`) carries a `_yx` token, HM
 
 - **Can't be forged.** A visitor can't call another action, or change `{ id: 7 }` to `{ id: 8 }`: the signature breaks and the request is a 400.
 - **Expires.** After `actionTtl` seconds (default 86400, a day). An expired form gets a 403 asking the user to reload; with the client runtime the page refreshes itself (see [stale pages](#stale-pages)).
-- **Bound to the session.** With sessions on, the token carries a hash of a per-session nonce. A token rendered for one visitor is a 403 for anyone else, so a token leaked from a page (a screenshot, a shared HTML file) is useless to others. Turn sessions on even if you don't otherwise need them, if forms matter.
-- **The nonce is created with the first token.** A visitor who's never shown an action form gets no session for it: crawlers and `curl` reading your pages don't fill the session store, and those pages stay cacheable. The nonce has to be saved before the session cookie goes out with the response headers, so yerd renders everything it can without waiting before sending them: a form anywhere in that part signs in time. If the page is still streaming when the headers go (an async component waiting on a database), yerd creates the nonce right then, because a part still to come may render a form. Event streams (`@sse`) are treated the same way.
+- **Bound to the session.** With sessions on, a visitor who has a session gets tokens carrying a hash of that session's nonce. A token rendered for one visitor is a 403 for anyone else, so a token leaked from a page (a screenshot, a shared HTML file) is useless to others. Turn sessions on even if you don't otherwise need them, if forms matter.
+- **Forms never start a session.** Every session gets its nonce when it's first written (anything set, a flash, a sign-in), so rendering forms costs nothing: a visitor without a session gets an *unbound* token and no cookie, however the page streams, and crawlers or `curl` reading your pages don't fill the session store. An unbound token is accepted only from a request that still has no session; it rests on its signature, its expiry and the [cross-site check](#cross-site-requests). Once the visitor has a session, an unbound token is refused like another session's (the runtime refreshes the page: see [stale pages](#stale-pages)).
+- **Signing in renews the nonce.** `regenerate()` (which `auth.login()` calls) gives the session a new nonce, and `clear()` drops it too, so forms rendered before them go stale. A login form posted by a new visitor carries an unbound token, which works: the session it starts has a nonce from then on.
 - **Prerendered pages** are built for no one, so their tokens have no expiry and no session. They're protected by the signature and the cross-site check only. Keep actions that need a signed-in user off prerendered pages, or check the user in the action.
 
 > [!WARNING]
@@ -96,16 +99,17 @@ export class Board {
 
 ### Stale pages
 
-When the secret changed, the server was redeployed, or a token expired, the client runtime gets a `yx-stale` response, fetches the page again with fresh tokens and tells the user to try again. The action didn't run, so retrying is safe. Without JavaScript the user gets the 403 page.
+When the secret changed, the server was redeployed, a token expired, or the page's tokens were made for another session (or for no session, and the visitor has one now, after signing in), the client runtime gets a `yx-stale` response, fetches the page again with fresh tokens and tells the user to try again. The action didn't run, so retrying is safe. Without JavaScript the user gets the 403 page.
 
 ## Sessions
 
 - **Sealed.** The default [CookieStore](api:yerd.CookieStore) keeps the data in the cookie, encrypted and authenticated with AES-256-GCM: visitors can't read or change it. [MemoryStore](api:yerd.MemoryStore) and other id stores keep only a random id in the (also sealed) cookie, and `MemoryStore` keys its records by a hash of the id, so a dump of the store can't be replayed as cookies.
 - **Its own key.** The session cookie is sealed under a key derived for it alone. [seal()](api:yerd.seal) and [unseal()](api:yerd.unseal) use a different one, so a value your app seals (even one a visitor chose) is never accepted as a session cookie, and a session cookie never opens with `unseal()`. Upgrading from a version before the split invalidates existing sessions and sealed values once: everyone signs in again.
 - **Cookie flags.** Always `HttpOnly`, `SameSite=Lax` and `Path=/`. Over HTTPS also `Secure`, with the `__Host-` name prefix, which stops a subdomain from planting the cookie. Behind a proxy, set `trustProxy` so yerd believes `X-Forwarded-Proto`; see [deploying](11-deploying.md#behind-a-proxy).
-- **Expiry.** `maxAge` idle time (14 days by default, refreshed on activity) and `absoluteMaxAge` from creation (30 days, never extended).
+- **Expiry.** `maxAge` idle time (14 days by default, refreshed by requests that use the session) and `absoluteMaxAge` from creation (30 days, never extended).
+- **Opened only when used.** A request that never reads the session (a JSON endpoint, an image) doesn't unseal its cookie or read the store. Routes that never need one can say so with `session: false`: see [sessions](09-sessions-and-auth.md#routes-without-a-session).
 - **Crashes don't save.** If a request ends in an unhandled crash (anything but an `HttpError`), its session changes are thrown away, so a half-finished login or update never sticks.
-- **Not cached.** HTML pages sent to someone with a session get `Cache-Control: private, no-cache` unless the handler set its own, so neither a shared cache nor the browser's Back button replays a signed-in page to the wrong person.
+- **Not cached.** HTML pages sent to someone with a session (their session cookie came in, whether or not the page read it) get `Cache-Control: private, no-cache` unless the handler set its own, so neither a shared cache nor the browser's Back button replays a signed-in page to the wrong person. Pages for visitors without one stay cacheable, action forms and all. If you mark a page with forms cacheable yourself, send `Vary: Cookie` too: a cached page's tokens are for whoever it was rendered for.
 
 ### Signing in and out
 

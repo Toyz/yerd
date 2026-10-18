@@ -2,7 +2,7 @@
  * The per-request YerdContext. A class rather than an object literal so its
  * getters live on the prototype (no closures allocated per request), and
  * everything a handler might not touch (URL object, query, abort signal,
- * memo, cookies, body) is created on first use.
+ * memo, cookies, body, session) is created on first use.
  */
 
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
@@ -11,7 +11,6 @@ import type { Container, Scope } from "../di/container.js";
 import type { LoadedSession, SessionManager } from "../session/manager.js";
 import type { Session } from "../session/session.js";
 import { CSRF_FIELD, csrfTag, signAction, type TokenPayload } from "../actions/action.js";
-import { randomBytes } from "node:crypto";
 import { readBody, readNdjson, type ParsedBody } from "./body.js";
 import type { RouteInfo, YerdContext } from "./context.js";
 import { parseCookies, serializeCookie, type CookieOptions } from "./cookies.js";
@@ -54,7 +53,6 @@ export class RequestContext implements YerdContext {
   readonly path: string;
   /** DI for this request; read by currentServices() so one async context serves both. */
   readonly services: { container: Container; scope: Scope };
-  loadedSession: LoadedSession | undefined;
   /** @status / @setHeader of the handler or action that ran. */
   declared: ResponseDefaults | undefined;
 
@@ -70,7 +68,10 @@ export class RequestContext implements YerdContext {
   #outHeaders: Record<string, string> | undefined;
   #outCookies: string[] | undefined;
   #status: number | undefined;
-  #sessionUsed = false;
+  /** The session, once something opened it. */
+  #session: LoadedSession | undefined;
+  /** Why the up-front read of the session failed; thrown again at its first use. */
+  #sessionFailure: { error: unknown } | undefined;
 
   readonly req: IncomingMessage;
   readonly res: ServerResponse;
@@ -148,21 +149,80 @@ export class RequestContext implements YerdContext {
     return (this.#cookies ??= parseCookies(this.req.headers.cookie));
   }
 
+  /**
+   * The session, opened on first use: nothing is unsealed or read from the
+   * store for a request that never asks. Opening is synchronous for the
+   * cookie store and `sync` stores; other stores were read before
+   * middleware ran (readsUpFront).
+   */
   get session(): Session {
     this.#noRequestData("the session");
-    if (!this.env.sessions) throw new Error("Sessions are off; call app.sessions() to turn them on");
-    if (!this.loadedSession) throw new Error("The session isn't loaded yet");
-    this.#sessionUsed = true;
-    return this.loadedSession.session;
+    return this.#openSession().session;
+  }
+
+  /** The session if something opened it; never opens it (the commit, and the Cache-Control rule, read this). */
+  get loadedSession(): LoadedSession | undefined {
+    return this.#session;
+  }
+
+  #openSession(): LoadedSession {
+    if (this.#session) return this.#session;
+    const sessions = this.env.sessions;
+    if (!sessions) throw new Error("Sessions are off; call app.sessions() to turn them on");
+    if (this.route.session === false) {
+      throw new Error(`${this.route.className} (${this.route.pattern}) has \`session: false\`, so it has no session; drop the option (on the route or its group) to use one there`);
+    }
+    if (this.#sessionFailure) throw this.#sessionFailure.error;
+    const loaded = sessions.load(this.req, this.cookies);
+    if (loaded instanceof Promise) {
+      // Only reached where the up-front read didn't happen (an error page for
+      // a non-HTML request): the async read can't be waited for here.
+      void loaded.catch(() => {});
+      throw new Error("The session store reads asynchronously and this request's session wasn't read up front, so it can't be used here");
+    }
+    return (this.#session = loaded);
   }
 
   /**
-   * Whether anything got hold of the session (ctx.session, @session, auth)
-   * or a CSRF nonce was put in it. A session that came with no cookie and
-   * was never used has nothing to save, so the app skips committing it.
+   * Read the session now when it can't be read on first use: a store whose
+   * get() may return a promise, for a request carrying a session cookie.
+   * The app calls this as soon as the request is routed and awaits it
+   * before middleware runs, so every later use is synchronous. Undefined
+   * (nothing to wait for) for cookie and `sync` stores, requests without a
+   * session cookie, and `session: false` routes. A failed read is kept and
+   * thrown at the first use, as well as from the promise.
    */
-  get sessionUsed(): boolean {
-    return this.#sessionUsed;
+  readsUpFront(): Promise<void> | undefined {
+    const sessions = this.env.sessions;
+    if (!sessions || this.#session || this.prerendering || this.route.session === false || sessions.readsOnUse) return undefined;
+    if (!sessions.hasCookie(this.req, this.cookies)) return undefined;
+    let loaded: LoadedSession | Promise<LoadedSession>;
+    try {
+      loaded = sessions.load(this.req, this.cookies);
+    } catch (error) {
+      this.#sessionFailure = { error };
+      return Promise.reject(error);
+    }
+    if (!(loaded instanceof Promise)) {
+      this.#session = loaded;
+      return undefined;
+    }
+    return loaded.then(
+      (session) => {
+        this.#session = session;
+      },
+      (error: unknown) => {
+        this.#sessionFailure = { error };
+        throw error;
+      },
+    );
+  }
+
+  /** Whether the request has (or, unopened, carries a cookie for) a session: a page for it is per-visitor. */
+  get holdsSession(): boolean {
+    if (this.#session) return this.#session.payload !== undefined;
+    const sessions = this.env.sessions;
+    return sessions !== undefined && !this.prerendering && this.route.session !== false && sessions.hasCookie(this.req, this.cookies);
   }
 
   /** Aborts when the client disconnects or the server shuts down. Created (and wired up) on first use. */
@@ -245,33 +305,27 @@ export class RequestContext implements YerdContext {
     return (this.#lines ??= readNdjson(this.req, this.env.bodyLimit));
   }
 
-  /** Whether the session already holds a CSRF nonce (so signing a token won't change it). */
-  get hasCsrfNonce(): boolean {
-    return typeof this.loadedSession?.session.get(CSRF_FIELD) === "string";
+  /**
+   * The CSRF nonce of this request's session, or undefined when it has no
+   * session (no cookie, or one that doesn't open to a live session), on a
+   * `session: false` route, or with sessions off. Never creates one: a
+   * session gets its nonce when it's first written (see CSRF_FIELD), so
+   * rendering a form for a visitor without a session starts nothing, and
+   * however a page streams, it never sets a cookie because of its forms.
+   */
+  csrfNonce(): string | undefined {
+    const sessions = this.env.sessions;
+    if (!sessions || this.prerendering || this.route.session === false) return undefined;
+    // Nothing open and no cookie to open: no session, and no need to make an empty one.
+    if (!this.#session && !sessions.hasCookie(this.req, this.cookies)) return undefined;
+    const nonce = this.#openSession().session.get(CSRF_FIELD);
+    return typeof nonce === "string" ? nonce : undefined;
   }
 
   /**
-   * The session's CSRF nonce, created when the first action token is signed
-   * for it, so a visitor who's never shown a form never gets a session (or
-   * a store entry) for it. The nonce has to be in the session before the
-   * session cookie goes out with the headers. A page renders everything it
-   * can without waiting before the headers, so forms there sign in time;
-   * if the page (or an event stream) still has parts to come when the
-   * headers go, the app creates the nonce then, since a later part may
-   * render a form (see YerdApp's #finalize).
+   * Sign an action token for a form on this page: bound to the session's
+   * nonce when the visitor has one, unbound otherwise (see checkActionToken).
    */
-  csrfNonce(): string | undefined {
-    const session = this.loadedSession?.session;
-    if (!session) return undefined;
-    let nonce = session.get(CSRF_FIELD);
-    if (typeof nonce !== "string") {
-      nonce = randomBytes(18).toString("base64url");
-      session.set(CSRF_FIELD, nonce);
-      this.#sessionUsed = true;
-    }
-    return nonce;
-  }
-
   signAction(payload: { c: string; a: string; p: unknown; h?: string[][] }): string {
     const token: TokenPayload = { ...payload };
     // Prerendered pages are built for no one in particular, so their tokens

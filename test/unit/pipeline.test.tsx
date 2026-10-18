@@ -1,7 +1,7 @@
 import { connect } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  ActionForm, HttpError, action, body, createGuard, file, files, is, every, get, onBoot, post, res, resolve, route, service, yerd,
+  ActionForm, HttpError, action, body, createGuard, currentContext, file, files, is, every, get, onBoot, post, res, resolve, route, service, yerd,
   type Child, type LayoutProps, type RunningServer,
 } from "@toyz/yerd";
 
@@ -25,6 +25,12 @@ class Vault {
 
   @action note() {
     return "noted";
+  }
+
+  /** A plain post that starts a session. */
+  @post visit() {
+    currentContext().session.set("visited" as never, true as never);
+    return 204;
   }
 }
 
@@ -170,8 +176,9 @@ describe("actions", () => {
   it("refuse a token made for another session", async () => {
     const mine = client();
     const theirs = client();
+    await theirs("/vault", { method: "POST" });
+    await mine("/vault", { method: "POST" });
     const [, note] = await tokens(theirs, "/vault");
-    await mine("/vault", { headers: { accept: "text/html" } });
     const r = await mine("/vault", { method: "POST", body: new URLSearchParams({ _yx: note! }), headers: { yx: "1" } });
     expect(r.status).toBe(403);
     expect(await r.text()).toContain("different session");

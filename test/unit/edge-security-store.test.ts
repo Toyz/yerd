@@ -494,7 +494,7 @@ describe("SessionManager: ids and generateId", () => {
     const manager = new SessionManager({ store, generateId: async () => "sess_1" }, [SECRET]);
     const { loaded } = await roundTrip(manager, {}, (s) => s.set("name" as never, "ada" as never));
     expect(loaded.session.id).toBe("sess_1");
-    expect(store.get("sess_1")?.data).toEqual({ name: "ada" });
+    expect(store.get("sess_1")?.data).toEqual({ name: "ada", __yerd_csrf: expect.any(String) });
   });
 
   it.each<[string, () => unknown]>([

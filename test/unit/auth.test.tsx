@@ -207,6 +207,7 @@ describe("createAuth session keys", () => {
   it("says plainly when sessions are off", async () => {
     const ctx = {
       prerendering: false,
+      route: { pattern: "/", paramNames: [], className: "Home" },
       get session(): never {
         throw new Error("Sessions are off; call app.sessions() to turn them on");
       },

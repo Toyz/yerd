@@ -184,9 +184,11 @@ Two layers, both on by default:
   Requests with none of these (curl, server-to-server) pass. See
   [AUTH.md](AUTH.md#security-model) for the details and options.
 - **Signed, expiring, session-bound tokens.** The `_yx` token is HMAC-signed,
-  carries an expiry (`actionTtl`, default one day) and, when sessions are on,
-  a hash of a per-session nonce, so a form rendered for one visitor can't be
-  replayed from another session. Prerendered pages' tokens carry neither
+  carries an expiry (`actionTtl`, default one day) and, when sessions are on
+  and the visitor has one, a hash of its nonce, so a form rendered for one
+  visitor can't be replayed from another session. A visitor without a
+  session gets an unbound token (forms never start a session), taken only
+  while they still have none. Prerendered pages' tokens carry neither
   (they're built for nobody); they rely on the signature and the cross-site
   check. An expired or foreign token is a 403 asking the user to reload.
 
