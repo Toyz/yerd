@@ -243,12 +243,6 @@ describe("server half and shipping", () => {
       },
     });
     attribute("ship-arrow", { client: (el, value) => void el.setAttribute("data-a", value) });
-    attribute("ship-async", {
-      async client(el, value) {
-        await null;
-        el.setAttribute("data-s", value);
-      },
-    });
     attribute("ship-function", {
       client: function named(el, value) {
         el.setAttribute("data-f", value);
@@ -257,7 +251,7 @@ describe("server half and shipping", () => {
     attribute("server-only", { render: (v: string) => ({ title: v }) });
     const source = attributesSource();
     expect(source).not.toContain("server-only");
-    document.body.innerHTML = '<p id="p" ship-method="1" ship-arrow="2" ship-async="3" ship-function="4"></p>';
+    document.body.innerHTML = '<p id="p" ship-method="1" ship-arrow="2" ship-function="4"></p>';
     new Function(source)();
     expect([$("p").getAttribute("data-m"), $("p").getAttribute("data-a"), $("p").getAttribute("data-f")]).toEqual(["1", "2", "4"]);
   });

@@ -627,6 +627,11 @@ describe("drag and drop", () => {
     expect(log).toHaveBeenCalledTimes(2);
   });
 
+  // Question (see report): every trigger stops its event's propagation ("the innermost
+  // action wins"), not only clicks. A file input with trigger="change" therefore hides
+  // its change from the runtime's own document listener that counts staged files.
+  it.todo("a dropTo zone counts files staged into an input that has its own change trigger");
+
   it("a form reset clears the zone's file count", async () => {
     show(`<form id="f"><input id="p" type="file" name="p" multiple><div id="z" data-yx-drop-to="#p">Drop</div></form>`);
     drag("drop", $("z"), files([new File(["x"], "a.txt"), new File(["y"], "b.txt")]));

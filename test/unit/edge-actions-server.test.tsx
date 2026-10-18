@@ -129,6 +129,18 @@ class Other {
   }
 }
 
+// A class guard covers its actions too.
+@route("/edge/admin")
+@blockAction
+class Admin {
+  @get page() {
+    return <p>admin</p>;
+  }
+  @action wipe() {
+    seen.push(["wipe"]);
+  }
+}
+
 // A page rendering an action of another route: the form posts there, without this page's query.
 @route("/edge/host")
 class Host {
@@ -140,7 +152,7 @@ class Host {
 let server: RunningServer;
 let rotated: RunningServer;
 beforeAll(async () => {
-  server = await yerd({ routes: [Edge, Item, Files, Other, Host], services: [], handleSignals: false, secret: [SECRET, OLD] }).listen(0, "127.0.0.1");
+  server = await yerd({ routes: [Edge, Item, Files, Other, Host, Admin], services: [], handleSignals: false, secret: [SECRET, OLD] }).listen(0, "127.0.0.1");
   rotated = await yerd({ routes: [Edge], services: [], handleSignals: false, secret: SECRET }).listen(0, "127.0.0.1");
 });
 afterAll(async () => {
@@ -465,6 +477,13 @@ describe("guards, redirects and responses", () => {
     const r = await post_("/edge", fields({ _yx: token("locked") }), { yx: "1" });
     expect(r.status).toBe(403);
     expect(r.headers.get("yx-stale")).toBeNull();
+    expect(seen).toEqual([]);
+  });
+
+  it("a class guard refuses the class's actions", async () => {
+    seen.length = 0;
+    const r = await post_("/edge/admin", fields({ _yx: signAction(SECRET, { c: "Admin", a: "wipe", p: {}, e: now() + 60 }) }), { yx: "1" });
+    expect(r.status).toBe(403);
     expect(seen).toEqual([]);
   });
 
