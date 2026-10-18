@@ -7,7 +7,7 @@ import { isYerdNode, jsx, type Child, type Component } from "../jsx/jsx-runtime.
 import { applyLayouts, type LayoutProps, type PageMeta } from "../decorators/route.js";
 import { renderToStream } from "../render/render.js";
 import { isBare, YerdResponse, type HeaderInit } from "./response.js";
-import { choose, expandType, isNegotiated, type Negotiated } from "./negotiate.js";
+import { choose, isNegotiated, media, type MediaRange, type Negotiated } from "./negotiate.js";
 import { isAsyncIterable } from "../decorators/util.js";
 
 export type Body = null | string | Uint8Array | AsyncIterable<string | Uint8Array>;
@@ -40,8 +40,8 @@ export interface CoerceOptions {
   meta?: PageMeta;
   /** How <Dynamic> parts render (see RenderOptions.dynamic). */
   dynamic?: "fallback" | "only";
-  /** The request's Accept header, for picking a negotiate() variant. */
-  accept?: string;
+  /** The request's Accept header (or acceptRanges() of it), for picking a negotiate() variant. */
+  accept?: string | readonly MediaRange[];
 }
 
 const HTML = "text/html; charset=utf-8";
@@ -90,10 +90,12 @@ async function* streamChunks(source: AsyncIterable<unknown>): AsyncGenerator<str
  */
 async function coerceNegotiated(value: Negotiated, options: CoerceOptions): Promise<Outgoing> {
   const keys = Object.keys(value.variants);
+  const types = keys.map(media);
   // With a default (the first key), choose() always picks something.
-  const chosen = choose(keys.map((k) => [expandType(k)]), options.accept, true);
-  const key = chosen === "default" || chosen === undefined ? keys[0]! : keys[chosen]!;
-  const type = expandType(key);
+  const chosen = choose(types.map((t) => [t]), options.accept, true);
+  const index = typeof chosen === "number" ? chosen : 0;
+  const key = keys[index]!;
+  const type = types[index]!.full;
   const result = await (value.variants as Record<string, () => unknown>)[key]!();
   const out = await coerce(result, options);
   const explicit = result instanceof YerdResponse || typeof result === "number";

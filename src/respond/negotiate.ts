@@ -57,10 +57,41 @@ export function expandType(type: string): string {
   return (isShorthand(type) ? SHORTHAND[type] : type).toLowerCase();
 }
 
-interface Range {
+/** One media range from an Accept header, lowercased, with its q-value. */
+export interface MediaRange {
   type: string;
   subtype: string;
   q: number;
+}
+
+/** A variant's media type, expanded and split once: `full` is `type/subtype`, lowercased. */
+export interface Media {
+  readonly full: string;
+  readonly type: string;
+  readonly subtype: string;
+}
+
+/** Look `key` up in a small memo, making and keeping it on a miss; past `limit` entries the oldest goes. */
+function remember<V>(memo: Map<string, V>, key: string, limit: number, make: (key: string) => V): V {
+  let value = memo.get(key);
+  if (value === undefined) {
+    value = make(key);
+    if (memo.size >= limit) memo.delete(memo.keys().next().value!);
+    memo.set(key, value);
+  }
+  return value;
+}
+
+// Variant types come from code, so there are few; the bound only guards against keys built from data.
+const medias = new Map<string, Media>();
+
+/** `type` (a shorthand or a mime type) expanded and split, memoized. Split variant types once and hand them to choose(). */
+export function media(type: string): Media {
+  return remember(medias, type, 256, (key) => {
+    const full = expandType(key);
+    const slash = full.indexOf("/");
+    return Object.freeze({ full, type: slash === -1 ? full : full.slice(0, slash), subtype: slash === -1 ? "" : full.slice(slash + 1) });
+  });
 }
 
 /**
@@ -76,9 +107,9 @@ interface Range {
  * const wantsCsv = parseAccept(ctx.headers.accept).some((r) => r.subtype === "csv" && r.q > 0);
  * ```
  */
-export function parseAccept(header: string | undefined): Range[] {
+export function parseAccept(header: string | undefined): MediaRange[] {
   if (!header) return [];
-  const ranges: Range[] = [];
+  const ranges: MediaRange[] = [];
   for (const part of header.split(",")) {
     const [media, ...params] = part.trim().split(";");
     if (!media) continue;
@@ -93,9 +124,23 @@ export function parseAccept(header: string | undefined): Range[] {
   return ranges;
 }
 
+const NO_RANGES: readonly MediaRange[] = Object.freeze([]);
+// Clients send the same few Accept headers over and over; a request parses its own at most once.
+const acceptMemo = new Map<string, readonly MediaRange[]>();
+
+/**
+ * parseAccept, memoized for the last 64 distinct headers. The result is
+ * shared and frozen; parse once per request and pass it to every choose().
+ */
+export function acceptRanges(header: string | undefined): readonly MediaRange[] {
+  if (!header) return NO_RANGES;
+  // Real Accept headers are short; a huge one isn't worth a slot.
+  if (header.length > 1024) return parseAccept(header);
+  return remember(acceptMemo, header, 64, (key) => Object.freeze(parseAccept(key).map((r) => Object.freeze(r))));
+}
+
 /** Best q for `mime` from non-wildcard ranges (exact or `type/*`), or -1 when none names it. */
-function explicitQuality(mime: string, ranges: Range[]): number {
-  const [type, subtype] = mime.split("/");
+function explicitQuality({ type, subtype }: Media, ranges: readonly MediaRange[]): number {
   let best = -1;
   let specificity = -1;
   for (const r of ranges) {
@@ -112,12 +157,33 @@ function explicitQuality(mime: string, ranges: Range[]): number {
   return best;
 }
 
+function mediaOf(type: string | Media): Media {
+  return typeof type === "string" ? media(type) : type;
+}
+
+/** Whether some variant produces exactly `type/subtype`. */
+function offered(variants: readonly (readonly (string | Media)[])[], type: string, subtype: string): boolean {
+  for (const types of variants) {
+    for (const t of types) {
+      const m = mediaOf(t);
+      if (m.type === type && m.subtype === subtype) return true;
+    }
+  }
+  return false;
+}
+
 /**
- * Choose among variants, each identified by the mime types it produces.
- * Returns the index of the chosen variant, `"default"`, or `undefined` (406).
+ * Choose among variants, each identified by the media types it produces
+ * (mime strings, or media() results split ahead of time). `accept` is the
+ * raw header or acceptRanges() of it. Returns the index of the chosen
+ * variant, `"default"`, or `undefined` (406).
  */
-export function choose(variants: readonly (readonly string[])[], accept: string | undefined, hasDefault: boolean): number | "default" | undefined {
-  const ranges = parseAccept(accept);
+export function choose(
+  variants: readonly (readonly (string | Media)[])[],
+  accept: string | undefined | readonly MediaRange[],
+  hasDefault: boolean,
+): number | "default" | undefined {
+  const ranges = typeof accept === "object" ? accept : acceptRanges(accept);
   const onlyWildcards = ranges.every((r) => r.type === "*");
   if (ranges.length === 0 || onlyWildcards) {
     if (hasDefault) return "default";
@@ -128,7 +194,7 @@ export function choose(variants: readonly (readonly string[])[], accept: string 
   let bestQ = 0;
   variants.forEach((types, index) => {
     for (const mime of types) {
-      const q = explicitQuality(mime, ranges);
+      const q = explicitQuality(mediaOf(mime), ranges);
       if (q > bestQ) {
         bestQ = q;
         bestIndex = index;
@@ -137,11 +203,10 @@ export function choose(variants: readonly (readonly string[])[], accept: string 
   });
 
   // Explicitly wanted types that no variant produces (usually text/html, which the default renders).
-  const offered = new Set(variants.flat());
   let otherQ = 0;
   for (const r of ranges) {
     if (r.type === "*" || r.subtype === "*") continue;
-    if (!offered.has(`${r.type}/${r.subtype}`)) otherQ = Math.max(otherQ, r.q);
+    if (r.q > otherQ && !offered(variants, r.type, r.subtype)) otherQ = r.q;
   }
 
   if (hasDefault && (bestIndex === -1 || otherQ > bestQ)) return "default";
@@ -150,7 +215,7 @@ export function choose(variants: readonly (readonly string[])[], accept: string 
   // the client didn't refuse by name (`application/json;q=0, */*`).
   const anyQ = ranges.find((r) => r.type === "*")?.q ?? 0;
   if (anyQ <= 0) return undefined;
-  const index = variants.findIndex((types) => types.some((mime) => explicitQuality(mime, ranges) !== 0));
+  const index = variants.findIndex((types) => types.some((mime) => explicitQuality(mediaOf(mime), ranges) !== 0));
   return index === -1 ? undefined : index;
 }
 
