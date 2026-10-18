@@ -106,6 +106,15 @@ describe("action lambdas", () => {
     expect(seen).toEqual([["remove", { id: "a1" }], ["rename", { id: "a2" }, "new"], ["remove", { id: "b" }]]);
   });
 
+  it("flag tokens the server no longer accepts as stale, for the runtime to refresh", async () => {
+    const r = await post({ _yx: "eyJ4IjoxfQ.bad" });
+    expect(r.status).toBe(400);
+    expect(r.headers.get("yx-stale")).toBe("1");
+    // Without the runtime, it's the normal error page.
+    const plain = await fetch(`${server.url}/lab`, { method: "POST", body: new URLSearchParams({ _yx: "eyJ4IjoxfQ.bad" }), headers: { origin: server.url } });
+    expect(plain.headers.get("yx-stale")).toBeNull();
+  });
+
   it("refuse a token whose holes weren't sent (a plain post can't fill them)", async () => {
     seen.length = 0;
     const r = await post({ _yx: attr("more", "data-yx-token") });

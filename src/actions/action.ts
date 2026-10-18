@@ -14,6 +14,8 @@
  */
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { createKey } from "../decorators/keys.js";
 import { resolveRoute, routeRegistry } from "../decorators/route.js";
 import { HttpError } from "../respond/response.js";
@@ -348,7 +350,33 @@ export function resolveSecrets(explicit: string | string[] | undefined): string[
   if (process.env.NODE_ENV === "production") {
     new Logger("yerd::boot").warn("no YERD_SECRET set; using a random secret, so forms and sessions break across restarts and instances");
   }
-  return [(processSecret ??= randomBytes(32).toString("base64url"))];
+  return [(processSecret ??= devSecret() ?? randomBytes(32).toString("base64url"))];
+}
+
+/**
+ * In development, a random secret kept in node_modules/.cache/yerd/secret, so
+ * a restarted dev server still accepts the open page's forms and sessions.
+ * Undefined (a per-process secret) in production, under test, or when the
+ * file can't be written.
+ */
+function devSecret(): string | undefined {
+  const env = process.env.NODE_ENV;
+  if (env !== undefined && env !== "development") return undefined;
+  const file = join(process.cwd(), "node_modules", ".cache", "yerd", "secret");
+  try {
+    const saved = readFileSync(file, "utf8").trim();
+    if (Buffer.byteLength(saved) >= 32) return saved;
+  } catch {
+    // not there yet
+  }
+  try {
+    const secret = randomBytes(32).toString("base64url");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, secret, { mode: 0o600 });
+    return secret;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface TokenPayload {

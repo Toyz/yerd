@@ -25,6 +25,11 @@
  *                       element (or ref(selector)) when the action fires, sent as _yxh<n>
  * - [data-yx-append]    on a Region in a response: children are appended, not replaced
  *                       (data-yx-prepend: put first)
+ * - #yx-notice          a small status message the runtime shows when an action
+ *                       fails with nowhere else to say so (no [data-yx-error]),
+ *                       the server can't be reached, or the page was stale and got
+ *                       refreshed; a "yx:notice" listener can preventDefault()
+ *                       and show it its own way
  * - [data-yx-defer]     a prerendered <Dynamic> skeleton: filled from the server after load
  * - [data-yx-disabled]  set on the buttons a pending submit disabled (and will re-enable)
  * - [data-yx-prefetch]  warm a page or JSON response before it's needed (the `prefetch` prop)
@@ -389,6 +394,58 @@ export function yerdRuntime(): void {
     return (formAttr(form, submitter, "method") ?? "").toLowerCase() !== "dialog";
   }
 
+  let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Tell the user something went wrong when there's no [data-yx-error] to say it in. */
+  function notify(message: string): void {
+    if (!document.dispatchEvent(new CustomEvent("yx:notice", { detail: { message }, cancelable: true }))) return;
+    let box = document.getElementById("yx-notice");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "yx-notice";
+      box.setAttribute("role", "status");
+      box.setAttribute("aria-live", "polite");
+      box.style.cssText =
+        "position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:2147483647;max-width:min(90vw,32rem);" +
+        "padding:10px 14px;border-radius:8px;background:#1f1f1f;color:#fff;font:14px/1.4 system-ui,sans-serif;" +
+        "box-shadow:0 4px 16px rgba(0,0,0,.25)";
+    }
+    box.textContent = message;
+    document.body.appendChild(box);
+    clearTimeout(noticeTimer);
+    const shown = box;
+    noticeTimer = setTimeout(() => shown.remove(), 5000);
+  }
+
+  /** A failed action's message: validation issues, a JSON error, or the text. */
+  async function errorMessage(response: Response): Promise<string> {
+    let message = (await response.text()) || response.statusText;
+    if ((response.headers.get("content-type") ?? "").includes("json")) {
+      try {
+        const data = JSON.parse(message) as { error?: string; issues?: Array<{ message: string }> };
+        message = data.issues?.length ? data.issues.map((i) => i.message).join(". ") : (data.error ?? message);
+      } catch {
+        // not JSON after all; show it as text
+      }
+    }
+    return message;
+  }
+
+  const STALE = "This page was out of date, so it's been refreshed. Please try again.";
+  const OFFLINE = "Couldn't reach the server. Please try again in a moment.";
+
+  /**
+   * The server no longer accepts this page's actions (it restarted with a new
+   * secret, was redeployed, or the token expired): fetch the page fresh, with
+   * new tokens, and say so. The action didn't run, so trying again is safe.
+   */
+  async function recoverStale(errorBox: HTMLElement | null): Promise<void> {
+    prefetched.clear();
+    await load(location.href, false);
+    if (errorBox?.isConnected) errorBox.textContent = STALE;
+    else notify(STALE);
+  }
+
   async function submit(form: HTMLFormElement, submitter: HTMLElement | null): Promise<void> {
     const question = form.getAttribute("data-yx-confirm");
     if (question && !confirm(question)) return;
@@ -430,6 +487,10 @@ export function yerdRuntime(): void {
         await load(location_, true);
         return;
       }
+      if (response.headers.get("yx-stale")) {
+        await recoverStale(errorBox);
+        return;
+      }
       // A plain form (auto mode): whatever page the server answered with,
       // after following its redirects, is the new page, errors included.
       const plain = !form.hasAttribute("data-yx");
@@ -449,17 +510,9 @@ export function yerdRuntime(): void {
         return;
       }
       if (!response.ok) {
-        let message = (await response.text()) || response.statusText;
-        if ((response.headers.get("content-type") ?? "").includes("json")) {
-          try {
-            const data = JSON.parse(message) as { error?: string; issues?: Array<{ message: string }> };
-            message = data.issues?.length ? data.issues.map((i) => i.message).join(". ") : (data.error ?? message);
-          } catch {
-            // not JSON after all; show it as text
-          }
-        }
+        const message = await errorMessage(response);
         if (errorBox) errorBox.textContent = message;
-        else console.error("[yerd]", response.status, message);
+        else notify(message);
         return;
       }
       if (errorBox) errorBox.textContent = "";
@@ -473,7 +526,8 @@ export function yerdRuntime(): void {
       // A form inside a <details> (inline editors, menus) closes once it's done.
       form.closest("details")?.removeAttribute("open");
     } catch (error) {
-      if (errorBox) errorBox.textContent = "Network error, please try again.";
+      if (errorBox) errorBox.textContent = OFFLINE;
+      else notify(OFFLINE);
       console.error("[yerd]", error);
     } finally {
       form.removeAttribute("aria-busy");
@@ -959,8 +1013,12 @@ export function yerdRuntime(): void {
         await load(location_, true);
         return;
       }
+      if (response.headers.get("yx-stale")) {
+        await recoverStale(null);
+        return;
+      }
       if (!response.ok) {
-        console.error("[yerd]", response.status, (await response.text()) || response.statusText);
+        notify(await errorMessage(response));
         return;
       }
       prefetched.clear();
@@ -971,7 +1029,9 @@ export function yerdRuntime(): void {
         if (apply(text) === 0) await refresh();
       }
     } catch (error) {
-      if ((error as Error).name !== "AbortError") console.error("[yerd]", error);
+      if ((error as Error).name === "AbortError") return;
+      notify(OFFLINE);
+      console.error("[yerd]", error);
     } finally {
       if (actionRuns.get(el) === run) {
         actionRuns.delete(el);

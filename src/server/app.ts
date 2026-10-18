@@ -1180,11 +1180,23 @@ export class YerdApp {
 
     // Cross-site posts were already refused before routing (see crossSiteReason);
     // the token must also be this app's, unexpired, and made for this session.
-    const payload = verifyAction(this.#secrets, token);
-    const session = (context as RequestContext).loadedSession?.session;
-    checkActionToken(payload, session?.get(CSRF_FIELD), this.#sessions !== undefined);
-    const owner = candidates.find((h) => h.def.className === payload.c && ACTIONS.from(h.def.metadata)?.has(payload.a));
-    if (!owner) throw new HttpError(400, "Unknown action");
+    let payload: ReturnType<typeof verifyAction>;
+    let owner: (typeof candidates)[number] | undefined;
+    try {
+      payload = verifyAction(this.#secrets, token);
+      const session = (context as RequestContext).loadedSession?.session;
+      checkActionToken(payload, session?.get(CSRF_FIELD), this.#sessions !== undefined);
+      owner = candidates.find((h) => h.def.className === payload.c && ACTIONS.from(h.def.metadata)?.has(payload.a));
+      if (!owner) throw new HttpError(400, "Unknown action");
+    } catch (error) {
+      // The page is older than the server (a restart with a new secret, a
+      // deploy, an expired or other-session token): tell the runtime, which
+      // refreshes the page so the next try works.
+      if (error instanceof HttpError && context.headers["yx"] !== undefined) {
+        return { status: error.status, headers: { "yx-stale": "1", "content-type": "text/plain; charset=utf-8" }, body: error.message };
+      }
+      throw error;
+    }
     // The class's guards (app, group, route) and the action's own method guards.
     const guards = [...owner.classGuards, ...(METHOD_GUARDS.from(owner.def.metadata)?.get(payload.a) ?? [])];
     const blocked = await this.#runGuards(guards, owner.layouts, context);

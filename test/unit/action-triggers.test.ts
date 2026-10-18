@@ -153,4 +153,46 @@ describe("element actions", () => {
     await flush();
     expect(fetch.mock.calls.filter(([url]) => String(url).endsWith("/l"))).toHaveLength(1);
   });
+
+  it("a stale page refreshes itself and says so; the action can then be retried", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL, init: RequestInit = {}) => {
+      calls.push(`${init.method ?? "GET"} ${new URL(String(url), location.href).pathname}`);
+      if (init.method === "POST") return new Response("Invalid action signature", { status: 400, headers: { "yx-stale": "1" } });
+      return html(`<html><head><title>t</title></head><body><button id="go" data-yx-action="/x" data-yx-token="FRESH" data-yx-trigger="click">go</button></body></html>`);
+    }));
+    show(`<button id="go" data-yx-action="/x" data-yx-token="OLD" data-yx-trigger="click">go</button>`);
+    document.getElementById("go")!.click();
+    await flush();
+    expect(calls).toEqual(["POST /x", `GET ${location.pathname}`]);
+    expect(document.getElementById("go")!.getAttribute("data-yx-token")).toBe("FRESH");
+    expect(document.getElementById("yx-notice")?.textContent).toMatch(/out of date/);
+  });
+
+  it("says so when the server can't be reached", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    show(`<button id="go" data-yx-action="/x" data-yx-token="T" data-yx-trigger="click">go</button>`);
+    document.getElementById("go")!.click();
+    await flush();
+    expect(document.getElementById("yx-notice")?.textContent).toMatch(/Couldn't reach the server/);
+  });
+
+  it("lets the app show notices its own way", async () => {
+    stubFetch(() => new Response(JSON.stringify({ error: "Nope" }), { status: 403, headers: { "content-type": "application/json" } }));
+    const seen: string[] = [];
+    const listener = (e: Event) => {
+      e.preventDefault();
+      seen.push((e as CustomEvent<{ message: string }>).detail.message);
+    };
+    document.addEventListener("yx:notice", listener);
+    show(`<button id="go" data-yx-action="/x" data-yx-token="T" data-yx-trigger="click">go</button>`);
+    document.getElementById("go")!.click();
+    await flush();
+    document.removeEventListener("yx:notice", listener);
+    expect(seen).toEqual(["Nope"]);
+    expect(document.getElementById("yx-notice")).toBeNull();
+  });
 });
