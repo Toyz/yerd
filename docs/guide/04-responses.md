@@ -89,7 +89,7 @@ export class OldPath {
 }
 ```
 
-The second argument can be 301, 302, 303, 307 or 308.
+The second argument can be 301, 302, 303, 307 or 308. Non-ASCII characters in the location are percent-encoded as UTF-8 (`/café` goes out as `/caf%C3%A9`); everything else is sent as given, so check targets that come from the request before redirecting to them.
 
 ## @status and @setHeader
 
