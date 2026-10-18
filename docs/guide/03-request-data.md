@@ -1,50 +1,72 @@
 # Request data
 
-Reading and validating params, query strings, headers, cookies, bodies, forms and uploads.
+The shop reads what visitors send: a search, a category, a product id, the checkout form.
 
 ## Accessors
 
-Request data arrives on decorated `accessor` fields; each decorator says where the value comes from.
+The API's search reads two query parameters. Request data arrives on decorated `accessor` fields; each decorator says where the value comes from.
 
 ```tsx
-import { between, cookie, get, header, query, route, toInt, trim } from "@toyz/yerd";
+// src/routes/api.ts
+@route("/api/products", { session: false })
+export class ProductsApi {
+  @inject(Catalog) accessor catalog!: Catalog;
+  @query("q", { transform: trim }) accessor q = "";
+  @query("category", { transform: oneOf(...CATEGORIES) }) accessor category: Category | undefined;
 
-@route("/search")
-export class Search {
-  @query("q", { transform: trim, required: true }) accessor q!: string;
-  @query("page", { transform: toInt, validate: between(1, 100) }) accessor page = 1;
-  @header("accept-language") accessor lang: string | undefined;
-  @cookie("theme") accessor theme = "light";
-
-  @get results() {
-    return { q: this.q, page: this.page, lang: this.lang, theme: this.theme };
+  @get list() {
+    // An array becomes JSON.
+    return this.catalog.search({ q: this.q, category: this.category });
   }
 }
 ```
 
-A missing value falls back to the field's initializer (`page = 1`), or is a 400 with `required: true`.
+```answer
+GET /api/products?q=%20%20lamp%20
+200 OK
+content-type: application/json; charset=utf-8
+
+[{"id":4,"name":"Desk lamp","category":"desk","price":6500,"stock":3,"description":"Warm light, one arm, no app."}]
+---
+GET /api/products?category=hats
+400 Bad Request
+content-type: application/json; charset=utf-8
+
+{"error":"Expected one of pens, notebooks, desk, got \"hats\"","code":"validation_failed","issues":[{"path":"category","message":"Expected one of pens, notebooks, desk, got \"hats\""}]}
+```
+
+- A missing value falls back to the field's initializer (`q = ""`), or `undefined`. With `required: true` it's a 400 instead.
+- The transform runs first: `trim` turns `"  lamp "` into `"lamp"`, and `oneOf` refuses anything but a category, before the handler runs.
+- Values belong to the current request, whatever the route's lifetime. Each is resolved once per request, and assigning to the field throws.
+
+> [!TAKE]
+> Request data is declared on the class, not dug out of a `req` object. The declaration is the parsing, the validation and the type, every handler and action on the route shares it, and a typo is a compile error. The cost is the `accessor` keyword on every field, which TC39 decorators need to see reads.
 
 | Decorator | Reads | Field type |
 | --- | --- | --- |
-| [`@param(name, opts)`](api:yerd.param) | A path parameter | `string` |
-| [`@params`](api:yerd.params) | All path parameters | `Record<string, string>` |
-| [`@query(name, opts)`](api:yerd.query) | First value of a query parameter | `string \| undefined` |
-| [`@header(name, opts)`](api:yerd.header) | A header (repeats joined with `", "`) | `string \| undefined` |
-| [`@cookie(name, opts)`](api:yerd.cookie) | A request cookie | `string \| undefined` |
-| [`@body(Dto or opts)`](api:yerd.body) | The parsed body | `Promise<...>` |
-| [`@field(name, opts)`](api:yerd.field) | One form field | `Promise<string \| undefined>` |
-| [`@file(name, opts)`](api:yerd.file) | The first uploaded file under a name | `Promise<File \| undefined>` |
-| [`@files(name, opts)`](api:yerd.files) | Every file under a name | `Promise<File[]>` |
-| [`@signal`](api:yerd.signal) | Aborts when the client disconnects | `AbortSignal` |
-| [`@session`](api:yerd.session) | The session (needs `app.sessions()`) | `Session` |
-| [`@request`](api:yerd.request) | The raw Node `IncomingMessage` | `IncomingMessage` |
+| [`@param(name, opts)`](api:yerd.param) | a path parameter | `string` |
+| [`@params`](api:yerd.params) | all path parameters | `Record<string, string>` |
+| [`@query(name, opts)`](api:yerd.query) | first value of a query parameter | `string \| undefined` |
+| [`@header(name, opts)`](api:yerd.header) | a header (repeats joined with `", "`) | `string \| undefined` |
+| [`@cookie(name, opts)`](api:yerd.cookie) | a request cookie | `string \| undefined` |
+| [`@body(Dto or opts)`](api:yerd.body) | the parsed body | `Promise<...>` |
+| [`@field(name, opts)`](api:yerd.field) | one form field | `Promise<string \| undefined>` |
+| [`@file(name, opts)`](api:yerd.file) | the first uploaded file under a name | `Promise<File \| undefined>` |
+| [`@files(name, opts)`](api:yerd.files) | every file under a name | `Promise<File[]>` |
+| [`@signal`](api:yerd.signal) | aborts when the client disconnects | `AbortSignal` |
+| [`@session`](api:yerd.session) | the session (needs `app.sessions()`) | `Session` |
+| [`@request`](api:yerd.request) | the raw Node `IncomingMessage` | `IncomingMessage` |
 
-- Types shown are before transforms; a transform changes the field type to what it returns.
-- Values belong to the current request, whatever the route's lifetime. Each is resolved once per request, and assigning to the field throws.
+Types shown are before transforms; a transform changes the field type to what it returns.
 
 ## Transforms and validators
 
-Every name-based accessor takes the same options.
+Every name-based accessor takes the same options. The product page's id is a number, or the request is refused:
+
+```tsx
+// src/routes/products.tsx
+@param("id", { transform: toInt }) accessor id!: number;
+```
 
 | Option | Type | Applies to | What it does |
 | --- | --- | --- | --- |
@@ -53,18 +75,12 @@ Every name-based accessor takes the same options.
 | `required` | `boolean` | all but `@param` | Missing means 400 instead of the initializer. |
 
 ```tsx
-import { get, lower, oneOf, param, query, route, toBool, toInt, trim } from "@toyz/yerd";
+import { between, lower, oneOf, query, toBool, toInt, trim } from "@toyz/yerd";
 
-@route("/users/:id")
-export class UserPage {
-  @param("id", { transform: toInt, validate: (n: number) => n > 0 || "ids start at 1" }) accessor id!: number;
-  @query("verbose", { transform: toBool }) accessor verbose = false;
-  @query("sort", { transform: [trim, lower, oneOf("new", "top")] }) accessor sort: "new" | "top" = "new";
-
-  @get show() {
-    return { id: this.id, verbose: this.verbose, sort: this.sort };
-  }
-}
+@query("page", { transform: toInt, validate: between(1, 100) }) accessor page = 1;
+@query("verbose", { transform: toBool }) accessor verbose = false;
+@query("sort", { transform: [trim, lower, oneOf("new", "top")] }) accessor sort: "new" | "top" = "new";
+@param("id", { transform: toInt, validate: (n: number) => n > 0 || "ids start at 1" }) accessor id!: number;
 ```
 
 - The pipeline is type-checked: `[toInt, trim]` doesn't compile, nor does a `toInt` transform on a string field.
@@ -103,57 +119,71 @@ export const slug: Transform<string, string> = (raw) => {
 
 ## Bodies and DTO classes
 
-Declare a class with [`is.*`](api:yerd.is) decorated fields and pass it to `@body`; you get a validated instance of that class.
+The checkout form has three fields, each with rules. A DTO class declares them with [is.*](api:yerd.is) decorators:
 
-```tsx
-import { between, body, is, length, lower, matches, post, route, trim } from "@toyz/yerd";
-
-class Address {
-  @is.string({ transform: trim, validate: length(1) }) city!: string;
-  @is.string({ optional: true }) zip?: string;
-}
-
-class Signup {
-  @is.string({ transform: [trim, lower], validate: matches(/@/, "That is not an email") }) email!: string;
-  @is.int({ validate: between(13, 120) }) age!: number;
-  @is.oneOf(["free", "pro"]) plan: "free" | "pro" = "free";
-  @is.boolean({ optional: true }) newsletter?: boolean;
-  @is.object(Address, { optional: true }) address?: Address;
-  @is.array(is.string({ transform: trim }), { optional: true, max: 5 }) tags?: string[];
-}
-
-@route("/signup")
-export class SignupApi {
-  @body(Signup) accessor signup!: Promise<Signup>;
-
-  @post async create() {
-    const s = await this.signup;
-    return { email: s.email, plan: s.plan };
-  }
+```ts
+// src/orders.ts
+/** The checkout form. Every field is checked on the server; the browser's checks are a courtesy. */
+export class CheckoutForm {
+  @is.string({ transform: trim, validate: length(2, 80) }) name!: string;
+  @is.email() email!: string;
+  @is.string({ transform: trim, validate: length(5, 200) }) address!: string;
 }
 ```
 
+The checkout action parses the posted form into it:
+
+```tsx
+// src/routes/checkout.tsx
+@action async place(_: {}, form: ActionForm) {
+  let details: CheckoutForm;
+  try {
+    details = form.parse(CheckoutForm);
+  } catch (error) {
+    // ...a plain form post gets its errors back on the page (see the shop)
+  }
+  const order = await this.orders.place(this.me, details, this.cart.lines);
+  // ...
+}
+```
+
+```answer
+POST /checkout
+_yx=(the form's token)&name=A&email=nope&address=
+>>>
+400 Bad Request
+content-type: application/json; charset=utf-8
+
+{"error":"Validation failed","code":"validation_failed","issues":[{"path":"name","message":"Must be 2 to 80 characters (got 1)"},{"path":"email","message":"Expected an email address"},{"path":"address","message":"Can't be empty"}]}
+```
+
+- Every problem comes back at once, each with its path. The client runtime writes each message into the field's `[data-yx-error="name"]` box ([Interactivity](06-interactivity.md#errors)).
+- You get an instance of the class with clean, typed values: `name` trimmed, `email` checked.
+- Outside an action, [@body(CheckoutForm)](api:yerd.body) does the same for a plain POST or a JSON body: `@body(CheckoutForm) accessor details!: Promise<CheckoutForm>`.
+
+The rules for DTOs:
+
 - DTO fields are plain fields, not accessors.
-- A field without `optional: true` or an initializer is required. Initializers are defaults (`plan`).
+- A field without `optional: true` or an initializer is required. Initializers are defaults.
 - Undeclared keys are dropped, so a client can't sneak in `isAdmin: true`.
 - `is.int`, `is.number` and `is.boolean` accept string forms (`"42"`, `"on"`), so one DTO serves JSON and HTML forms.
 - A decorator that doesn't match the field's type is a compile error.
 
 | Decorator | Value |
 | --- | --- |
-| `is.string()` / `is.int()` / `is.number()` / `is.boolean()` | The primitive. |
-| `is.oneOf(["a", "b"])` | One of the strings; the field type is their union. |
-| `is.object(Dto)` | A nested DTO, validated recursively. |
-| `is.array(is.string(), { min, max })` | An array of items matching another `is.*`. A lone value counts as a list of one. |
-| `is.file({ types, maxSize })` | One uploaded file. |
-| `is.files({ types, maxSize, min, max })` | Several uploaded files under one name. |
-| `is.uuid({ version })` | A UUID string, lowercased; `version: 4` (or 7...) for one version. |
-| `is.email()` | An email address, trimmed. Loose on purpose: sending mail is the real test. |
-| `is.url({ protocols })` | An absolute URL, normalized. Only http and https unless you list others, so `javascript:` can't get in. |
-| `is.date()` | An ISO 8601 string or a Date, as a Date. Impossible dates (`2026-02-30`) are rejected, not rolled over. |
-| `is.custom(fn)` | Whatever `fn(value)` returns; throw to reject. |
+| `is.string()` / `is.int()` / `is.number()` / `is.boolean()` | the primitive |
+| `is.oneOf(["a", "b"])` | one of the strings; the field type is their union |
+| `is.object(Dto)` | a nested DTO, validated recursively |
+| `is.array(is.string(), { min, max })` | an array of items matching another `is.*`; a lone value counts as a list of one |
+| `is.file({ types, maxSize })` | one uploaded file |
+| `is.files({ types, maxSize, min, max })` | several uploaded files under one name |
+| `is.uuid({ version })` | a UUID string, lowercased; `version: 4` (or 7...) for one version |
+| `is.email()` | an email address, trimmed. Loose on purpose: sending mail is the real test |
+| `is.url({ protocols })` | an absolute URL, normalized. Only http and https unless you list others, so `javascript:` can't get in |
+| `is.date()` | an ISO 8601 string or a Date, as a Date. Impossible dates (`2026-02-30`) are rejected, not rolled over |
+| `is.custom(fn)` | whatever `fn(value)` returns; throw to reject |
 
-Every one takes `optional`, `transform` and `validate`. Outside a request, [`parse(Dto, raw)`](api:yerd.parse) validates a value and [`dto(Dto)`](api:yerd.dto) turns a DTO into a transform.
+Every one takes `optional`, `transform` and `validate`. Outside a request, [parse(Dto, raw)](api:yerd.parse) validates a value and [dto(Dto)](api:yerd.dto) turns a DTO into a transform.
 
 The format decorators hand you clean, typed values:
 
@@ -205,7 +235,7 @@ class Transfer {
 An optional field the client didn't send isn't on the instance at all (not even as `undefined`), so an all-optional DTO is a PATCH body that can't wipe unsent fields.
 
 ```tsx
-import { body, is, param, patch, route, toInt } from "@toyz/yerd";
+import { NotFound, body, is, param, patch, route, toInt } from "@toyz/yerd";
 
 class TodoChanges {
   @is.string({ optional: true }) title?: string;
@@ -221,7 +251,7 @@ export class TodoItem {
 
   @patch async update() {
     const todo = todos.get(this.id);
-    if (!todo) return 404;
+    if (!todo) return new NotFound("No such todo");
     Object.assign(todo, await this.changes); // `{ "done": true }` changes done, keeps title
     return todo;
   }
@@ -326,23 +356,25 @@ class Profile {
 
 ## Signal and session
 
-[`@signal`](api:yerd.signal) aborts when the client goes away or the server shuts down; pass it to anything slow.
+The stock feed stays open until the visitor leaves. [@signal](api:yerd.signal) aborts when the client goes away or the server shuts down; pass it to anything long or slow.
 
 ```tsx
-import { get, route, signal } from "@toyz/yerd";
-
-@route("/slow")
-export class Slow {
+// src/routes/products.tsx
+@route("/products/:id/stock", { session: false })
+export class StockFeed {
+  @inject(Catalog) accessor catalog!: Catalog;
+  @inject(Channels) accessor channels!: Channels;
+  @param("id", { transform: toInt }) accessor id!: number;
   @signal accessor stop!: AbortSignal;
 
-  @get async page() {
-    const r = await fetch("https://example.com", { signal: this.stop });
-    return r.text();
+  @get @sse feed() {
+    this.catalog.find(this.id); // a 404 before the stream starts
+    return this.channels.subscribe(stockChannel(this.id), this.stop);
   }
 }
 ```
 
-[`@session`](api:yerd.session) is covered in [sessions and auth](09-sessions-and-auth.md).
+[@session](api:yerd.session) reads the session; given a class, it's a typed view with methods and defaults. The product page's cart is `@session(Cart) accessor cart!: Session<Cart>`. See [sessions and auth](09-sessions-and-auth.md).
 
 ## Your own accessors
 
@@ -350,19 +382,19 @@ export class Slow {
 
 ```tsx
 import { NotFound, createAccessor, get, route } from "@toyz/yerd";
-import { findShop, type Shop } from "./shops.js";
+import { findTenant, type Tenant } from "./tenants.js";
 
 /** The visitor's first choice from Accept-Language, or undefined (then the field's initializer). */
 export const language = createAccessor((ctx) => ctx.headers["accept-language"]?.split(/[,;]/)[0]?.trim() || undefined, { name: "language" });
 
-/** The shop this request is for, from the subdomain (acme.example.com). A 404 if there's none. */
-export const shop = createAccessor(
-  async (ctx): Promise<Shop> => {
-    const found = await findShop(ctx.url.hostname.split(".")[0] ?? "");
-    if (!found) throw new NotFound("No such shop");
+/** The tenant this request is for, from the subdomain (acme.example.com). A 404 if there's none. */
+export const tenant = createAccessor(
+  async (ctx): Promise<Tenant> => {
+    const found = await findTenant(ctx.url.hostname.split(".")[0] ?? "");
+    if (!found) throw new NotFound("No such tenant");
     return found;
   },
-  { name: "shop" },
+  { name: "tenant" },
 );
 
 /** A numeric path param, checked at boot: the route must have it. */
@@ -378,12 +410,12 @@ export const idParam = createAccessor(
 @route("/products/:id")
 export class Product {
   @language accessor lang = "en"; // missing header: the initializer
-  @shop accessor shop!: Promise<Shop>;
+  @tenant accessor tenant!: Promise<Tenant>;
   @idParam("id") accessor id!: number;
 
   @get async show() {
-    const { name } = await this.shop;
-    return { shop: name, product: this.id, lang: this.lang };
+    const { name } = await this.tenant;
+    return { tenant: name, product: this.id, lang: this.lang };
   }
 }
 ```
@@ -469,26 +501,13 @@ yerd answers bad input before (or while) your handler reads it.
 | --- | --- |
 | A transform or validator rejects a value | 400 with its message, e.g. `Expected an integer, got "abc"` |
 | A `required` value is missing | 400, e.g. `Missing required query parameter: q` |
-| A DTO doesn't validate | 400 JSON listing every issue (below) |
+| A DTO doesn't validate | 400 JSON listing every issue |
 | Malformed JSON or multipart | 400 |
 | Body over `bodyLimit`, or a file over `maxSize` | 413 |
 | A file of the wrong type | 415 |
 | `@param` names a param the path doesn't have | The app refuses to boot |
 
-A failed DTO reports every problem at once, each with a path:
-
-```json
-{
-  "error": "Validation failed",
-  "code": "validation_failed",
-  "issues": [
-    { "path": "email", "message": "That is not an email" },
-    { "path": "age", "message": "Must be from 13 to 120 (got 7)" },
-    { "path": "address.city", "message": "Can't be empty" },
-    { "path": "tags[1]", "message": "Expected a string" }
-  ]
-}
-```
+A failed DTO reports every problem at once, each with a path: the checkout's [answer above](#bodies-and-dto-classes). Nested fields read `address.city`, list items `tags[1]`.
 
 - Browsers get your [error page](04-responses.md) instead, when the app has one.
 - For form messages, catch the [`YerdError`](api:yerd.YerdError) and read `error.details.issues`; the [interactivity guide](06-interactivity.md) shows the pattern.
