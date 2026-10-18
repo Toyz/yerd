@@ -40,7 +40,7 @@ export type { FormFiles } from "./server/body.js";
 export { Region, Scripts, RUNTIME_PATH, type RegionProps } from "./actions/components.js";
 export { raw, escapeHtml, json, type RawHtml } from "./render/escape.js";
 export { Dynamic, type DynamicProps } from "./render/dynamic.js";
-export { Local, not, type LocalProps } from "./render/local.js";
+export { Local, eq, not, type LocalProps } from "./render/local.js";
 export { Fragment, createElement, type Child, type Component, type YerdNode } from "./jsx/jsx-runtime.js";
 export { status, setHeader, catches } from "./decorators/response.js";
 export { isBot } from "./server/bots.js";

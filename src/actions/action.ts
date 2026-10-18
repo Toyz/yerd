@@ -110,6 +110,12 @@ export interface ActionElement {
   readonly scrollLeft: number;
   /** `data-*` attributes ("" when missing). */
   readonly dataset: Readonly<Record<string, string>>;
+  /**
+   * One `data-*` attribute by its dataset name ("" when missing): the same as
+   * `dataset[name]`, but always a string, even under `noUncheckedIndexedAccess`.
+   * `drag.data("id")` reads `data-id`.
+   */
+  data(name: string): string;
 }
 
 /** What an action lambda gets. Use what you need: `({ el }) => ...`, `({ ctx }) => ...`. */
@@ -238,11 +244,12 @@ function liveElement(base: HoleSource, holes: HoleSource[]): ActionElement {
   return new Proxy({} as ActionElement, {
     get(_t, key) {
       if (typeof key === "symbol") return undefined;
+      if (key === "data") return (attr: string) => hole([...base, "dataset", attr]);
       if (key === "dataset") {
         return new Proxy({}, { get: (_d, attr) => (typeof attr === "string" ? hole([...base, "dataset", attr]) : undefined) });
       }
       if (ELEMENT_FIELDS.has(key)) return hole([...base, key]);
-      throw new TypeError(`${name}.${key} can't be read in an action lambda; use one of: ${[...ELEMENT_FIELDS, "dataset"].join(", ")}`);
+      throw new TypeError(`${name}.${key} can't be read in an action lambda; use one of: ${[...ELEMENT_FIELDS, "dataset", "data()"].join(", ")}`);
     },
   });
 }

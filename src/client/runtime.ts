@@ -938,12 +938,24 @@ export function yerdRuntime(): void {
     }
   });
 
-  function read(state: unknown, path: string): unknown {
-    const negate = path.startsWith("!");
+  /** A binding's value: `[!]path`, or `[!]path=<JSON>` for "field equals this" (eq()). */
+  function read(state: unknown, spec: string): unknown {
+    const negate = spec.startsWith("!");
+    const at = spec.indexOf("=");
+    const path = spec.slice(negate ? 1 : 0, at < 0 ? undefined : at);
     let value: unknown = state;
-    for (const key of (negate ? path.slice(1) : path).split(".")) {
+    for (const key of path.split(".")) {
       if (key === "") continue;
       value = value !== null && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined;
+    }
+    if (at >= 0) {
+      let expected: unknown;
+      try {
+        expected = JSON.parse(decodeURIComponent(spec.slice(at + 1)));
+      } catch {
+        expected = undefined;
+      }
+      value = value === expected;
     }
     return negate ? !value : value;
   }

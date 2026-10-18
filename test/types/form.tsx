@@ -35,7 +35,7 @@ export class Todos {
         <div action={({ ref }) => this.search({ q: ref("#q").value, page: 2 })} trigger="visible" />
         <button action={() => this.remove({ id: "1" })} trigger="keydown:Enter">x</button>
         <button formaction={() => this.remove({ id: "1" })}>Delete</button>
-        <ul action={({ drag }) => this.remove({ id: drag.dataset.id! })} trigger="drop" />
+        <ul action={({ drag }) => this.remove({ id: drag.data("id") })} trigger="drop" />
         {/* @ts-expect-error "idd": remove takes { id } */}
         <form action={() => this.remove({ idd: "1" })} />
         {/* @ts-expect-error id must be a string */}

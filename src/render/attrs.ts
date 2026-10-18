@@ -1,6 +1,6 @@
 import { attributeVersion, customAttribute, type AttributeDef } from "../attributes/attribute.js";
 import { escapeHtml, isRawHtml } from "./escape.js";
-import { isBinding, type Binding } from "./local.js";
+import { bindingSpec, isBinding, type Binding } from "./local.js";
 
 // Anything that could end the attribute name or the tag. Attribute names come
 // from prop keys, which can come from spread objects, so they're validated
@@ -181,7 +181,7 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
     if (value === null || value === undefined) continue;
     if (isBinding(value)) {
       const b = value as Binding;
-      (binds ??= []).push(`${name}:${b.negate ? "!" : ""}${b.path}`);
+      (binds ??= []).push(`${name}:${bindingSpec(b)}`);
       value = b.value;
       if (value === null || value === undefined) continue;
     }
@@ -224,7 +224,7 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
           const v = flags[flag];
           if (isBinding(v)) {
             const b = v as Binding;
-            (binds ??= []).push(`class.${flag}:${b.negate ? "!" : ""}${b.path}`);
+            (binds ??= []).push(`class.${flag}:${bindingSpec(b)}`);
             plain[flag] = b.value;
           } else plain[flag] = v;
         }

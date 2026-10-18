@@ -164,7 +164,7 @@ The lambda's one parameter has four things; take the ones you need.
 <div action={({ ctx }) => this.more({ page: Number(ctx.query.get("page") ?? 1) + 1 })} trigger="visible" />
 ```
 
-`el`, `drag` and `ref()` offer `value`, `valueAsNumber`, `checked`, `selectedIndex`, `open`, `disabled`, `textContent`, `id`, `name`, `scrollTop`, `scrollLeft` and `dataset.*`. Their values don't exist yet when the page renders: the browser reads them when the action fires and sends them along. So pass them straight into the arguments. `el.value.trim()` or `` `${el.value}!` `` throws while rendering, with a message saying so. Do that work in the action instead.
+`el`, `drag` and `ref()` offer `value`, `valueAsNumber`, `checked`, `selectedIndex`, `open`, `disabled`, `textContent`, `id`, `name`, `scrollTop`, `scrollLeft`, `dataset.*` and `data(name)` (a `data-*` attribute, typed `string` even with `noUncheckedIndexedAccess` on). Their values don't exist yet when the page renders: the browser reads them when the action fires and sends them along. So pass them straight into the arguments. `el.value.trim()` or `` `${el.value}!` `` throws while rendering, with a message saying so. Do that work in the action instead.
 
 > [!NOTE]
 > Where `el` / `ref()` values go is signed: they can only fill the spots you put them in. What they contain comes from the browser, like any form field, so validate them. They arrive typed: `checked`, `open` and `disabled` as booleans, the numeric ones as numbers, the rest as strings. They need the client runtime; a plain form post can't fill them and gets a 400.
@@ -225,13 +225,13 @@ Make things `draggable="true"` and give the place they land an action with `trig
 ```tsx
 function Column({ status, cards, move }: { status: Status; cards: Card[]; move: Action<{ card: string; to: Status; before?: string }> }) {
   return (
-    <section class="column" action={({ drag }) => move({ card: drag.dataset.id, to: status })} trigger="drop">
+    <section class="column" action={({ drag }) => move({ card: drag.data("id"), to: status })} trigger="drop">
       <h2>{status}</h2>
       <Region id={`column-${status}`} as="ul">
         {cards.map((card) => (
           // Dropping on a card puts the dropped one before it; the innermost target wins.
           <li key={card.id} data-id={card.id} draggable="true"
-            action={({ drag }) => move({ card: drag.dataset.id, to: status, before: card.id })} trigger="drop">
+            action={({ drag }) => move({ card: drag.data("id"), to: status, before: card.id })} trigger="drop">
             {card.title}
           </li>
         ))}
@@ -559,6 +559,34 @@ export function Details() {
 
 > [!WARNING]
 > Handlers are sent to the browser as their source, so they can use the state (by the render prop's parameter name) and their event argument, nothing else from the server: no imports, no outer variables. A binding is a direct field read: `{s.count * 2}` renders the starting value but won't update, so compute it in the handler into another field. Compiling handlers needs `'unsafe-eval'` if you run a strict Content-Security-Policy.
+
+### Comparing: eq()
+
+A binding is a direct field read, so `s.slide === 2` can't stay in step. [eq](api:yerd.eq) can: `eq(s.slide, 2)` is true while the field equals the value, and works anywhere a boolean binding does, inside `not()` and class flags too. That's enough for tabs, steppers and an image slider:
+
+```tsx
+function Gallery({ photos }: { photos: string[] }) {
+  return (
+    <Local state={{ i: 0, n: photos.length }}>
+      {(s) => (
+        <div class="gallery">
+          {photos.map((src, n) => <img src={src} alt="" loading="lazy" hidden={not(eq(s.i, n))} />)}
+          <button aria-label="Previous" onClick={() => (s.i = (s.i + s.n - 1) % s.n)}>‹</button>
+          <button aria-label="Next" onClick={() => (s.i = (s.i + 1) % s.n)}>›</button>
+          {photos.map((src, n) => (
+            <button class={["thumb", { active: eq(s.i, n) }]} data-n={n}
+              onClick={(e: Event) => (s.i = Number((e.currentTarget as HTMLElement).dataset.n))}>
+              <img src={src} alt={`Photo ${n + 1}`} loading="lazy" />
+            </button>
+          ))}
+        </div>
+      )}
+    </Local>
+  );
+}
+```
+
+Handlers can't see outer variables like `n` (they're sent as text), so the count goes in the state and each thumbnail carries its index in `data-n`.
 
 ### Keeping it across reloads
 

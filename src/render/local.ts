@@ -36,6 +36,8 @@
 import type { Child } from "../jsx/jsx-runtime.js";
 
 const BINDING: unique symbol = Symbol.for("yerd.binding");
+/** eq()'s value, under a symbol so a state field called `equals` stays a field. */
+const EQUALS: unique symbol = Symbol.for("yerd.binding.equals");
 
 /** A bound field read, as the renderer sees it. */
 export interface Binding {
@@ -43,6 +45,18 @@ export interface Binding {
   readonly path: string;
   readonly value: unknown;
   readonly negate: boolean;
+  /** From eq(): the binding is `field === value` rather than the field itself. */
+  readonly [EQUALS]?: unknown;
+}
+
+/**
+ * How a binding is written for the runtime: `[!]path`, plus `=<JSON>` for an
+ * eq() binding (URI-encoded, so `;` and `:` in the value can't break the list).
+ */
+export function bindingSpec(b: Binding): string {
+  const equals = b[EQUALS];
+  const compare = equals !== undefined ? `=${encodeURIComponent(JSON.stringify(equals))}` : "";
+  return `${b.negate ? "!" : ""}${b.path}${compare}`;
 }
 
 export function isBinding(value: unknown): value is Binding {
@@ -77,7 +91,19 @@ function bindable(value: unknown, path: string): unknown {
 export function not(binding: boolean): boolean {
   if (!isBinding(binding)) return !binding;
   const b = binding as unknown as Binding;
-  return { [BINDING]: true, path: b.path, value: !b.value, negate: true } as unknown as boolean;
+  return { [BINDING]: true, path: b.path, value: !b.value, negate: !b.negate, [EQUALS]: b[EQUALS] } as unknown as boolean;
+}
+
+/**
+ * Whether a field equals a value, kept in step: `class={{ active: eq(s.tab, "specs") }}`,
+ * `hidden={not(eq(s.slide, 2))}`. The value is compared as JSON (strings,
+ * numbers, booleans, null).
+ */
+export function eq<T>(field: T, value: T): boolean {
+  if (!isBinding(field)) return field === value;
+  const b = field as unknown as Binding;
+  if (b[EQUALS] !== undefined) throw new TypeError("eq() takes a field of the state, not another eq()");
+  return { [BINDING]: true, path: b.path, value: b.value === value, negate: false, [EQUALS]: value } as unknown as boolean;
 }
 
 export interface LocalProps<S extends object> {

@@ -12,6 +12,7 @@ class Lab {
         <form action={({ form }) => this.rename({ id: "a2" }, form)} trigger="change"><input name="title" /></form>
         <input id="q" action={({ el, ctx }) => this.search({ q: el.value, page: Number(ctx.query.get("page") ?? 1), on: el.checked })} trigger="input 250ms" />
         <div id="more" action={({ ref }) => this.search({ q: ref("#q").value, page: 2, on: ref("#q").checked })} trigger="visible" />
+        <ul id="col" action={({ drag }) => this.remove({ id: drag.data("id") })} trigger="drop" />
         <button id="plain" action={() => this.remove({ id: "b" })}>b</button>
         <Region id="feed" as="ul" append><li>one</li></Region>
         <div id="zone" action={this.upload} trigger="drop:files" accept="image/*">Drop photos</div>
@@ -89,6 +90,7 @@ describe("action lambdas", () => {
     expect(attr("q", "data-yx-trigger")).toBe("input 250ms");
     expect(JSON.parse(attr("q", "data-yx-holes"))).toEqual([["el", "value"], ["el", "checked"]]);
     expect(JSON.parse(attr("more", "data-yx-holes"))).toEqual([["ref", "#q", "value"], ["ref", "#q", "checked"]]);
+    expect(JSON.parse(attr("col", "data-yx-holes"))).toEqual([["drag", "dataset", "id"]]);
     expect(attr("plain", "data-yx-trigger")).toBe("click");
     expect(attr("plain", "data-yx-action")).toBe("/lab?page=3");
     expect(pageHtml).not.toMatch(/ action="[^/]/);

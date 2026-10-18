@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { beforeAll, describe, expect, it } from "vitest";
-import { Local, not, renderToString } from "@toyz/yerd";
+import { Local, eq, not, renderToString } from "@toyz/yerd";
 import { runtimeSource } from "../../src/client/runtime.js";
 
 beforeAll(() => {
@@ -98,6 +98,58 @@ describe("<Local> in the browser", () => {
     const counts = Array.from(document.querySelectorAll(".count")).map((c) => c.textContent);
     expect(counts).toEqual(["3", "2"]);
     void second;
+  });
+});
+
+function Slider({ photos }: { photos: string[] }) {
+  return (
+    <Local state={{ i: 0, n: photos.length }}>
+      {(s) => (
+        <div>
+          {photos.map((src, n) => <img class="slide" src={src} alt="" hidden={not(eq(s.i, n))} />)}
+          <button id="prev" onClick={() => (s.i = (s.i + s.n - 1) % s.n)}>prev</button>
+          <button id="next" onClick={() => (s.i = (s.i + 1) % s.n)}>next</button>
+          {photos.map((_, n) => (
+            <button class={["thumb", { active: eq(s.i, n) }]} data-n={n} onClick={(e: Event) => (s.i = Number((e.currentTarget as HTMLElement).dataset.n))}>{n}</button>
+          ))}
+        </div>
+      )}
+    </Local>
+  );
+}
+
+describe("eq() bindings", () => {
+  it("render the initial comparison and its binding", async () => {
+    const html = await renderToString(<Slider photos={["/a.svg", "/b.svg"]} />);
+    expect(html).toContain('<img class="slide" src="/a.svg" alt="" data-yx-bind="hidden:!i=0">');
+    expect(html).toContain('<img class="slide" src="/b.svg" alt="" hidden data-yx-bind="hidden:!i=1">');
+    expect(html).toContain('class="thumb active" data-n="0"');
+  });
+
+  it("make a slider: arrows wrap, thumbnails jump, one slide shows", async () => {
+    document.body.innerHTML = await renderToString(<Slider photos={["/a.svg", "/b.svg", "/c.svg"]} />);
+    document.dispatchEvent(new CustomEvent("yx:applied"));
+    await flush();
+    const shown = () => Array.from(document.querySelectorAll<HTMLImageElement>(".slide")).filter((img) => !img.hidden).map((img) => img.getAttribute("src"));
+    const active = () => Array.from(document.querySelectorAll(".thumb.active")).map((b) => b.textContent);
+    expect(shown()).toEqual(["/a.svg"]);
+    (document.getElementById("prev") as HTMLElement).click();
+    expect(shown()).toEqual(["/c.svg"]);
+    expect(active()).toEqual(["2"]);
+    (document.getElementById("next") as HTMLElement).click();
+    expect(shown()).toEqual(["/a.svg"]);
+    (document.querySelectorAll(".thumb")[1] as HTMLElement).click();
+    expect(shown()).toEqual(["/b.svg"]);
+    expect(active()).toEqual(["1"]);
+  });
+
+  it("compare strings safely, and not(not(x)) is x", async () => {
+    const html = await renderToString(
+      <Local state={{ tab: "a;b:c", open: true }}>{(s) => <p class={{ on: eq(s.tab, "a;b:c") }} hidden={not(not(s.open))}>x</p>}</Local>,
+    );
+    expect(html).toContain('class="on"');
+    expect(html).toContain("hidden");
+    expect(html).toContain('data-yx-bind="class.on:tab=%22a%3Bb%3Ac%22;hidden:open"');
   });
 });
 

@@ -17,7 +17,7 @@ import { renderAttributes } from "./attrs.js";
 import { escapeHtml, isRawHtml } from "./escape.js";
 import { formAction, isAction, isBoundAction } from "../actions/action.js";
 import { DYNAMIC_ID, Dynamic, type DynamicProps } from "./dynamic.js";
-import { Local, isBinding, localState, stateName, type Binding, type LocalProps } from "./local.js";
+import { Local, bindingSpec, isBinding, localState, stateName, type Binding, type LocalProps } from "./local.js";
 
 const VOID_ELEMENTS = new Set([
   "area", "base", "br", "col", "embed", "hr", "img", "input",
@@ -98,7 +98,7 @@ function renderChild(child: unknown, state: State): Step {
   // A field read from <Local> state: the value now, kept live in the browser.
   if (isBinding(child)) {
     const b = child as Binding;
-    write(state, `<span data-yx-text="${b.negate ? "!" : ""}${escapeHtml(b.path)}">${escapeHtml(String(b.value ?? ""))}</span>`);
+    write(state, `<span data-yx-text="${escapeHtml(bindingSpec(b))}">${escapeHtml(String(b.value ?? ""))}</span>`);
     return undefined;
   }
   if (typeof child !== "object") throw new TypeError(`Cannot render ${typeof child} as a child`);
