@@ -244,14 +244,19 @@ both formats. `verifyPassword` compares with
 runs a dummy hash so response timing doesn't reveal which emails exist.
 
 **Session fixation.** `auth.login(user)` always calls `session.regenerate()`:
-new ID, data copied over, the old ID destroyed in id stores.
+new ID, data copied over, the old ID destroyed in id stores. When a different
+user was signed in on that session (a shared computer, no logout), it starts
+a fresh session instead, so nothing of theirs (a cart, a "passed 2FA" flag)
+carries over; a guest's data does.
 
 **Open redirects.** `?next=` only goes through `safeNext` (and the no-JS
 redirect after an action through the same `safeBack`): the value must start
 with `/`; control characters and backslashes are refused outright (browsers
 drop tabs and newlines and read `\` as `/`, so `/\t/evil.com` is
 `//evil.com` to them); then the URL parser must agree the result is
-same-origin. `//evil.com`, `/\evil.com`, absolute URLs and `javascript:` all
+same-origin, and the parsed path must not start with `//` (dot segments are
+dropped while parsing, so `/.//evil.com` and `/%2e//evil.com` become
+`//evil.com`). `//evil.com`, `/\evil.com`, absolute URLs and `javascript:` all
 fall back.
 
 ## Security model

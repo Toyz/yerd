@@ -196,7 +196,7 @@ export const app = yerd().sessions().use(auth);
 
 ## Login and logout
 
-`auth.login(user)` regenerates the session id (so a pre-login id can't be reused) and stores the user's id. `auth.logout()` destroys the session.
+`auth.login(user)` regenerates the session id (so a pre-login id can't be reused) and stores the user's id. If someone else was signed in on that session, it starts a fresh one instead, so nothing of theirs carries over to the new user. `auth.logout()` destroys the session.
 
 ### Carrying a guest's cart across sign-in
 

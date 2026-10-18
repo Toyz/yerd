@@ -89,8 +89,10 @@ export interface Auth<User> {
   readonly required: GuardRef;
   /** Guard: the signed-in user has one of these roles (403 otherwise). */
   role(...names: string[]): GuardRef;
-  /** Sign a user in: new session id (fixation), user id stored. */
-  /** Sign in: rotates the session id, stores the user, then runs onLogin (await it when that's async). */
+  /**
+   * Sign in: rotates the session id (a fresh session if someone else was
+   * signed in on it), stores the user, then runs onLogin (await it when that's async).
+   */
   login(user: User): void | Promise<void>;
   /** Sign out: runs onLogout, then destroys the session (await it when onLogout is async). */
   logout(): void | Promise<void>;
@@ -180,7 +182,7 @@ export function createAuth<User>(options: AuthOptions<User>): Auth<User> {
   const required = createGuard("auth.required", (ctx) => {
     if (ctx.prerendering) throw new Error("auth.required: a route that needs a signed-in user can't be prerendered");
     if (current(ctx) !== undefined) return true;
-    if (wantsPage(ctx)) return `${loginPath}?next=${encodeURIComponent(ctx.path + ctx.url.search)}`;
+    if (wantsPage(ctx)) return `${loginPath}${loginPath.includes("?") ? "&" : "?"}next=${encodeURIComponent(ctx.path + ctx.url.search)}`;
     throw new HttpError(401, "Sign in first");
   });
 
@@ -204,8 +206,14 @@ export function createAuth<User>(options: AuthOptions<User>): Auth<User> {
     login(user: User) {
       const ctx = currentContext();
       const session = sessionOf(ctx);
+      const id = idOf(user);
+      // Someone else is signed in on this session (a shared computer, no
+      // logout): start a fresh one, so nothing of theirs (a cart, a "passed
+      // 2FA" flag) carries over to the new user. A guest's data does.
+      const previous = session.get(userKey as never) as string | undefined;
+      if (previous !== undefined && previous !== id) session.destroy();
       session.regenerate();
-      session.set(userKey as never, idOf(user) as never);
+      session.set(userKey as never, id as never);
       setUser(ctx, user);
       return options.onLogin?.(user, session);
     },
