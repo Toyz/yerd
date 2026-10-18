@@ -10,8 +10,6 @@ import { ACCESSORS, ARGS, type Resolver } from "../decorators/kit.js";
 import { ACCEPTS, METHOD_LAYOUTS, NO_LAYOUT, PRERENDER, applyLayouts, joinLayouts, resetRouteRegistry, type When, VERBS, resolveRoute, routeRegistry, type LayoutProps, type PageMeta, type RouteDef, type Verb } from "../decorators/route.js";
 import { choose, expandType } from "../respond/negotiate.js";
 import { Container, Scope, ServiceCollection, currentServices, keyName, runWithServices, type Lifetime, type Registration } from "../di/container.js";
-
-const currentScope = () => currentServices()?.scope;
 import {
   EVERY, INJECTS, ON_BOOT, ON_SHUTDOWN, lifetimeOf, registrationFor, resetServiceRegistry, serviceRegistry,
   type HostedService,
@@ -28,16 +26,15 @@ import { cssBundleClasses, cssBundleHash, cssBundleText, resetCss, resetCssBundl
 import { EventTransport, Events, HANDLES, ON_EVENT, eventName } from "../events/events.js";
 import { ACTIONS, ActionForm, CSRF_FIELD, checkActionToken, fillHoles, resolveSecrets, safeBack, verifyAction } from "../actions/action.js";
 import { CLASS_GUARDS, METHOD_GUARDS, guardRegistry, isGuardRef, resetGuardRegistry, type GuardSpec } from "../decorators/guards.js";
-import { SessionManager, checkSessionOptions, type LoadedSession } from "../session/manager.js";
+import { SessionManager, checkSessionOptions } from "../session/manager.js";
 import type { SessionOptions } from "../session/session.js";
-import { parseCookies } from "./cookies.js";
 import { RUNTIME_PATH } from "../actions/components.js";
 import { runtimeSource } from "../client/runtime.js";
 import { attributesSource, resetAttributeRegistry } from "../attributes/attribute.js";
 import { isYerdNode } from "../jsx/jsx-runtime.js";
 import { YerdResponse, isBare, redirect } from "../respond/response.js";
 import { Router, paramNames } from "../router/trie.js";
-import { DEFAULT_BODY_LIMIT, readBody, readNdjson, type ParsedBody } from "./body.js";
+import { DEFAULT_BODY_LIMIT } from "./body.js";
 import { acceptsEncoding, createMount, serveStatic, type StaticMount, type StaticOptions } from "./static.js";
 import { useManifest } from "../assets.js";
 import { runWithContext, type RouteInfo, type YerdContext } from "./context.js";
@@ -182,10 +179,8 @@ interface Handler {
  */
 export type Middleware = (ctx: YerdContext, next: () => Promise<Outgoing>) => Promise<Outgoing>;
 
-interface ResolvedGuard {
-  label: string;
-  run: (ctx: YerdContext) => unknown;
-}
+/** A guard as it runs: a createGuard() ref's own function, or a named @guard method on its service. */
+type GuardRun = (ctx: YerdContext) => unknown;
 
 /** Every handler for one pattern + verb: a default and/or @accepts variants. */
 type HandlerGroup = Handler[];
@@ -307,15 +302,17 @@ export class BootError extends Error {
   }
 }
 
-const STATUS_TEXT: Record<number, string> = {
-  400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found",
-  405: "Method Not Allowed", 406: "Not Acceptable", 413: "Content Too Large", 500: "Internal Server Error",
-};
-
-/** The text an unexposed error is answered with: ours (RFC 9110 names) first, then Node's list. */
+/**
+ * The text an unexposed error is answered with: Node's list, except 413,
+ * which Node still calls by its old name ("Payload Too Large") where
+ * RFC 9110 says "Content Too Large".
+ */
 function statusText(status: number): string {
-  return STATUS_TEXT[status] ?? STATUS_CODES[status] ?? `HTTP ${status}`;
+  return status === 413 ? "Content Too Large" : (STATUS_CODES[status] ?? `HTTP ${status}`);
 }
+
+/** How long close() and stop() wait for in-flight work by default, in ms. */
+const DEFAULT_SHUTDOWN_MS = 10_000;
 
 async function importDirectory(dir: URL): Promise<void> {
   const root = fileURLToPath(dir);
@@ -416,7 +413,7 @@ export class YerdApp {
   #sessionOptions: SessionOptions | undefined;
   readonly #middleware: Middleware[] = [];
   readonly #appGuards: GuardSpec[] = [];
-  readonly #namedGuards = new Map<string, ResolvedGuard>();
+  readonly #namedGuards = new Map<string, GuardRun>();
   readonly #trustedOrigins: ReadonlySet<string>;
   /** Shared by every request's context; built at boot. */
   #env: RequestEnv | undefined;
@@ -932,7 +929,7 @@ export class YerdApp {
     // Named guards: each @guard method belongs to a service. Only this app's
     // services count (the registry is process-wide), and a guard declared on a
     // base class works through a registered subclass.
-    const namedGuards = new Map<string, ResolvedGuard>();
+    const namedGuards = new Map<string, GuardRun>();
     const registrations = [...container.registrations()];
     for (const named of guardRegistry) {
       const registration = registrations.find((r) => r.impl && metadataChain(r.impl).includes(named.metadata));
@@ -942,12 +939,9 @@ export class YerdApp {
         continue;
       }
       const key = registration.key;
-      namedGuards.set(named.name, {
-        label: named.name,
-        run: (ctx) => {
-          const instance = container.get(key, currentScope()) as Record<string | symbol, (ctx: YerdContext) => unknown>;
-          return instance[named.method]!.call(instance, ctx);
-        },
+      namedGuards.set(named.name, (ctx) => {
+        const instance = container.get(key, currentServices()?.scope) as Record<string | symbol, (ctx: YerdContext) => unknown>;
+        return instance[named.method]!.call(instance, ctx);
       });
     }
 
@@ -1153,7 +1147,7 @@ export class YerdApp {
 
   async #stop(): Promise<void> {
     const lifecycle = this.#lifecycle;
-    const timeout = this.#options.shutdownTimeout ?? 10_000;
+    const timeout = this.#options.shutdownTimeout ?? DEFAULT_SHUTDOWN_MS;
     for (const stream of this.#streams) stream.abort(new Error("server shutting down"));
     if (lifecycle) {
       lifecycle.abort.abort();
@@ -1200,18 +1194,6 @@ export class YerdApp {
   }
 
   /**
-   * Node request handler. With `next` (connect-style middleware, e.g. Vite's
-   * dev server), unmatched paths are passed on instead of answered with 404.
-   * Starts the app on the first request. Prefer listen() for a server of
-   * your own: it adds graceful shutdown.
-   *
-   * ```ts
-   * import { createServer } from "node:http";
-   *
-   * createServer(app.handle).listen(3000);
-   * ```
-   */
-  /**
    * Answer a fetch Request in this process: the whole pipeline (middleware,
    * sessions, guards, actions, error pages, streaming), no HTTP server or
    * port. Resolves when the response starts, so streams can be read as they
@@ -1254,6 +1236,18 @@ export class YerdApp {
     return new TestClient(this.fetch, base);
   }
 
+  /**
+   * Node request handler. With `next` (connect-style middleware, e.g. Vite's
+   * dev server), unmatched paths are passed on instead of answered with 404.
+   * Starts the app on the first request. Prefer listen() for a server of
+   * your own: it adds graceful shutdown.
+   *
+   * ```ts
+   * import { createServer } from "node:http";
+   *
+   * createServer(app.handle).listen(3000);
+   * ```
+   */
   handle = async (req: IncomingMessage, res: ServerResponse, next?: Next): Promise<void> => {
     try {
       await this.start();
@@ -1293,17 +1287,17 @@ export class YerdApp {
         return send(res, errorResponse(400), method === "HEAD", undefined);
       }
     }
-    const url = { pathname: target.path };
+    const path = target.path;
 
-    if (url.pathname === RUNTIME_PATH && (method === "GET" || method === "HEAD")) {
+    if (path === RUNTIME_PATH && (method === "GET" || method === "HEAD")) {
       return send(res, runtimeResponse(req), method === "HEAD", undefined);
     }
     // The server's clock, for pages lining up `sync` animations and cues.
-    if (url.pathname === CLOCK_PATH && (method === "GET" || method === "HEAD")) {
+    if (path === CLOCK_PATH && (method === "GET" || method === "HEAD")) {
       const body = JSON.stringify({ now: Date.now() });
       return send(res, { status: 200, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }, body }, method === "HEAD", undefined);
     }
-    if (url.pathname === CUES_PATH && method === "GET") return this.#serveCues(req, res, target.search);
+    if (path === CUES_PATH && method === "GET") return this.#serveCues(res, target.search);
 
     // Prerendered at build time: the file, not the handler. The runtime's own
     // requests go to the handler: `yx-dynamic` fills <Dynamic> parts, and a
@@ -1313,7 +1307,7 @@ export class YerdApp {
       this.#prerenderToken === undefined &&
       req.headers["yx-dynamic"] === undefined &&
       req.headers["yx-boost"] === undefined
-        ? this.#prerendered.get(url.pathname)
+        ? this.#prerendered.get(path)
         : undefined;
     if (prebuilt) {
       const file = await serveStatic(prebuilt.mount, `/${prebuilt.file}`, {
@@ -1323,12 +1317,12 @@ export class YerdApp {
       if (file) return send(res, file, method === "HEAD", undefined);
     }
 
-    const match = router.match(url.pathname);
+    const match = router.match(path);
 
     if (!match) {
       if (method === "GET" || method === "HEAD") {
         for (const mount of this.#mounts) {
-          const file = await serveStatic(mount, url.pathname, {
+          const file = await serveStatic(mount, path, {
             "if-none-match": req.headers["if-none-match"],
             "accept-encoding": req.headers["accept-encoding"],
           });
@@ -1370,7 +1364,6 @@ export class YerdApp {
     const sessions = this.#sessions;
     const prerendering = this.#prerenderToken !== undefined && req.headers["x-yerd-prerender"] === this.#prerenderToken;
     const scope = new Scope();
-    const container = this.#container!;
     const context = new RequestContext(req, res, target, method, match.params, base.info, { ...base.meta }, prerendering, scope, this.#env!);
     // <Dynamic> parts: skeletons while prerendering, only them for the runtime's fill-in request.
     const dynamic: "fallback" | "only" | undefined = prerendering ? "fallback" : req.headers["yx-dynamic"] !== undefined ? "only" : undefined;
@@ -1433,7 +1426,7 @@ export class YerdApp {
         this.#container!.get(Events).release(context);
       } catch (error) {
         this.#container!.get(Events).discard(context);
-        if (prerendering) this.#prerenderErrors.set(url.pathname, error instanceof Error ? error.message : String(error));
+        if (prerendering) this.#prerenderErrors.set(path, error instanceof Error ? error.message : String(error));
         // The route's @catches, then app.onError, then the error page.
         const recovered = prerendering ? undefined : await inRequest(() => this.#recover(error, base, context, scope, dynamic));
         if (recovered) out = recovered;
@@ -1485,7 +1478,7 @@ export class YerdApp {
   }
 
   /** The runtime's cue stream: `GET /_yerd/cues?room=a&room=b` (no room: the default one). */
-  async #serveCues(req: IncomingMessage, res: ServerResponse, search: string): Promise<void> {
+  async #serveCues(res: ServerResponse, search: string): Promise<void> {
     const asked = new URLSearchParams(search).getAll("room");
     const rooms = asked.length ? [...new Set(asked)] : [DEFAULT_ROOM];
     if (rooms.length > 32 || !rooms.every(validRoom)) return send(res, errorResponse(400), false, undefined);
@@ -1618,8 +1611,8 @@ export class YerdApp {
   /** Run a handler's guards; returns the response if one of them doesn't let the request through. */
   async #runGuards(guards: readonly GuardSpec[], layouts: Component<LayoutProps>[], context: YerdContext): Promise<Outgoing | undefined> {
     for (const spec of guards) {
-      const resolved: ResolvedGuard = isGuardRef(spec) ? { label: spec.label, run: spec.run } : this.#namedGuards.get(spec)!;
-      const result = await resolved.run(context);
+      const run = isGuardRef(spec) ? spec.run : this.#namedGuards.get(spec)!;
+      const result = await run(context);
       if (result === true || result === undefined) continue;
       if (result === false) throw new HttpError(403, "Forbidden");
       // Returning an error (e.g. `ok || new HttpError(403)`) is the same as throwing it.
@@ -1682,7 +1675,7 @@ export class YerdApp {
       // Nothing returned: the runtime refreshes the page's regions.
       if (result === undefined || result === null) return { status: 204, headers: {}, body: null };
       // JSX comes back bare: just the regions, no layouts.
-      return coerce(isYerdNode(result) ? result : result, { layouts: [], meta: context.meta });
+      return coerce(result, { layouts: [], meta: context.meta });
     }
 
     // No JavaScript: post/redirect/get back to the page the form was on.
@@ -1720,7 +1713,7 @@ export class YerdApp {
     });
     const address = server.address();
     const actualPort = typeof address === "object" && address ? address.port : port;
-    const timeout = this.#options.shutdownTimeout ?? 10_000;
+    const timeout = this.#options.shutdownTimeout ?? DEFAULT_SHUTDOWN_MS;
 
     let closing: Promise<void> | undefined;
     const close = () =>
@@ -1820,8 +1813,9 @@ function errorResponse(error: unknown): Outgoing {
 }
 
 // The runtime script (plus custom attributes' client halves), compressed once
-// per distinct source: ~35 KB raw, ~8 KB brotli. `no-cache` with an ETag, so
-// browsers revalidate (a 304) instead of downloading it on every page.
+// per distinct source (brotli and gzip, kept in memory) rather than per
+// request. `no-cache` with an ETag, so browsers revalidate (a 304) instead
+// of downloading it on every page.
 let runtimeAsset: { source: string; etag: string; br: Uint8Array; gzip: Uint8Array; raw: Uint8Array } | undefined;
 
 function runtimeResponse(req: IncomingMessage): Outgoing {
