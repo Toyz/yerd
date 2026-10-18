@@ -29,6 +29,24 @@ export interface RouteInfo {
   /** The route class's name, for messages. */
   readonly className: string;
   /**
+   * The route class, and the method serving the request (the handler, or the
+   * action being posted): read your own decorators with them in a guard or
+   * middleware. Middleware sees the route's default handler; a `@get(when)`
+   * variant or an action takes over before its guards run.
+   *
+   * ```ts
+   * export const rateLimit = methodValue<number>("rateLimit");
+   *
+   * export const limited = createGuard("limited", (ctx) => {
+   *   const max = rateLimit.get(ctx.route.target!, ctx.route.method!);
+   *   return max === undefined || hits(ctx) <= max;
+   * });
+   * ```
+   */
+  readonly target?: Function;
+  /** See `target`. */
+  readonly method?: string | symbol;
+  /**
    * false when the route (or its group) opted out of sessions with
    * `session: false`: ctx.session throws there, and auth sees nobody signed in.
    */

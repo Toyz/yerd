@@ -418,7 +418,7 @@ export class Reports {
 }
 ```
 
-Read them by class (or its metadata), at startup or in tooling:
+Read them by class (or its metadata), at startup or in tooling, or per request in a guard or middleware through `ctx.route.target` (the route class) and `ctx.route.method` (the handler or action serving the request):
 
 ```ts
 summary.get(Reports, "list");     // "List reports"
@@ -427,6 +427,15 @@ internal.has(Reports, "rebuild"); // true
 feature.get(Reports);             // "beta"
 
 const routes = [Home, Reports].filter((cls) => feature.get(cls) !== "beta" || process.env.BETA === "1");
+```
+
+```ts
+export const limit = methodValue<number>("limit");
+
+export const underLimit = createGuard("underLimit", (ctx) => {
+  const max = limit.get(ctx.route.target!, ctx.route.method!);
+  return max === undefined || hitsThisMinute(ctx) < max || new TooManyRequests(undefined, { retryAfter: 60 });
+});
 ```
 
 For a decorator that changes what the method does, use [createMethodDecorator](api:yerd.createMethodDecorator) with `wrap`:

@@ -157,6 +157,8 @@ export interface LoggingOptions {
 /** A route method and what runs before it, resolved at boot: a handler, or an action on a handler's class. */
 interface Call {
   method: string | symbol;
+  /** ctx.route while it serves: the route's info plus its class and this method. */
+  route: RouteInfo;
   /** Its guards as functions, outermost first. */
   runs: readonly GuardRun[];
   /** What @status / @setHeader declared for it. */
@@ -311,7 +313,7 @@ function routeNode(byVerb: ReadonlyMap<Verb, readonly Handler[]>, pendingRuns: A
     for (const name of names) {
       // Two handlers of one class (GET and POST) share its actions: the first found runs them.
       if (byName.has(name)) continue;
-      const call: ActionCall = { owner, method: name, runs: [], declared: responseDefaults(owner.def.metadata, name) };
+      const call: ActionCall = { owner, method: name, route: { ...owner.info, method: name }, runs: [], declared: responseDefaults(owner.def.metadata, name) };
       pendingRuns.push([call.runs, [...owner.classGuards, ...METHOD_GUARDS.get(owner.def.metadata, name)]]);
       byName.set(name, call);
     }
@@ -1061,7 +1063,7 @@ export class YerdApp {
         problems.push(`${def.className}: ${(e as Error).message}`);
         continue;
       }
-      const info: RouteInfo = { pattern: resolved.pattern, paramNames: paramNames(resolved.pattern), className: def.className, session: resolved.session };
+      const info: RouteInfo = { pattern: resolved.pattern, paramNames: paramNames(resolved.pattern), className: def.className, session: resolved.session, target: def.ctor };
       const lifetime = lifetimeOf({ lifetime: def.options.lifetime, metadata: def.metadata }, "scoped");
       if (this.#sitemap) mapped.push({ def, pattern: info.pattern, lifetime, sitemap: resolved.sitemap });
       const verbs = verbsOf(def.metadata);
@@ -1114,7 +1116,7 @@ export class YerdApp {
           continue;
         }
         group.push({
-          def, lifetime, method, info,
+          def, lifetime, method, info, route: { ...info, target: def.ctor, method },
           layouts: bareMethods?.has(method) ? [] : applyLayouts(layouts, methodLayouts?.get(method)),
           meta: resolved.meta,
           args: argsByMethod?.get(method),
@@ -1596,7 +1598,7 @@ export class YerdApp {
     const base = routed.handler ?? routed.group?.variants[0] ?? routed.node.first;
     const prerendering = this.#prerenderToken !== undefined && req.headers["x-yerd-prerender"] === this.#prerenderToken;
     const scope = new Scope();
-    const context = new RequestContext({ req, res, target, method, params: match.params, route: base.info, meta: { ...base.meta }, prerendering, scope, env: this.#env! });
+    const context = new RequestContext({ req, res, target, method, params: match.params, route: base.route, meta: { ...base.meta }, prerendering, scope, env: this.#env! });
     try {
       // One async context for the whole request and its DI scope (currentServices() reads context.services).
       await runWithContext(context, () => this.#answer(context, routed, base));
@@ -1690,6 +1692,7 @@ export class YerdApp {
    * what the method returned, not yet coerced.
    */
   async #invoke(context: RequestContext, owner: Handler, call: Call, args: () => unknown[] | Promise<unknown[]>): Promise<Invoked> {
+    context.route = call.route;
     if (call.runs.length > 0) {
       const blocked = await this.#runGuards(call.runs, owner.layouts, context);
       if (blocked) return { blocked };

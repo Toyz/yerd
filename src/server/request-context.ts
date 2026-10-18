@@ -77,7 +77,8 @@ export class RequestContext implements YerdContext {
   readonly res: ServerResponse;
   readonly method: string;
   readonly params: Readonly<Record<string, string>>;
-  readonly route: RouteInfo;
+  /** Swapped by the app for the variant or action that ends up serving the request. */
+  route: RouteInfo;
   readonly meta: PageMeta;
   readonly prerendering: boolean;
   readonly env: RequestEnv;
