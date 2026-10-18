@@ -430,7 +430,7 @@ node:http request                    src/server/app.ts (handle)
        no match: static mounts, else 404 error page
   -> cross-site check (unsafe methods) crossSiteReason, see AUTH.md
   -> RequestContext + DI Scope         src/server/request-context.ts
-  -> session load (+ CSRF nonce for pages, in apps with actions)
+  -> session load (the CSRF nonce is created when a token is first signed)
   -> ALS.run(ctx, ...)                 src/server/context.ts   (one async context for request + DI scope)
   -> middleware (app.use)
   -> action? (_yx in a form POST)      verify token, class guards + action's own guards, run it

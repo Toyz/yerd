@@ -151,7 +151,7 @@ HTML pages sent to someone with a session get `Cache-Control: private, no-cache`
 Changes are saved after the handler runs, including ones made in place. A request that changed nothing sends no cookie (unless a rolling session is due for a refresh).
 
 > [!NOTE]
-> When an app has actions, every page request starts a session if there isn't one: action tokens are bound to a per-session nonce, and the nonce has to be saved before any form is rendered. So with sessions and actions on, first-time visitors get a cookie (and pages get `Cache-Control: private, no-cache`) whether or not your code writes anything. An app without `@action` methods only starts sessions when something is set.
+> Action tokens are bound to a per-session nonce, so a page that renders an action form starts a session for a first-time visitor (a cookie, and `Cache-Control: private, no-cache` on the page) even if your code writes nothing. Pages without forms don't: the nonce is created when the first token is signed. One exception: the session cookie goes out with the headers, so a streamed page that still has parts to render at that point (an async component waiting on I/O) gets the nonce then, in case a later part renders a form. See [action tokens](15-security.md#action-tokens).
 
 > [!NOTE]
 > If a request ends in an unhandled crash (anything other than an `HttpError`), the session isn't saved. A half-finished login or update never sticks.

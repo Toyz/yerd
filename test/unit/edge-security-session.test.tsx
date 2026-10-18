@@ -269,7 +269,7 @@ describe("isNew", () => {
   });
   afterAll(() => server.close());
 
-  it("is true on a first page visit even in an app with actions (which sets the CSRF nonce up front)", async () => {
+  it("is true on a first page visit even when the page's form sets the CSRF nonce", async () => {
     const c = client(server.url);
     const first = await (await c.fetch("/with-action", { headers: { accept: "text/html" } })).text();
     expect(first).toContain('<p id="new">true</p>');

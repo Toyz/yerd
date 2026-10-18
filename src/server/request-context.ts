@@ -234,10 +234,20 @@ export class RequestContext implements YerdContext {
     return (this.#lines ??= readNdjson(this.req, this.env.bodyLimit));
   }
 
+  /** Whether the session already holds a CSRF nonce (so signing a token won't change it). */
+  get hasCsrfNonce(): boolean {
+    return typeof this.loadedSession?.session.get(CSRF_FIELD) === "string";
+  }
+
   /**
-   * The session's CSRF nonce, created on first use. The app creates it up
-   * front for page requests, because a nonce first set while the page streams
-   * would come after the session cookie has already gone out.
+   * The session's CSRF nonce, created when the first action token is signed
+   * for it, so a visitor who's never shown a form never gets a session (or
+   * a store entry) for it. The nonce has to be in the session before the
+   * session cookie goes out with the headers. A page renders everything it
+   * can without waiting before the headers, so forms there sign in time;
+   * if the page (or an event stream) still has parts to come when the
+   * headers go, the app creates the nonce then, since a later part may
+   * render a form (see YerdApp's #finalize).
    */
   csrfNonce(): string | undefined {
     const session = this.loadedSession?.session;

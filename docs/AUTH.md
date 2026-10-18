@@ -289,11 +289,14 @@ also carries:
 - **an expiry**, `actionTtl` seconds after render (default 86400, one day);
   an expired token is a 403 ("This form has expired; reload the page");
 - **when sessions are on, a hash of a per-session nonce.** The nonce lives in
-  the session under `__yerd_csrf` (random, 18 bytes) and is created up front
-  for page requests in apps that have actions, because a nonce first set while
-  the page streams would come after the session cookie has gone out. A token
-  whose nonce hash doesn't match the session is a 403. Tokens carry the hash,
-  not the nonce, so page source says nothing about the session.
+  the session under `__yerd_csrf` (random, 18 bytes) and is created when the
+  first token is signed for that session, so pages without forms never start
+  a session. It must be saved before the session cookie goes out with the
+  headers: a page renders everything it can without waiting on I/O first, and
+  if it's still streaming when the headers go (or it's an event stream), the
+  nonce is created then, since a later part may render a form. A token whose
+  nonce hash doesn't match the session is a 403. Tokens carry the hash, not
+  the nonce, so page source says nothing about the session.
 
 Tokens in **prerendered** pages carry neither (they were built for nobody):
 they're accepted on their signature and the cross-site check alone.

@@ -545,7 +545,7 @@ export class YerdApp {
   readonly #trustedOrigins: ReadonlySet<string>;
   /** Shared by every request's context; built at boot. */
   #env: RequestEnv | undefined;
-  /** Whether any route has @action methods (only then do page requests need a CSRF nonce). */
+  /** Whether any route has @action methods (only then can a streamed page need a CSRF nonce before it's done). */
   #hasActions = false;
   #loggingOptions: LoggingOptions = {};
   #onError: ((error: unknown, ctx: YerdContext) => unknown) | undefined;
@@ -849,7 +849,7 @@ export class YerdApp {
         layouts: this.#layouts,
         meta: { ...context.meta, title: message },
       });
-      return await this.#prime({ ...page, status: plain.status });
+      return await this.#prime({ ...page, status: plain.status }, context);
     } catch (renderError) {
       requestLog.error("the error page itself failed", { error: renderError });
       return plain;
@@ -1517,18 +1517,13 @@ export class YerdApp {
     // login or update doesn't stick.
     let crashed = false;
     try {
-      if (this.#sessions && !context.prerendering) {
-        context.loadedSession = await this.#sessions.load(context.req, context.cookies);
-        // Pages that may render action forms get their CSRF nonce now, while
-        // the session can still be committed (see RequestContext.csrfNonce).
-        if (this.#hasActions && wantsPage(context.req.headers)) context.csrfNonce();
-      }
+      if (this.#sessions && !context.prerendering) context.loadedSession = await this.#sessions.load(context.req, context.cookies);
       out = await this.#runMiddleware(context, () => this.#run(context, routed));
       // Whichever handler answered, the response depended on what the variants' tests read.
       if (routed.group?.vary) out.headers.vary = mergeVary(out.headers.vary, routed.group.vary);
       // Render up to the first chunk now, so an error at the top of the page
       // (a layout, an early component) still becomes the error page.
-      out = await this.#prime(out);
+      out = await this.#prime(out, context);
       // The handler succeeded: what it emitted goes out now (see Events).
       this.#events!.release(context);
     } catch (error) {
@@ -1689,6 +1684,11 @@ export class YerdApp {
     }
     const loaded = context.loadedSession;
     if (this.#sessions && loaded && options.commit) {
+      // Tokens signed so far created the nonce as they were signed. A body
+      // that may still sign some after the headers are out needs it now: the
+      // session cookie can't change once they've gone (RequestContext.csrfNonce).
+      // A HEAD response's body is never rendered past what's been primed.
+      if (context.method !== "HEAD" && this.#nonceUndecided(context) && maySignLater(out)) context.csrfNonce();
       try {
         await this.#sessions.commit(loaded, out);
       } catch (error) {
@@ -1708,9 +1708,23 @@ export class YerdApp {
     return out;
   }
 
-  /** Render a page stream's first chunk now (see primeStream); anything else as it is. */
-  #prime(out: Outgoing): Promise<Outgoing> | Outgoing {
-    return isPageStream(out) ? primeStream(out) : out;
+  /**
+   * Render a page stream's first chunk now (see primeStream); anything else
+   * as it is. While the CSRF nonce is undecided, everything that renders
+   * without waiting goes too, so a page that turns out to have no action
+   * form doesn't start a session (see #finalize).
+   */
+  #prime(out: Outgoing, context: RequestContext): Promise<Outgoing> | Outgoing {
+    return isPageStream(out) ? primeStream(out, this.#nonceUndecided(context)) : out;
+  }
+
+  /**
+   * Whether this request's session has no CSRF nonce yet, in an app with
+   * actions: one is created when an action token is first signed, and has
+   * to be in the session before the session cookie goes out.
+   */
+  #nonceUndecided(context: RequestContext): boolean {
+    return this.#hasActions && context.loadedSession !== undefined && !context.prerendering && !context.hasCsrfNonce;
   }
 
   /** Whether a `@get(when)` test accepts this request: a function's truthy result, or a guard letting it through. */
@@ -1754,7 +1768,7 @@ export class YerdApp {
     // A returned res(..., { status }) or number says the status; otherwise it's the error's.
     const out = await coerce(result, { layouts, meta: context.meta, dynamic: dynamicOf(context), accept: context.req.headers.accept });
     if (!out.explicitStatus) out.status = error instanceof HttpError ? error.status : 500;
-    return this.#prime(out);
+    return this.#prime(out, context);
   }
 
   #runMiddleware(context: YerdContext, inner: () => Promise<Outgoing>): Promise<Outgoing> {
@@ -2047,20 +2061,75 @@ function isPageStream(out: Outgoing): boolean {
  * still time to send the error page) and hand back a body that replays it.
  * Long-lived streams are left alone: their first item may be minutes away.
  */
-async function primeStream(out: Outgoing): Promise<Outgoing> {
+async function primeStream(out: Outgoing, settle = false): Promise<Outgoing> {
   if (!isPageStream(out)) return out;
   const iterator = (out.body as AsyncIterable<string | Uint8Array>)[Symbol.asyncIterator]();
-  const first = await iterator.next();
-  let replayed = false;
+  const ready = [await iterator.next()];
+  // What the source is still working on when we stopped waiting for it.
+  let pending: Promise<IteratorResult<string | Uint8Array>> | undefined;
+  if (settle) {
+    // Also everything that's ready without waiting on I/O (async components
+    // that resolve at once): a page that finishes here is known in full
+    // before the headers go out.
+    while (!ready[ready.length - 1]!.done) {
+      const next = iterator.next();
+      const result = await beforeNextTurn(next);
+      if (result === LATER) {
+        pending = next;
+        break;
+      }
+      ready.push(result);
+    }
+  }
+  let replayed = 0;
   const primed: AsyncIterator<string | Uint8Array> = {
     next: () => {
-      if (replayed) return iterator.next();
-      replayed = true;
-      return Promise.resolve(first);
+      if (replayed < ready.length) return Promise.resolve(ready[replayed++]!);
+      if (pending) {
+        const next = pending;
+        pending = undefined;
+        return next;
+      }
+      return iterator.next();
     },
     return: (value?: unknown) => iterator.return?.(value) ?? Promise.resolve({ done: true, value: undefined }),
   };
-  return { ...out, body: { [Symbol.asyncIterator]: () => primed } };
+  const body = { [Symbol.asyncIterator]: () => primed };
+  if (ready[ready.length - 1]!.done) renderedInFull.add(body);
+  return { ...out, body };
+}
+
+/** Page bodies primeStream rendered to the end: nothing in them is still to come. */
+const renderedInFull = new WeakSet<object>();
+
+const LATER: unique symbol = Symbol("later");
+
+/** `work`'s result if it settles before the event loop's next turn (no I/O wait), else LATER. */
+function beforeNextTurn<T>(work: Promise<T>): Promise<T | typeof LATER> {
+  return new Promise((resolve, reject) => {
+    const timer = setImmediate(() => resolve(LATER));
+    work.then(
+      (value) => {
+        clearImmediate(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearImmediate(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * A response whose body may still sign action tokens after its headers
+ * (and so the session cookie) have gone out: a page with parts still to
+ * render, or an event stream, which can carry rendered HTML.
+ */
+function maySignLater(out: Outgoing): boolean {
+  if (!isStreamBody(out.body) || renderedInFull.has(out.body)) return false;
+  const type = out.headers["content-type"] ?? "";
+  return type.startsWith("text/html") || type.startsWith("text/event-stream");
 }
 
 /** The headers a static file answer depends on. */
