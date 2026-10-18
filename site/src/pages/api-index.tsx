@@ -4,7 +4,7 @@
  * they say something: newer than the first release, or not released yet.
  */
 
-import { LoomElement, component, css, mount, prop, reactive, styles, watch } from "@toyz/loom";
+import { LoomElement, component, css, mount, on, prop, reactive, styles, throttle, watch } from "@toyz/loom";
 import { route } from "@toyz/loom/router";
 import { entryId, loadApi, sectionId, type Api, type Entry } from "../data";
 import { SECTION_INFO } from "../sections";
@@ -17,24 +17,31 @@ const sheet = css`
   .guide-link { font-weight: 700; white-space: nowrap; }
   .lede { margin-bottom: 26px; }
 
+  /* Flush with the page until it sticks under the header; then it takes the
+     header's look across the whole content column (the negative margins
+     reach over the page padding), with a hairline under it. */
   .tools {
     position: sticky; top: var(--top); z-index: 5;
     display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
-    padding: 12px 0; margin: 0 0 8px;
-    background: var(--bg);
-    border-bottom: 1px solid var(--border);
+    padding: 12px 48px; margin: 0 -48px 8px;
+    border-bottom: 1px solid transparent;
   }
-  .filter { position: relative; flex: 1 1 280px; max-width: 380px; }
+  .tools.stuck {
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom-color: var(--border);
+  }
+  .filter { position: relative; flex: 1 1 280px; max-width: 420px; }
   .filter svg { position: absolute; left: 11px; top: 50%; margin-top: -8px; color: var(--text-faint); pointer-events: none; }
   .filter input {
-    width: 100%; padding: 8px 12px 8px 34px;
+    width: 100%; padding: 8px 112px 8px 34px;
     font: inherit; font-size: 0.95rem; color: var(--text);
     background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: 6px;
   }
   .filter input::placeholder { color: var(--text-faint); }
   .filter input::-webkit-search-cancel-button { display: none; }
   .filter .clear {
-    position: absolute; right: 6px; top: 50%; margin-top: -13px; width: 26px; height: 26px;
+    position: absolute; right: 4px; top: 50%; margin-top: -13px; width: 26px; height: 26px;
     display: grid; place-items: center; border: 0; border-radius: 4px; background: none; color: var(--text-faint); cursor: pointer;
   }
   .filter .clear:hover { color: var(--text); background: var(--bg-hover); }
@@ -48,7 +55,12 @@ const sheet = css`
   }
   .kinds button:hover { color: var(--text); background: var(--bg-hover); }
   .kinds button[aria-pressed="true"] { color: var(--text); border-color: var(--border-strong); background: var(--bg-raised); font-weight: 700; }
-  .count { font-size: 0.85rem; color: var(--text-faint); margin-left: auto; white-space: nowrap; }
+  /* The count lives in the filter's right end, so it never takes a row of its own. */
+  .count {
+    position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+    font-size: 0.8rem; color: var(--text-faint); white-space: nowrap; pointer-events: none; font-variant-numeric: tabular-nums;
+  }
+  .filter.has-text .count { right: 36px; }
 
   section { margin-top: 36px; }
   section h2 { margin: 0 0 4px; font-size: 1.5rem; scroll-margin-top: calc(var(--top) + 70px); }
@@ -79,9 +91,11 @@ const sheet = css`
   @media (max-width: 900px) {
     ul.rows { grid-template-columns: minmax(0, 1fr); }
   }
+  @media (max-width: 760px) {
+    .tools { padding: 10px 16px; margin: 0 -16px 8px; }
+  }
   @media (max-width: 560px) {
     .tools { position: static; }
-    .count { margin-left: 0; }
     a.row { grid-template-columns: minmax(0, 1fr); }
     .row .tag { grid-row: 1; transform: none; margin-bottom: 4px; }
     .doc, .parts { grid-column: 1; }
@@ -107,6 +121,8 @@ export class PageApi extends LoomElement {
   @reactive accessor api: Api | undefined = undefined;
   @reactive accessor kind = "";
   @reactive accessor text = "";
+  /** Whether the filter bar is stuck under the header. */
+  @reactive accessor stuck = false;
 
   /** Which section to show; "" for all. The section route sets it. */
   get only(): string {
@@ -116,6 +132,15 @@ export class PageApi extends LoomElement {
   @mount async load() {
     window.scrollTo(0, 0);
     this.api = await loadApi();
+  }
+
+  @on(window, "scroll")
+  @throttle(50)
+  onScroll() {
+    const bar = this.shadow.querySelector<HTMLElement>(".tools");
+    const style = bar && getComputedStyle(bar);
+    const stuck = !!bar && style!.position === "sticky" && window.scrollY > 0 && bar.getBoundingClientRect().top <= parseFloat(style!.top) + 0.5;
+    if (stuck !== this.stuck) this.stuck = stuck;
   }
 
   /**
@@ -215,8 +240,8 @@ export class PageApi extends LoomElement {
           {info?.blurb ??
             `Every public export, generated from the source on main. Each page has the signature, the docs, examples and a link to the code.`}
         </p>
-        <div class="tools">
-          <label class="filter">
+        <div class={`tools ${this.stuck ? "stuck" : ""}`}>
+          <label class={`filter ${this.text ? "has-text" : ""}`}>
             <span class="visually-hidden">Filter exports</span>
             <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={2.2} stroke-linecap="round" aria-hidden="true">
               <circle cx={11} cy={11} r={7} />
@@ -231,6 +256,9 @@ export class PageApi extends LoomElement {
                 if (e.key === "Escape") this.text = "";
               }}
             />
+            <span class="count" aria-live="polite">
+              {searching ? `${shown} of ${total}` : `${total} exports`}
+            </span>
             {this.text ? (
               <button type="button" class="clear" aria-label="Clear the filter" onClick={() => (this.text = "")}>
                 <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={2.4} stroke-linecap="round" aria-hidden="true">
@@ -246,9 +274,6 @@ export class PageApi extends LoomElement {
               </button>
             ))}
           </div>
-          <span class="count" aria-live="polite">
-            {searching ? `${shown} of ${total}` : `${total} exports`}
-          </span>
         </div>
         {shown === 0 ? (
           <p class="none">
