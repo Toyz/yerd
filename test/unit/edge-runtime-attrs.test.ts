@@ -177,6 +177,29 @@ describe("client halves", () => {
     expect(events).toEqual(["connect s=1", "connect s=1", "disconnect s"]);
   });
 
+  it("registering an attribute searches the page for that one only, not again for every registered name", async () => {
+    const first = tracked();
+    const second = tracked();
+    await flush();
+    const all = vi.spyOn(Element.prototype, "querySelectorAll");
+    const third = tracked();
+    const selectors = all.mock.calls.map(([selector]) => String(selector));
+    expect(selectors.filter((s) => s.includes(first.name) || s.includes(second.name))).toEqual([]);
+    expect(selectors.filter((s) => s.includes(third.name))).toEqual([`[${third.name}]`]);
+  });
+
+  it("an inserted subtree is searched once for every attribute together", async () => {
+    const a = tracked();
+    const b = tracked();
+    await flush();
+    const all = vi.spyOn(Element.prototype, "querySelectorAll");
+    document.body.innerHTML = `<div id="wrap"><p id="pa" ${a.name}="1"></p><p id="pb" ${b.name}="2"></p></div>`;
+    await flush();
+    expect(all.mock.calls.filter(([selector]) => String(selector).includes(a.name))).toHaveLength(1);
+    expect(a.events).toEqual(["connect pa=1"]);
+    expect(b.events).toEqual(["connect pb=2"]);
+  });
+
   it("registering another attribute keeps watching the first", async () => {
     const first = tracked();
     tracked();

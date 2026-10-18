@@ -867,15 +867,21 @@ export function yerdRuntime(): void {
     }
   }
 
-  function scanAttrs(root: Element): void {
-    for (const name of setups.keys()) {
-      if (root.hasAttribute(name)) connectAttr(root, name);
-      for (const el of Array.from(root.querySelectorAll(`[${name}]`))) connectAttr(el, name);
-    }
+  // "[a],[b],...": every registered attribute in one selector, so a scan is one query.
+  let attrSelector = "";
+
+  /** Connect what `root` and its descendants carry of `names` (every registered attribute by default). */
+  function scanAttrs(root: Element, names: Iterable<string> = setups.keys(), selector = attrSelector): void {
+    if (!selector) return;
+    const list = Array.from(names);
+    const found = Array.from(root.querySelectorAll(selector));
+    if (root.matches(selector)) found.unshift(root);
+    for (const el of found) for (const name of list) if (el.hasAttribute(name)) connectAttr(el, name);
   }
 
   function onMutations(records: MutationRecord[]): void {
     let removed = false;
+    const added = new Set<Element>();
     for (const record of records) {
       if (record.type === "attributes") {
         const el = record.target as Element;
@@ -888,9 +894,15 @@ export function yerdRuntime(): void {
           else if (value !== record.oldValue) handle.update?.(value);
         }
       } else {
-        for (const node of Array.from(record.addedNodes)) if (node.nodeType === 1) scanAttrs(node as Element);
+        for (const node of Array.from(record.addedNodes)) if (node.nodeType === 1) added.add(node as Element);
         if (record.removedNodes.length > 0) removed = true;
       }
+    }
+    for (const root of added) {
+      // Inside another added element: searched with it.
+      let up = root.parentElement;
+      while (up && !added.has(up)) up = up.parentElement;
+      if (!up) scanAttrs(root);
     }
     // Moved elements (a keyed morph) are removed and re-added in one batch, so
     // only those still out of the document by now are really gone.
@@ -902,8 +914,7 @@ export function yerdRuntime(): void {
   }
   const observer = new MutationObserver(onMutations);
 
-  function attribute(name: string, setup: Setup): void {
-    setups.set(name, setup);
+  function observe(): void {
     // Re-observe from scratch for the new filter (not every DOM replaces the
     // options of an existing observation), handling what's already queued.
     onMutations(observer.takeRecords());
@@ -915,7 +926,25 @@ export function yerdRuntime(): void {
       attributeOldValue: true,
       attributeFilter: Array.from(setups.keys()),
     });
+  }
+
+  // While the runtime script runs (the built-ins, then the app's client
+  // halves appended to it), registrations only queue: one observe and one
+  // scan of the page cover them all, in a microtask, before the parser
+  // moves on. After that, each registration connects what's already there.
+  let booting = true;
+  queueMicrotask(() => {
+    booting = false;
+    observe();
     scanAttrs(document.documentElement);
+  });
+
+  function attribute(name: string, setup: Setup): void {
+    setups.set(name, setup);
+    attrSelector = Array.from(setups.keys(), (key) => `[${key}]`).join(",");
+    if (booting) return;
+    observe();
+    scanAttrs(document.documentElement, [name], `[${name}]`);
   }
 
   // A press is ~100ms ahead of its click: start fetching a boosted link then.
