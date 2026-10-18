@@ -29,6 +29,23 @@ const sheet = css`
   .part .member { background: var(--bg); }
 `;
 
+/**
+ * Exported interfaces and object types a function's (or const's) signature
+ * names, other than itself: shown on its page so `yerd(options?: YerdOptions)`
+ * lists the options right there. Class pages skip this: their members' types
+ * would pull in half the API.
+ */
+function usedTypes(entry: Entry, api: Api): Entry[] {
+  if (entry.kind !== "function" && entry.kind !== "const") return [];
+  const found: Entry[] = [];
+  for (const other of api.entries) {
+    if (other === entry || other.module !== entry.module) continue;
+    if ((other.kind !== "interface" && other.kind !== "type") || !other.members?.length) continue;
+    if (new RegExp(`(^|[^\\w$.])${other.name.replace(/[$]/g, "\\$&")}(?![\\w$])`).test(entry.signature)) found.push(other);
+  }
+  return found;
+}
+
 const MEMBER_ORDER: Record<Member["kind"], number> = { constructor: 0, property: 1, accessor: 2, method: 3, index: 4 };
 
 @route("/api/:id")
@@ -193,17 +210,24 @@ export class PageApiEntry extends LoomElement {
             {members.map((m) => this.#member(m, entry, api))}
           </>
         ) : null}
-        {entry.parts?.length ? (
-          <>
-            <h2>
-              Related types <span class="count">({entry.parts.length})</span>
-            </h2>
-            {entry.parts
-              .map((name) => api.entries.find((e) => e.module === entry.module && e.name === name))
-              .filter((part): part is Entry => part !== undefined)
-              .map((part) => this.#part(part, api, part.name === focusPart))}
-          </>
-        ) : null}
+        {(() => {
+          // Types this page owns (only it uses them), then shared types its own
+          // signature takes (yerd(options?: YerdOptions)), each with its members.
+          const owned = (entry.parts ?? [])
+            .map((name) => api.entries.find((e) => e.module === entry.module && e.name === name))
+            .filter((part): part is Entry => part !== undefined);
+          const used = usedTypes(entry, api).filter((t) => !owned.includes(t));
+          const types = [...owned, ...used];
+          if (types.length === 0) return null;
+          return (
+            <>
+              <h2>
+                {owned.length && !used.length ? "Related types" : "Types it takes"} <span class="count">({types.length})</span>
+              </h2>
+              {types.map((part) => this.#part(part, api, part.name === focusPart))}
+            </>
+          );
+        })()}
       </article>
     );
   }
