@@ -100,6 +100,7 @@ When the secret changed, the server was redeployed, or a token expired, the clie
 ## Sessions
 
 - **Sealed.** The default [CookieStore](api:yerd.CookieStore) keeps the data in the cookie, encrypted and authenticated with AES-256-GCM: visitors can't read or change it. [MemoryStore](api:yerd.MemoryStore) and other id stores keep only a random id in the (also sealed) cookie, and `MemoryStore` keys its records by a hash of the id, so a dump of the store can't be replayed as cookies.
+- **Its own key.** The session cookie is sealed under a key derived for it alone. [seal()](api:yerd.seal) and [unseal()](api:yerd.unseal) use a different one, so a value your app seals (even one a visitor chose) is never accepted as a session cookie, and a session cookie never opens with `unseal()`. Upgrading from a version before the split invalidates existing sessions and sealed values once: everyone signs in again.
 - **Cookie flags.** Always `HttpOnly`, `SameSite=Lax` and `Path=/`. Over HTTPS also `Secure`, with the `__Host-` name prefix, which stops a subdomain from planting the cookie. Behind a proxy, set `trustProxy` so yerd believes `X-Forwarded-Proto`; see [deploying](11-deploying.md#behind-a-proxy).
 - **Expiry.** `maxAge` idle time (14 days by default, refreshed on activity) and `absoluteMaxAge` from creation (30 days, never extended).
 - **Crashes don't save.** If a request ends in an unhandled crash (anything but an `HttpError`), its session changes are thrown away, so a half-finished login or update never sticks.

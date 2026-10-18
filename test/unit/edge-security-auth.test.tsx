@@ -1,7 +1,7 @@
 // createAuth end to end: fixation, switching users, hooks that fail, guards for every kind of client, deleted users.
 import { scrypt } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { MemoryStore, get, post, query, route, session, yerd, type RunningServer, type Session, type SessionStore } from "@toyz/yerd";
+import { MemoryStore, get, post, query, route, seal, session, unseal, yerd, type RunningServer, type Session, type SessionStore } from "@toyz/yerd";
 import { createAuth, hashPassword, verifyPassword } from "@toyz/yerd/auth";
 
 interface User {
@@ -186,6 +186,22 @@ describe.each<[string, () => SessionStore | undefined]>([
       .listen(0, "127.0.0.1");
   });
   afterAll(() => server.close());
+
+  // An app that seal()s something the client chose must not be minting
+  // session cookies: seal() and the session cookie use different keys.
+  it("a seal() value shaped like a session cookie doesn't sign anyone in", async () => {
+    const now = Date.now();
+    const forged = seal(["u".repeat(32)], { e: 9e15, s: now, r: { data: { __yerd_uid: "1" }, flash: {}, createdAt: now }, i: "x" });
+    const r = await fetch(server.url + "/account", { headers: { cookie: `yerd_session=${forged}`, accept: "application/json" } });
+    expect(r.status).toBe(401);
+  });
+
+  it("a session cookie doesn't open with unseal()", async () => {
+    const c = client(server.url);
+    await c.login("1");
+    expect((await c.me()).user).toBe("ada");
+    expect(unseal(["u".repeat(32)], decodeURIComponent(c.jar.split("=")[1]!))).toBeUndefined();
+  });
 
   it("a session planted before login doesn't become the user's (fixation)", async () => {
     resetHooks();

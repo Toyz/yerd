@@ -1,7 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import type { Outgoing } from "../respond/coerce.js";
 import { serializeCookie } from "../server/cookies.js";
-import { CookieStore, DAY, Session, newSessionId, seal, unseal, type SessionOptions, type SessionRecord, type SessionStore } from "./session.js";
+import { CookieStore, DAY, Session, newSessionId, sealFor, unsealFor, type SessionOptions, type SessionRecord, type SessionStore } from "./session.js";
 
 /** What the cookie carries, always sealed: the record itself (cookie store) or an id (id stores). */
 interface CookiePayload {
@@ -80,10 +80,10 @@ export class SessionManager {
     const secure = this.#secure(req);
     const raw = cookies[this.#cookieName(secure)];
     const now = Date.now();
-    const payload = raw ? unseal<CookiePayload>(this.secrets, raw) : undefined;
+    const payload = raw ? unsealFor<CookiePayload>("session-cookie", this.secrets, raw) : undefined;
     // Written as "not unexpired" so a payload or record without a usable time
-    // (sealed by something else with the app secret, a custom store's bad
-    // record) counts as expired rather than never expiring.
+    // (a malformed payload, a custom store's bad record) counts as expired
+    // rather than never expiring.
     if (!payload || !(payload.e >= now)) return { session: new Session(undefined, undefined), payload: undefined, secure };
 
     let record: SessionRecord | undefined;
@@ -133,7 +133,7 @@ export class SessionManager {
       next.i = id;
     }
 
-    const value = seal(this.secrets, next);
+    const value = sealFor("session-cookie", this.secrets, next);
     if (value.length > COOKIE_LIMIT) {
       throw new Error(`Session data is too big for a cookie (${value.length} bytes); use MemoryStore or your own SessionStore`);
     }

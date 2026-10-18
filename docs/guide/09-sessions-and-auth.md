@@ -160,6 +160,8 @@ Changes are saved after the handler runs, including ones made in place. A reques
 
 The default [CookieStore](api:yerd.CookieStore) keeps the data in the cookie itself, sealed with AES-256-GCM: no server state at all, but a ~4 KB limit. [MemoryStore](api:yerd.MemoryStore) keeps data in the process and only an id in the cookie.
 
+The session cookie is sealed under its own key, not the one [seal()](api:yerd.seal) uses, so nothing your app seals can pass for a session and a session cookie doesn't open with `unseal()`. Upgrading from a version that shared the key signs everyone out once and invalidates values sealed before it.
+
 ```ts
 import { MemoryStore, yerd } from "@toyz/yerd";
 

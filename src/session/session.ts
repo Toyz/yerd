@@ -299,16 +299,39 @@ export class MemoryStore implements SessionStore {
 
 // ── sealing ──
 
-function keyFor(secret: string): Buffer {
-  return Buffer.from(hkdfSync("sha256", secret, "yerd:session", "aes-256-gcm", 32));
+/**
+ * What a sealed value is for. Each purpose seals under its own key, so a
+ * value sealed for one never opens as another: an app's seal() of something
+ * a client influenced can't be replayed as a session cookie, and a session
+ * cookie doesn't open at an endpoint that calls unseal().
+ */
+export type SealPurpose = "session-cookie" | "seal";
+
+// Derived keys by purpose, then secret. Deriving costs about as much as the
+// AES-GCM itself, and a garbage cookie tries every secret. A handful of
+// secrets is normal; the cap only guards against a caller minting them.
+const derived = new Map<SealPurpose, Map<string, Buffer>>();
+const DERIVED_MAX = 32;
+
+function keyFor(purpose: SealPurpose, secret: string): Buffer {
+  let keys = derived.get(purpose);
+  if (!keys) derived.set(purpose, (keys = new Map()));
+  let key = keys.get(secret);
+  if (!key) {
+    key = Buffer.from(hkdfSync("sha256", secret, "", `yerd:${purpose}`, 32));
+    if (keys.size >= DERIVED_MAX) keys.delete(keys.keys().next().value!);
+    keys.set(secret, key);
+  }
+  return key;
 }
 
 /**
  * Encrypt and authenticate a JSON value with AES-256-GCM under the first
- * secret. Output: base64url(iv | tag | ciphertext). The session cookie is
- * built with it; reach for it yourself for a small value that has to
- * round-trip through the client untouched and unread (a "remember me"
- * cookie, a value in a link), or in tests that need a cookie the app accepts.
+ * secret. Output: base64url(iv | tag | ciphertext). Reach for it for a small
+ * value that has to round-trip through the client untouched and unread (a
+ * "remember me" cookie, a value in a link). Its key is its own: a seal()
+ * value is never accepted as a session cookie, and a session cookie never
+ * opens with unseal().
  *
  * ```ts
  * const secrets = [process.env.YERD_SECRET!];
@@ -316,16 +339,13 @@ function keyFor(secret: string): Buffer {
  * ```
  */
 export function seal(secrets: readonly string[], value: unknown): string {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", keyFor(secrets[0]!), iv);
-  const body = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
-  return Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64url");
+  return sealFor("seal", secrets, value);
 }
 
 /**
  * Open a seal() value with any of the secrets (rotation: new first, old
  * still accepted). Undefined if it was tampered with, sealed under another
- * secret, or isn't a sealed value at all. `T` is only a cast: check what
+ * secret, or isn't a seal() value at all. `T` is only a cast: check what
  * you get back, the same way you'd check any input.
  *
  * ```ts
@@ -334,6 +354,19 @@ export function seal(secrets: readonly string[], value: unknown): string {
  * ```
  */
 export function unseal<T>(secrets: readonly string[], sealed: string): T | undefined {
+  return unsealFor<T>("seal", secrets, sealed);
+}
+
+/** seal() under the key for `purpose`. */
+export function sealFor(purpose: SealPurpose, secrets: readonly string[], value: unknown): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", keyFor(purpose, secrets[0]!), iv);
+  const body = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64url");
+}
+
+/** unseal() under the keys for `purpose`. */
+export function unsealFor<T>(purpose: SealPurpose, secrets: readonly string[], sealed: string): T | undefined {
   let raw: Buffer;
   try {
     raw = Buffer.from(sealed, "base64url");
@@ -346,7 +379,7 @@ export function unseal<T>(secrets: readonly string[], sealed: string): T | undef
   const body = raw.subarray(28);
   for (const secret of secrets) {
     try {
-      const decipher = createDecipheriv("aes-256-gcm", keyFor(secret), iv);
+      const decipher = createDecipheriv("aes-256-gcm", keyFor(purpose, secret), iv);
       decipher.setAuthTag(tag);
       return JSON.parse(Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8")) as T;
     } catch {

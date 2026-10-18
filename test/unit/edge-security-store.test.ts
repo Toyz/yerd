@@ -2,9 +2,9 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MemoryStore, seal, unseal, type SessionRecord, type SessionStore } from "@toyz/yerd";
+import { MemoryStore, seal, unseal, yerd, type SessionRecord, type SessionStore } from "@toyz/yerd";
 import { SessionManager, checkSessionOptions, type LoadedSession } from "../../src/session/manager.js";
-import { DAY, type SessionOptions } from "../../src/session/session.js";
+import { DAY, sealFor, unsealFor, type SessionOptions } from "../../src/session/session.js";
 import type { Outgoing } from "../../src/respond/coerce.js";
 
 const SECRET = "m".repeat(32);
@@ -35,6 +35,10 @@ function req(headers: Record<string, string | string[]> = {}, encrypted = false)
 }
 
 const out = (): Outgoing => ({ status: 200, headers: {}, body: null });
+
+/** Seal/open the way the session cookie is: its own key, not seal()'s. */
+const sealSession = (secrets: readonly string[], value: unknown) => sealFor("session-cookie", secrets, value);
+const unsealSession = (secrets: readonly string[], value: string) => unsealFor("session-cookie", secrets, value);
 
 /** Name, value and attributes of a Set-Cookie line. */
 function parseSet(line: string) {
@@ -262,16 +266,16 @@ describe("SessionManager: corrupted and foreign cookies", () => {
   it.each([
     ["garbage", "not-a-session"],
     ["empty", ""],
-    ["sealed with another secret", seal(["z".repeat(32)], { r: record({ name: "eve" }), e: T0 * 2, s: T0 })],
-    ["sealed null", seal([SECRET], null)],
-    ["sealed number", seal([SECRET], 42)],
-    ["sealed string", seal([SECRET], "hello")],
-    ["sealed array", seal([SECRET], [1, 2])],
-    ["no expiry", seal([SECRET], { r: record({ name: "eve" }), s: T0 })],
-    ["record missing", seal([SECRET], { e: Date.now() + DAY, s: Date.now() })],
-    ["an id-store payload under a cookie store", seal([SECRET], { i: "some-id", e: Date.now() + DAY, s: Date.now() })],
-    ["a non-numeric expiry", seal([SECRET], { r: record({ name: "eve" }), e: "soon", s: T0 })],
-    ["a record without createdAt", seal([SECRET], { r: { data: { name: "eve" }, flash: {} }, e: Date.now() + DAY, s: Date.now() })],
+    ["sealed with another secret", sealSession(["z".repeat(32)], { r: record({ name: "eve" }), e: T0 * 2, s: T0 })],
+    ["sealed null", sealSession([SECRET], null)],
+    ["sealed number", sealSession([SECRET], 42)],
+    ["sealed string", sealSession([SECRET], "hello")],
+    ["sealed array", sealSession([SECRET], [1, 2])],
+    ["no expiry", sealSession([SECRET], { r: record({ name: "eve" }), s: T0 })],
+    ["record missing", sealSession([SECRET], { e: Date.now() + DAY, s: Date.now() })],
+    ["an id-store payload under a cookie store", sealSession([SECRET], { i: "some-id", e: Date.now() + DAY, s: Date.now() })],
+    ["a non-numeric expiry", sealSession([SECRET], { r: record({ name: "eve" }), e: "soon", s: T0 })],
+    ["a record without createdAt", sealSession([SECRET], { r: { data: { name: "eve" }, flash: {} }, e: Date.now() + DAY, s: Date.now() })],
   ])("%s: a fresh session, no crash", async (_label, value) => {
     const loaded = await manager.load(req(), { yerd_session: value });
     expect(loaded.payload).toBeUndefined();
@@ -282,13 +286,13 @@ describe("SessionManager: corrupted and foreign cookies", () => {
   it("a custom store's record without createdAt counts as expired, not immortal", async () => {
     const store: SessionStore = { kind: "id", get: () => ({ data: { name: "eve" }, flash: {} }) as unknown as SessionRecord, set() {}, destroy() {} };
     const ids = new SessionManager({ store }, [SECRET]);
-    const value = seal([SECRET], { i: "x", e: Date.now() + DAY, s: Date.now() });
+    const value = sealSession([SECRET], { i: "x", e: Date.now() + DAY, s: Date.now() });
     expect((await ids.load(req(), { yerd_session: value })).payload).toBeUndefined();
   });
 
   it("a cookie payload under an id store is a fresh session", async () => {
     const ids = new SessionManager({ store: new MemoryStore() }, [SECRET]);
-    const value = seal([SECRET], { r: record({ name: "eve" }), e: Date.now() + DAY, s: Date.now() });
+    const value = sealSession([SECRET], { r: record({ name: "eve" }), e: Date.now() + DAY, s: Date.now() });
     const loaded = await ids.load(req(), { yerd_session: value });
     expect(loaded.payload).toBeUndefined();
     expect(loaded.session.get("name" as never)).toBeUndefined();
@@ -296,7 +300,7 @@ describe("SessionManager: corrupted and foreign cookies", () => {
 
   it("an id the store doesn't know is a fresh session", async () => {
     const ids = new SessionManager({ store: new MemoryStore() }, [SECRET]);
-    const value = seal([SECRET], { i: "forgotten", e: Date.now() + DAY, s: Date.now() });
+    const value = sealSession([SECRET], { i: "forgotten", e: Date.now() + DAY, s: Date.now() });
     expect((await ids.load(req(), { yerd_session: value })).payload).toBeUndefined();
   });
 
@@ -308,7 +312,25 @@ describe("SessionManager: corrupted and foreign cookies", () => {
     c.tick(2 * DAY); // past the refresh point: a rolling session is reissued
     const second = await roundTrip(rotated, jarOf(first.line), (s) => expect(s.get("name" as never)).toBe("ada"));
     const value = parseSet(second.line!).value;
-    expect(unseal(["n".repeat(32)], value)).toBeDefined();
+    expect(unsealSession(["n".repeat(32)], value)).toBeDefined();
+    expect(unsealSession([SECRET], value)).toBeUndefined();
+  });
+
+  // The app seals something a client chose (a "remember me" value, a link
+  // token) with seal(): that must never pass for a session cookie.
+  it("a seal() value shaped like a session cookie is a fresh session, not a sign-in", async () => {
+    const forged = seal([SECRET], { e: 9e15, r: { data: { __yerd_uid: "1" }, flash: {}, createdAt: Date.now() }, s: Date.now() });
+    const loaded = await manager.load(req(), { yerd_session: forged });
+    expect(loaded.payload).toBeUndefined();
+    expect(loaded.session.get("__yerd_uid" as never)).toBeUndefined();
+    const ids = new SessionManager({ store: new MemoryStore() }, [SECRET]);
+    expect((await ids.load(req(), { yerd_session: seal([SECRET], { i: "x", e: 9e15, s: Date.now() }) })).payload).toBeUndefined();
+  });
+
+  it("a session cookie doesn't open with unseal()", async () => {
+    const { line } = await roundTrip(manager, {}, (s) => s.set("name" as never, "ada" as never));
+    const value = parseSet(line!).value;
+    expect(unsealSession([SECRET], value)).toBeDefined();
     expect(unseal([SECRET], value)).toBeUndefined();
   });
 });
@@ -347,9 +369,9 @@ describe("SessionManager: expiry and clocks", () => {
   it("absolute expiry is checked against createdAt in the record, even with a fresh idle expiry", async () => {
     clock();
     const manager = new SessionManager({ absoluteMaxAge: 1000 }, [SECRET]);
-    const forged = seal([SECRET], { r: record({ name: "ada" }, Date.now() - 1001), e: Date.now() + DAY, s: Date.now() });
+    const forged = sealSession([SECRET], { r: record({ name: "ada" }, Date.now() - 1001), e: Date.now() + DAY, s: Date.now() });
     expect((await manager.load(req(), { yerd_session: forged })).payload).toBeUndefined();
-    const edge = seal([SECRET], { r: record({ name: "ada" }, Date.now() - 1000), e: Date.now() + DAY, s: Date.now() });
+    const edge = sealSession([SECRET], { r: record({ name: "ada" }, Date.now() - 1000), e: Date.now() + DAY, s: Date.now() });
     expect((await manager.load(req(), { yerd_session: edge })).session.get("name" as never)).toBe("ada");
   });
 
