@@ -196,6 +196,14 @@ the back office's order bell is a private `"staff"` room, streamed from
 | `attribute()` with server and client halves | `money` (prices in the visitor's locale), `ago`, client-only `ticker` |
 | `prefetch`, `<Scripts auto />` | nav links, product links; every link and form is enhanced |
 
+**Client code** (`src/widgets/*.client.ts`, built by the plugin without being listed):
+
+| Feature | Where |
+|---------|-------|
+| `island<SparklineProps>(src, { when: "visible" })` | the dashboard's "Sales over time" canvas |
+| `lazyElement("share-link", src, { when: "idle" })` | the Share button on a product page |
+| `attribute("confetti", { client: src, when: "interaction" })` | the product page's Add to cart button |
+
 **Pages and assets**: `<Stylesheet href="src/styles.css" />`,
 `assetUrl("src/hero.svg")` (both hashed by the build), an eager
 `fetchpriority="high"` hero, lazy `decoding="async"` product images with

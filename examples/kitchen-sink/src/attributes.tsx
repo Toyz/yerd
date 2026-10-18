@@ -1,4 +1,4 @@
-import { attribute } from "@toyz/yerd";
+import { attribute, lazyElement } from "@toyz/yerd";
 
 declare module "@toyz/yerd" {
   interface CustomAttributes {
@@ -10,6 +10,8 @@ declare module "@toyz/yerd" {
     ticker?: string;
     /** Plays a cue as synthesized sound when it reaches the element, and shows its message. */
     horn?: boolean;
+    /** A burst of confetti on click. */
+    confetti?: boolean;
   }
 }
 
@@ -168,3 +170,21 @@ export const horn = attribute<boolean>("horn", {
     };
   },
 });
+
+/**
+ * `confetti`: a client half too big to send with every page, so it's a
+ * module, imported the first time a visitor points at, presses or focuses
+ * an element that has it ("interaction"), which is before the click.
+ */
+export const confetti = attribute<boolean>("confetti", {
+  render: (on) => (on ? { confetti: "" } : {}),
+  client: "src/widgets/confetti.client.ts",
+  when: "interaction",
+});
+
+/**
+ * <share-link>: a lazy custom element. Its module defines it, and is
+ * imported once the browser is idle on a page that has one; until then the
+ * plain link the server rendered inside it shows.
+ */
+export const shareLink = lazyElement("share-link", "src/widgets/share-link.client.ts", { when: "idle" });

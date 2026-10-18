@@ -144,9 +144,13 @@ export class ProductPage {
             <p>{product.description}</p>
             <Stock stock={product.stock} />
             <form action={() => this.addToCart({ id: product.id })}>
-              <button class="btn" disabled={product.stock === 0}>Add to cart</button>
+              <button class="btn" disabled={product.stock === 0} confetti>Add to cart</button>
             </form>
             <Toast />
+            {/* Keyed and kept: a morph leaves the upgraded element alone, and another product gets a fresh one. */}
+            <share-link key={product.slug} data-yx-keep url={absolute(`/products/${product.slug}`)} name={product.name}>
+              <a href={absolute(`/products/${product.slug}`)}>Link to this gnome</a>
+            </share-link>
             <p class="muted small">
               Embed it on your own site: <a href={`/products/${product.slug}/embed`}>/products/{product.slug}/embed</a>
             </p>

@@ -1,6 +1,14 @@
-import { Local, Region, eq, not, type Action, type ActionValue, type Child } from "@toyz/yerd";
+import { Local, Region, eq, island, not, type Action, type ActionValue, type Child } from "@toyz/yerd";
 import { Price } from "./attributes.js";
 import { CATEGORIES, imageUrl, slideCount, slideLabel, type Product } from "./catalog.js";
+import type { SparklineProps } from "./widgets/sparkline.client.js";
+
+/**
+ * An island: the dashboard's sales sparkline, drawn on a canvas by
+ * widgets/sparkline.client.ts once it scrolls into view. The props type is
+ * the module's own, so what the server passes is checked.
+ */
+export const Sparkline = island<SparklineProps>("src/widgets/sparkline.client.ts", { when: "visible" });
 
 /**
  * Product art: lazy, async-decoded, with a srcset so small screens fetch the

@@ -1,7 +1,7 @@
 import { ActionForm, Channels, Cues, NotFound, Region, action, css, get, group, inject, keyframes, query, route, signal, sse, type Action } from "@toyz/yerd";
 import { Ago, Price } from "../attributes.js";
 import { CATEGORIES, CATEGORY_IDS, Catalog, DroppedPhotos, EditProductForm, NewProductForm, imageUrl, type Product } from "../catalog.js";
-import { Stock } from "../components.js";
+import { Sparkline, Stock } from "../components.js";
 import { Orders, orderChannel, type Uuid } from "../cart.js";
 import { AdminLayout } from "../layouts.js";
 import { EventLog, eventLogChannel } from "../events.js";
@@ -79,6 +79,17 @@ function Pulse({ tick, online }: { tick: Action; online: number }) {
   );
 }
 
+/** The last sales as a sparkline; the same numbers as text until it mounts (and without JavaScript). */
+function SalesTrend({ totals }: { totals: number[] }) {
+  if (totals.length < 2) return <p class="muted">Give it a few seconds.</p>;
+  const label = `The last ${totals.length} sales, from $${(Math.min(...totals) / 100).toFixed(2)} to $${(Math.max(...totals) / 100).toFixed(2)}`;
+  return (
+    <Sparkline class="trend" props={{ points: totals, label }}>
+      <p class="muted small">{label}.</p>
+    </Sparkline>
+  );
+}
+
 @route("/", { group: Admin, meta: { title: "Dashboard", area: "dashboard" } })
 export class Dashboard {
   @inject(SalesFeed) accessor sales!: SalesFeed;
@@ -133,6 +144,13 @@ export class Dashboard {
             </Region>
           </section>
         </div>
+        <section class="panel">
+          <h2>Sales over time</h2>
+          {/* An island, refreshed with the page: new props remount it with the new line. */}
+          <Region id="trend">
+            <SalesTrend totals={this.sales.recent(30).reverse().map((s) => s.totalCents)} />
+          </Region>
+        </section>
       </>
     );
   }

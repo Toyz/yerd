@@ -648,3 +648,44 @@ test("private cue room: an order rings the bell on every staff dashboard, and no
   await expect(bell).toContainText("from @cy");
   await staff.close();
 });
+
+test("client code: the dashboard's sparkline island loads and draws once it scrolls into view", async ({ page }) => {
+  const fetched: string[] = [];
+  page.on("request", (request) => fetched.push(request.url()));
+  await page.setViewportSize({ width: 1000, height: 500 });
+  await ada(page);
+  // The made-up crowd buys every few seconds and the live feed refreshes the Region: two sales make a line.
+  const island = page.locator("yerd-island.trend");
+  await expect(island).toBeAttached({ timeout: 15_000 });
+  await expect(island).toHaveAttribute("data-yx-when", "visible");
+  expect(fetched.some((url) => url.includes("sparkline.client"))).toBe(false);
+  await expect(island.locator("canvas")).toHaveCount(0);
+
+  await island.scrollIntoViewIfNeeded();
+  await expect(page.locator("yerd-island.trend canvas.sparkline")).toBeVisible();
+  await expect(page.locator("yerd-island.trend")).not.toHaveAttribute("data-yx-loading");
+  expect(fetched.some((url) => url.includes("sparkline.client"))).toBe(true);
+});
+
+test("client code: <share-link> upgrades once the browser is idle, and confetti's module loads on interaction", async ({ browser }) => {
+  // Headless Chrome counts as a bot, which gets the script-free product page: be a person.
+  const context = await browser.newContext({ userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36" });
+  const page = await context.newPage();
+  const fetched: string[] = [];
+  page.on("request", (request) => fetched.push(request.url()));
+  await page.goto("/products/disco-gnome");
+  // The server's plain link, replaced by the element's own button once its module defines it.
+  await expect(page.locator("share-link button")).toHaveText("Share");
+  await expect(page.locator("share-link a")).toHaveCount(0);
+  expect(await page.evaluate(() => customElements.get("share-link") !== undefined)).toBe(true);
+  await expect(page.locator("share-link")).not.toHaveAttribute("data-yx-loading");
+
+  const button = page.getByRole("button", { name: "Add to cart" });
+  expect(fetched.some((url) => url.includes("confetti.client"))).toBe(false);
+  await expect(button).not.toHaveAttribute("data-confetti-ready");
+  await button.hover();
+  await expect(button).toHaveAttribute("data-confetti-ready", "");
+  await expect(button).not.toHaveAttribute("data-yx-loading");
+  expect(fetched.some((url) => url.includes("confetti.client"))).toBe(true);
+  await context.close();
+});

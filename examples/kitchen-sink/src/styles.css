@@ -363,3 +363,8 @@ tr.highlight td { background: var(--accent-soft); }
 .handler.ok { color: var(--ok); }
 .handler.retrying { color: var(--warn); }
 .handler.failed { color: var(--danger); }
+
+/* Client code: the dashboard's island and the product page's share button. */
+yerd-island.trend { display: block; min-height: 64px; }
+.sparkline { display: block; }
+share-link { display: inline-block; margin: 8px 0; }
