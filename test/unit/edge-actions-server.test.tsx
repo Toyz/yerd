@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  ActionForm, HttpError, Region, action, bind, createGuard, get, guards, is, length, param, post, query, redirect, route, yerd,
+  ActionForm, HttpError, Region, action, bind, createGuard, currentContext, get, guards, is, length, param, post, query, redirect, res, route, yerd,
   type RunningServer,
 } from "@toyz/yerd";
 import { safeNext } from "@toyz/yerd/auth";
@@ -62,6 +62,11 @@ class Edge {
 
   @action leave() {
     return redirect("/elsewhere?x=1");
+  }
+
+  @action signIn() {
+    currentContext().setCookie("seen", "1");
+    return res(null, { status: 303, headers: { location: "/account" }, cookies: [{ name: "who", value: "ada" }] });
   }
 
   @action fail() {
@@ -506,6 +511,16 @@ describe("guards, redirects and responses", () => {
     const plain = await post_("/edge", fields({ _yx: token("leave") }));
     expect(plain.status).toBe(303);
     expect(plain.headers.get("location")).toBe("/elsewhere?x=1");
+  });
+
+  it("a scripted redirect keeps the response's cookies and the context's", async () => {
+    const scripted = await post_("/edge", fields({ _yx: token("signIn") }), { yx: "1" });
+    expect(scripted.status).toBe(200);
+    expect(scripted.headers.get("yx-location")).toBe("/account");
+    expect(scripted.headers.getSetCookie().map((c) => c.split(";")[0])).toEqual(["who=ada", "seen=1"]);
+    const plain = await post_("/edge", fields({ _yx: token("signIn") }));
+    expect(plain.status).toBe(303);
+    expect(plain.headers.getSetCookie().map((c) => c.split(";")[0])).toEqual(["who=ada", "seen=1"]);
   });
 
   it.each([

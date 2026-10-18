@@ -1668,13 +1668,11 @@ export class YerdApp {
 
     const fromScript = context.headers["yx"] !== undefined;
     if (fromScript) {
-      // fetch() would follow a redirect itself; tell the runtime instead.
-      if (result instanceof YerdResponse && result.status >= 300 && result.status < 400 && result.headers.location) {
-        return { status: 200, headers: { "yx-location": result.headers.location }, body: null };
-      }
       // Nothing returned: the runtime refreshes the page's regions.
       if (result === undefined || result === null) return { status: 204, headers: {}, body: null };
-      // JSX comes back bare: just the regions, no layouts.
+      // JSX comes back bare: just the regions, no layouts. A redirect is
+      // coerced as it is: #serve turns it into yx-location for every
+      // scripted request, after the context's cookies and headers are on.
       return coerce(result, { layouts: [], meta: context.meta });
     }
 
