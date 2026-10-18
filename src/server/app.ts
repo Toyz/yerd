@@ -649,7 +649,8 @@ export class YerdApp {
   /**
    * The sitemap's entries, with absolute URLs, as /sitemap.xml lists them:
    * for tests, or to write the file yourself. URLs start with `origin`, else
-   * the one given to app.sitemap(). Boots the app.
+   * the one given to app.sitemap(). Boots the app without starting it:
+   * call start() first if @sitemap methods need what @onBoot hooks load.
    *
    * ```ts
    * const entries = await app.sitemapEntries();
