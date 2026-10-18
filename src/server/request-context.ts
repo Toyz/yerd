@@ -20,6 +20,7 @@ import { assertStatus, checkHeader } from "../respond/response.js";
 import type { ResponseDefaults } from "../decorators/response.js";
 import { REQUEST_SPAN, newSpanId, type Span } from "../log/span.js";
 import { HttpError } from "../respond/response.js";
+import { abortOnClose, forwarded, mergeVary, requestIdFrom, requestIsHttps } from "./http.js";
 
 export interface RequestEnv {
   secrets: readonly string[];
@@ -30,20 +31,6 @@ export interface RequestEnv {
   actionTtl: number;
   /** Believe X-Forwarded-Proto / X-Forwarded-Host (behind a reverse proxy). */
   trustProxy: boolean;
-}
-
-/** Split a request target into path and search without building a URL object. */
-export function splitTarget(target: string): { path: string; search: string } {
-  const q = target.indexOf("?");
-  return q === -1 ? { path: target, search: "" } : { path: target.slice(0, q), search: target.slice(q) };
-}
-
-/** `existing` plus the names in `added` it doesn't list yet (case-insensitive). */
-function mergeVary(existing: string | undefined, added: string): string {
-  if (!existing) return added;
-  const have = existing.toLowerCase().split(/\s*,\s*/);
-  const extra = added.split(/\s*,\s*/).filter((name) => name && !have.includes(name.toLowerCase()));
-  return extra.length === 0 ? existing : `${existing}, ${extra.join(", ")}`;
 }
 
 export class RequestContext implements YerdContext {
@@ -92,24 +79,20 @@ export class RequestContext implements YerdContext {
 
   /**
    * The full request URL. https when the connection is TLS, or (with
-   * `trustProxy`) when X-Forwarded-Proto says so; the host comes from
-   * X-Forwarded-Host under the same rule, else Host.
+   * `trustProxy`) when X-Forwarded-Proto says so, in any case: the same
+   * rule as the session cookie's Secure flag (see requestIsHttps). The host
+   * comes from X-Forwarded-Host under `trustProxy`, else Host.
    */
   get url(): URL {
     if (!this.#url) {
       const headers = this.req.headers;
-      const forwarded = (name: string) => {
-        const value = headers[name];
-        return (Array.isArray(value) ? value[0] : value)?.split(",")[0]!.trim() || undefined;
-      };
-      const tls = (this.req.socket as { encrypted?: boolean }).encrypted === true;
-      const proto = (this.env.trustProxy ? forwarded("x-forwarded-proto") : undefined) ?? (tls ? "https" : "http");
-      const host = (this.env.trustProxy ? forwarded("x-forwarded-host") : undefined) ?? headers.host ?? "localhost";
+      const https = requestIsHttps(this.req, this.env.trustProxy);
+      const host = (this.env.trustProxy ? forwarded(headers["x-forwarded-host"]) : undefined) ?? headers.host ?? "localhost";
       // Path and query are set on their own: resolved against a base, a request
       // for "//evil.com/x" (or "/\evil.com/x") would be read as a URL on evil.com.
       let url: URL;
       try {
-        url = new URL(`${proto === "https" ? "https" : "http"}://${host}`);
+        url = new URL(`${https ? "https" : "http"}://${host}`);
       } catch {
         // The client's own fault ("Host: a b"): a 400, not a crash logged as a server error.
         throw new HttpError(400, "Malformed Host header");
@@ -150,16 +133,7 @@ export class RequestContext implements YerdContext {
 
   /** Aborts when the client disconnects or the server shuts down. Created (and wired up) on first use. */
   get signal(): AbortSignal {
-    if (!this.#abort) {
-      const abort = (this.#abort = new AbortController());
-      const res = this.res;
-      if (res.destroyed && !res.writableFinished) abort.abort(new Error("client disconnected"));
-      else
-        res.once("close", () => {
-          if (!res.writableFinished) abort.abort(new Error("client disconnected"));
-        });
-    }
-    return this.#abort.signal;
+    return (this.#abort ??= abortOnClose(this.res)).signal;
   }
 
   /** End the request's work (graceful shutdown of long-lived streams). */
@@ -171,11 +145,7 @@ export class RequestContext implements YerdContext {
   get requestId(): string {
     const span = (this.req as unknown as Record<symbol, Span | undefined>)[REQUEST_SPAN];
     if (span) return span.id;
-    if (this.#requestId === undefined) {
-      const given = this.req.headers["x-request-id"];
-      this.#requestId = typeof given === "string" && /^[\w.:@-]{1,128}$/.test(given) ? given : newSpanId();
-    }
-    return this.#requestId;
+    return (this.#requestId ??= requestIdFrom(this.req) ?? newSpanId());
   }
 
   setHeader(name: string, value: string): void {

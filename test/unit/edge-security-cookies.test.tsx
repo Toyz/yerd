@@ -49,6 +49,16 @@ describe("proxies and the session cookie", () => {
     expect(await page.json()).toEqual({ name: "ada", url: "https://app.example/name" });
   });
 
+  it("X-Forwarded-Proto is read case-insensitively by ctx.url and the cookie alike", async () => {
+    const server = await start(yerd({ routes: [Name], services: [], handleSignals: false, secret: SECRET, trustProxy: true }).sessions());
+    const r = await fetch(server.url + "/name?v=ada", { method: "POST", headers: { "x-forwarded-proto": "HTTPS" } });
+    const [line] = r.headers.getSetCookie();
+    expect(cookieName(line!)).toBe("__Host-yerd_session");
+    // Once ctx.url said http: while the cookie went out Secure.
+    const page = await fetch(server.url + "/name", { headers: { "x-forwarded-proto": "HTTPS", "x-forwarded-host": "app.example", cookie: line!.split(";")[0]! } });
+    expect(await page.json()).toEqual({ name: "ada", url: "https://app.example/name" });
+  });
+
   it("a sessions({ trustProxy: false }) override ignores the header even when the app trusts it", async () => {
     const server = await start(yerd({ routes: [Name], services: [], handleSignals: false, secret: SECRET, trustProxy: true }).sessions({ trustProxy: false }));
     const r = await fetch(server.url + "/name?v=ada", { method: "POST", headers: { "x-forwarded-proto": "https" } });

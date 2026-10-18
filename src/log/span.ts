@@ -15,6 +15,7 @@ import { randomFillSync } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { currentServices } from "../di/container.js";
 import { maybeContext } from "../server/context.js";
+import { requestIdFrom } from "../server/http.js";
 import { ConsoleLogger } from "./console.js";
 import { LogFilter, defaultFilter } from "./filter.js";
 import type { ILogger, Level, LogRecord, SpanRecord } from "./ilogger.js";
@@ -234,7 +235,6 @@ function elapsed(span: Span): number {
 
 // ── the request root span ──
 
-const REQUEST_ID = /^[\w.:@-]{1,128}$/;
 const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/;
 
 /**
@@ -244,8 +244,7 @@ const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/;
  */
 export function startRequestSpan(binding: LogBinding, req: IncomingMessage, method: string, path: string): Span | undefined {
   if (!binding.filter.enabled("info", "yerd::request")) return undefined;
-  const given = req.headers["x-request-id"];
-  const id = typeof given === "string" && REQUEST_ID.test(given) ? given : newSpanId();
+  const id = requestIdFrom(req) ?? newSpanId();
   const parent = req.headers.traceparent;
   const trace = typeof parent === "string" ? TRACEPARENT.exec(parent) : null;
   return {

@@ -31,6 +31,7 @@ import { createGuard, onGuardRegistryReset, type GuardRef } from "../decorators/
 import { safeBack } from "../actions/action.js";
 import { HttpError } from "../respond/response.js";
 import { currentContext, maybeContext, type YerdContext } from "../server/context.js";
+import { wantsPage } from "../server/http.js";
 import type { Middleware } from "../server/app.js";
 import type { Session } from "../session/session.js";
 
@@ -253,11 +254,6 @@ export interface Auth<User> {
  */
 export const safeNext: (value: string | null | undefined, fallback?: string) => string = safeBack;
 
-/** Browsers (and yerd's runtime, which asks for HTML) get the login redirect; APIs get a 401. */
-function wantsPage(ctx: YerdContext): boolean {
-  return (ctx.headers.accept ?? "").includes("text/html");
-}
-
 /**
  * Set up session-based sign-in for a user type. Needs app.sessions() and
  * app.use(auth). Each request loads the signed-in user once (an id whose
@@ -350,7 +346,8 @@ export function createAuth<User>(options: AuthOptions<User>): Auth<User> {
   const required = createGuard("auth.required", (ctx) => {
     if (ctx.prerendering) throw new Error("auth.required: a route that needs a signed-in user can't be prerendered");
     if (current(ctx) !== undefined) return true;
-    if (wantsPage(ctx)) return `${loginPath}${loginPath.includes("?") ? "&" : "?"}next=${encodeURIComponent(ctx.path + ctx.url.search)}`;
+    // Browsers and yerd's runtime get the login redirect; APIs get a 401.
+    if (wantsPage(ctx.headers)) return `${loginPath}${loginPath.includes("?") ? "&" : "?"}next=${encodeURIComponent(ctx.path + ctx.url.search)}`;
     throw new HttpError(401, "Sign in first");
   });
 

@@ -9,6 +9,7 @@ import { renderToStream } from "../render/render.js";
 import { assertStatus, isBare, YerdResponse, type HeaderInit } from "./response.js";
 import { choose, isNegotiated, media, type MediaRange, type Negotiated } from "./negotiate.js";
 import { isAsyncIterable } from "../decorators/util.js";
+import { mergeVary } from "../server/http.js";
 
 export type Body = null | string | Uint8Array | AsyncIterable<string | Uint8Array>;
 
@@ -109,9 +110,7 @@ async function coerceNegotiated(value: Negotiated, options: CoerceOptions): Prom
   } else if (!explicit && type !== "text/html" && (typeof out.body === "string" || out.body instanceof Uint8Array)) {
     out.headers["content-type"] = type.startsWith("text/") ? `${type}; charset=utf-8` : type;
   }
-  const vary = out.headers.vary;
-  if (!vary) out.headers.vary = "accept";
-  else if (!vary.toLowerCase().split(/\s*,\s*/).includes("accept")) out.headers.vary = `${vary}, accept`;
+  out.headers.vary = mergeVary(out.headers.vary, "accept");
   return out;
 }
 

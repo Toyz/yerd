@@ -41,7 +41,8 @@ import { DEFAULT_BODY_LIMIT, readBody, readNdjson, type ParsedBody } from "./bod
 import { acceptsEncoding, createMount, serveStatic, type StaticMount, type StaticOptions } from "./static.js";
 import { useManifest } from "../assets.js";
 import { runWithContext, type RouteInfo, type YerdContext } from "./context.js";
-import { RequestContext, splitTarget, type RequestEnv } from "./request-context.js";
+import { RequestContext, type RequestEnv } from "./request-context.js";
+import { abortOnClose, forwarded, isStreamBody, mergeVary, splitTarget, wantsPage } from "./http.js";
 import { CATCHES, METHOD_RESPONSE } from "../decorators/response.js";
 import { ConsoleLogger } from "../log/console.js";
 import { LogFilter, defaultFilter } from "../log/filter.js";
@@ -1262,9 +1263,7 @@ export class YerdApp {
     }
     // The request's root span: request id, trace context, and on the way
     // out the access log line. Nothing is created when request logging is off.
-    const rawUrl = req.url ?? "/";
-    const q = rawUrl.indexOf("?");
-    const span = startRequestSpan(this.#log!, req, req.method ?? "GET", q === -1 ? rawUrl : rawUrl.slice(0, q));
+    const span = startRequestSpan(this.#log!, req, req.method ?? "GET", splitTarget(req.url ?? "/").path);
     if (!span) return this.#serve(req, res, next);
     (req as unknown as Record<symbol, unknown>)[REQUEST_SPAN] = span;
     res.setHeader("x-request-id", span.id);
@@ -1388,7 +1387,7 @@ export class YerdApp {
           context.loadedSession = await sessions.load(req, context.cookies);
           // Pages that may render action forms get their CSRF nonce now, while
           // the session can still be committed (see RequestContext.csrfNonce).
-          if (this.#hasActions && wantsPage(req)) context.csrfNonce();
+          if (this.#hasActions && wantsPage(req.headers)) context.csrfNonce();
         }
         out = await inRequest(() => this.#runMiddleware(context, async () => {
           if (mayBeAction) {
@@ -1421,11 +1420,11 @@ export class YerdApp {
           const args = serving.args ? await Promise.all(serving.args.map((r) => r.resolve(context))) : [];
           const result = await fn.apply(instance, args);
           const out = await coerce(result, { layouts: serving.layouts, meta: context.meta, dynamic, accept: req.headers.accept });
-          if (negotiated) addVary(out.headers, "accept");
+          if (negotiated) out.headers.vary = mergeVary(out.headers.vary, "accept");
           return out;
         }));
         // Whichever handler answered, the response depended on what the variants' tests read.
-        for (const variant of variants) if (variant.when!.vary) addVary(out.headers, variant.when!.vary);
+        for (const variant of variants) if (variant.when!.vary) out.headers.vary = mergeVary(out.headers.vary, variant.when!.vary);
         // Render up to the first chunk now, so an error at the top of the page
         // (a layout, an early component) still becomes the error page.
         if (isPageStream(out)) out = await inRequest(() => primeStream(out));
@@ -1466,7 +1465,7 @@ export class YerdApp {
         out.headers["cache-control"] = "private, no-cache";
       }
       // Only streams need the abort signal (client gone, shutdown); plain bodies skip creating one.
-      const streaming = out.body !== null && typeof out.body !== "string" && !(out.body instanceof Uint8Array);
+      const streaming = isStreamBody(out.body);
       const longLived = out.headers[LONG_LIVED] !== undefined;
       if (longLived) this.#streams.add(context);
       try {
@@ -1499,12 +1498,7 @@ export class YerdApp {
       }
       return send(res, errorResponse(403), false, undefined);
     }
-    const abort = new AbortController();
-    const gone = () => {
-      if (!res.writableFinished) abort.abort(new Error("client disconnected"));
-    };
-    if (res.destroyed) gone();
-    else res.once("close", gone);
+    const abort = abortOnClose(res);
     const stream = { abort: (reason: unknown) => abort.abort(reason) };
     this.#streams.add(stream);
     try {
@@ -1512,7 +1506,6 @@ export class YerdApp {
       await send(res, { status: out.status, headers: out.headers, body: out.body as AsyncIterable<string> }, false, abort.signal);
     } finally {
       this.#streams.delete(stream);
-      res.off("close", gone);
     }
   }
 
@@ -1534,7 +1527,7 @@ export class YerdApp {
     const context = new RequestContext(req, res, target, method, {}, info, {}, false, scope, this.#env!);
     try {
       await runWithContext(context, async () => {
-        if (this.#sessions && this.#errorPage && wantsPage(req)) {
+        if (this.#sessions && this.#errorPage && wantsPage(req.headers)) {
           try {
             context.loadedSession = await this.#sessions.load(req, context.cookies);
           } catch {
@@ -1543,7 +1536,7 @@ export class YerdApp {
         }
         let out = (await this.#recover(error, undefined, context, scope, undefined)) ?? (await this.#errorOut(error, req));
         for (const name in headers) {
-          if (name === "vary") addVary(out.headers, headers[name]!);
+          if (name === "vary") out.headers.vary = mergeVary(out.headers.vary, headers[name]!);
           else out.headers[name] = headers[name]!;
         }
         try {
@@ -1863,10 +1856,6 @@ function runtimeResponse(req: IncomingMessage): Outgoing {
 
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-function firstHeader(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value?.split(",")[0]!.trim();
-}
-
 /**
  * Why an unsafe request looks cross-site, or undefined if it doesn't.
  * Sec-Fetch-Site is the browser's own verdict; without it, Origin (or Referer)
@@ -1891,7 +1880,7 @@ export function crossSiteReason(req: IncomingMessage, trusted: ReadonlySet<strin
     return "Malformed Origin header";
   }
   if (trusted.has(from.origin)) return undefined;
-  const host = (trustProxy ? firstHeader(headers["x-forwarded-host"]) : undefined) ?? headers.host;
+  const host = (trustProxy ? forwarded(headers["x-forwarded-host"]) : undefined) ?? headers.host;
   let expected: string;
   try {
     // Parsed with the origin's scheme so default ports compare equal (a:443 vs a).
@@ -1908,17 +1897,9 @@ function isFormBody(contentType: string | undefined): boolean {
   return type === "application/x-www-form-urlencoded" || type === "multipart/form-data";
 }
 
-/** A browser page load or one of the runtime's own requests. */
-function wantsPage(req: IncomingMessage): boolean {
-  const headers = req.headers;
-  return (headers.accept ?? "").includes("text/html") || headers["yx"] !== undefined || headers["yx-dynamic"] !== undefined;
-}
-
-/** Add to Vary instead of replacing what a handler already set. */
-function addVary(headers: Record<string, string>, value: string): void {
-  const existing = headers.vary;
-  if (!existing) headers.vary = value;
-  else if (!existing.toLowerCase().split(/\s*,\s*/).includes(value.toLowerCase())) headers.vary = `${existing}, ${value}`;
+/** A streamed body that isn't long-lived: a rendered page (or a handler's own iterable). */
+function isPageStream(out: Outgoing): boolean {
+  return isStreamBody(out.body) && out.headers[LONG_LIVED] === undefined;
 }
 
 /**
@@ -1926,11 +1907,6 @@ function addVary(headers: Record<string, string>, value: string): void {
  * still time to send the error page) and hand back a body that replays it.
  * Long-lived streams are left alone: their first item may be minutes away.
  */
-function isPageStream(out: Outgoing): boolean {
-  const body = out.body;
-  return body !== null && typeof body !== "string" && !(body instanceof Uint8Array) && out.headers[LONG_LIVED] === undefined;
-}
-
 async function primeStream(out: Outgoing): Promise<Outgoing> {
   if (!isPageStream(out)) return out;
   const iterator = (out.body as AsyncIterable<string | Uint8Array>)[Symbol.asyncIterator]();
@@ -1958,7 +1934,7 @@ async function send(res: ServerResponse, out: Outgoing, headOnly: boolean, signa
   // one would leave a keep-alive client waiting for bytes that never come.
   const bodiless = out.status === 204 || out.status === 304;
 
-  if (body === null || typeof body === "string" || body instanceof Uint8Array) {
+  if (!isStreamBody(body)) {
     if (body !== null && !bodiless) headers["content-length"] = String(typeof body === "string" ? Buffer.byteLength(body) : body.byteLength);
     res.writeHead(out.status, headers);
     res.end(headOnly || bodiless || body === null ? undefined : body);

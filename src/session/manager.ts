@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import type { Outgoing } from "../respond/coerce.js";
 import { serializeCookie } from "../server/cookies.js";
+import { requestIsHttps } from "../server/http.js";
 import { CookieStore, DAY, Session, newSessionId, sealFor, unsealFor, type SessionOptions, type SessionRecord, type SessionStore } from "./session.js";
 
 /** What the cookie carries, always sealed: the record itself (cookie store) or an id (id stores). */
@@ -61,13 +62,7 @@ export class SessionManager {
 
   #secure(req: IncomingMessage): boolean {
     if (this.options.secure !== undefined) return this.options.secure;
-    if ((req.socket as { encrypted?: boolean }).encrypted) return true;
-    // Anyone can send the header; only a proxy we were told about gets believed.
-    if (!this.options.trustProxy) return false;
-    const forwarded = req.headers["x-forwarded-proto"];
-    // Proxies chain it ("https, http"): the first is what the client used.
-    const proto = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim().toLowerCase();
-    return proto === "https";
+    return requestIsHttps(req, this.options.trustProxy ?? false);
   }
 
   #cookieName(secure: boolean): string {

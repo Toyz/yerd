@@ -56,6 +56,7 @@ import { Scope, runWithServices, token, type Container } from "../di/container.j
 import { Logger } from "../log/logger.js";
 import { HttpError } from "../respond/response.js";
 import { maybeContext, outsideRequest, type YerdContext } from "../server/context.js";
+import { isDevelopment } from "../server/http.js";
 
 const log = new Logger("yerd::events");
 
@@ -426,10 +427,6 @@ function encode(event: object): EventMessage {
   }
 }
 
-function isDevelopment(): boolean {
-  const env = process.env.NODE_ENV;
-  return env === undefined || env === "development";
-}
 const callTopic = (name: string) => `call:${name}`;
 
 /**

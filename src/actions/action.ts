@@ -24,6 +24,7 @@ import { HttpError } from "../respond/response.js";
 import { Logger } from "../log/logger.js";
 import { currentContext, type YerdContext } from "../server/context.js";
 import { sentFiles, withFiles, type FormFields, type FormFiles } from "../server/body.js";
+import { isDevelopment } from "../server/http.js";
 import { parse, type DtoClass } from "../decorators/dto.js";
 
 /**
@@ -670,8 +671,7 @@ export function resolveSecrets(explicit: string | string[] | undefined): string[
  * file can't be written.
  */
 function devSecret(): string | undefined {
-  const env = process.env.NODE_ENV;
-  if (env !== undefined && env !== "development") return undefined;
+  if (!isDevelopment()) return undefined;
   const file = join(process.cwd(), "node_modules", ".cache", "yerd", "secret");
   try {
     const saved = readFileSync(file, "utf8").trim();
