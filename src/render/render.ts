@@ -186,7 +186,9 @@ function renderNode(node: YerdNode, state: State): Step {
     const { dropTo, ...rest } = attrs;
     attrs = { ...rest, "data-yx-drop-to": dropTo };
   }
-  const key = node.key === undefined || props["data-key"] !== undefined ? "" : ` data-key="${escapeHtml(String(node.key))}"`;
+  // null is nothing, as for any attribute: a null key isn't written, and
+  // data-key={null} doesn't stand in for the key.
+  const key = node.key == null || props["data-key"] != null ? "" : ` data-key="${escapeHtml(String(node.key))}"`;
   write(state, `<${type}${renderAttributes(attrs, type, true, state.insideLocal > 0)}${key}>${hidden}`);
   if (isVoid) return undefined;
   if (type === "script" || type === "style") {
