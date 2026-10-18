@@ -221,6 +221,14 @@ const ADOPT: unique symbol = Symbol("yerd.session.adopt");
 const NO_SHAPE = { proto: null as object | null, defaults: {} as Data };
 
 /**
+ * Values are kept in objects without a prototype, so a key named like an
+ * Object.prototype member (`constructor`, `toString`, `__proto__`) is just a
+ * key: get() doesn't find Object's own, and set("__proto__", x) is stored
+ * rather than swapping the object's prototype.
+ */
+const bag = (from?: Data): Data => Object.assign(Object.create(null) as Data, from);
+
+/**
  * Routes a property the session doesn't have to the shape class (its methods
  * and accessors, called with `this` as the session) and then to the data
  * (get/set/delete, falling back to the shape's defaults). Session members
@@ -314,8 +322,9 @@ export class SessionApi<D> {
   /** The data as loaded (plus adopted defaults), to notice changes made in place (`session.cart.push(x)`). */
   #base: Data;
   #incomingFlash: Data;
-  #outgoingFlash: Data = {};
+  #outgoingFlash: Data = bag();
   #dirty = false;
+  #isNew: boolean;
   #regenerated = false;
   #destroyed = false;
   #replaced = false;
@@ -328,9 +337,10 @@ export class SessionApi<D> {
     public id: string | undefined,
     createdAt: number = record?.createdAt ?? Date.now(),
   ) {
-    this.#data = record ? { ...record.data } : {};
+    this.#data = bag(record?.data);
     this.#base = structuredClone(this.#data);
-    this.#incomingFlash = record ? { ...record.flash } : {};
+    this.#incomingFlash = bag(record?.flash);
+    this.#isNew = record === undefined;
     this.#createdAt = createdAt;
     return new Proxy(this, plain as ProxyHandler<this>);
   }
@@ -363,9 +373,13 @@ export class SessionApi<D> {
     this.#createdAt = Date.now();
   }
 
-  /** True when this request started without a session. */
+  /**
+   * True when this request started without a session (no cookie, or one that
+   * was expired or invalid). Fixed for the request: setting values (yerd sets
+   * the CSRF nonce on page requests) doesn't change it.
+   */
   get isNew(): boolean {
-    return this.id === undefined && Object.keys(this.#data).length === 0 && !this.#dirty;
+    return this.#isNew;
   }
 
   /** A value, or undefined. Changing a returned object in place is saved too. */
@@ -390,7 +404,7 @@ export class SessionApi<D> {
 
   /** Remove every value but keep the session (same id, same creation time). Use destroy() to end it. */
   clear(): void {
-    this.#data = {};
+    this.#data = bag();
     this.#dirty = true;
   }
 
@@ -425,9 +439,9 @@ export class SessionApi<D> {
   /** Drop the session and its cookie. Setting values afterwards starts a new one. */
   destroy(): void {
     this.#destroyed = true;
-    this.#data = {};
-    this.#incomingFlash = {};
-    this.#outgoingFlash = {};
+    this.#data = bag();
+    this.#incomingFlash = bag();
+    this.#outgoingFlash = bag();
   }
 
   /** @internal */

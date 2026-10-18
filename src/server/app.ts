@@ -1138,6 +1138,10 @@ export class YerdApp {
           requestLog.error("the error page itself failed", { error: renderError });
           out = { ...errorResponse(error), headers: { ...errorResponse(error).headers, ...headers } };
         }
+        // The error page's layouts may show the visitor's state, like any page (see #serve).
+        if (context.loadedSession?.payload !== undefined && out.headers["cache-control"] === undefined && (out.headers["content-type"] ?? "").startsWith("text/html")) {
+          out.headers["cache-control"] = "private, no-cache";
+        }
         await send(res, out, method === "HEAD", undefined);
       });
     } finally {
