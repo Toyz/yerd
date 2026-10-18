@@ -1,4 +1,5 @@
 // Session cookies through a real server: proxies, duplicate and planted cookies, tokens across sign-in.
+import { connect } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { action, currentContext, get, parseCookies, post, query, route, session, yerd, type RunningServer, type Session } from "@toyz/yerd";
 import { createAuth } from "@toyz/yerd/auth";
@@ -177,5 +178,49 @@ describe("action tokens across sign-in", () => {
     expect(r.status).toBe(403);
     expect(r.headers.get("yx-stale")).toBe("1");
     expect(await submit(c, await tokenFrom(c)).then((x) => x.text())).toBe("ok bob");
+  });
+});
+
+const guarded = createAuth<{ id: string }>({ load: (id) => ({ id }), sessionKey: "host_uid" });
+
+@route("/guarded", { guards: [guarded.required] })
+class Guarded {
+  @get show() {
+    return "in";
+  }
+}
+
+describe("a malformed Host header", () => {
+  let server: RunningServer;
+  beforeAll(async () => {
+    server = await yerd({ routes: [Guarded, Name], services: [], handleSignals: false, secret: SECRET, trustProxy: true })
+      .sessions()
+      .use(guarded)
+      .listen(0, "127.0.0.1");
+  });
+  afterAll(() => server.close());
+
+  /** fetch() won't send a broken Host, so speak HTTP by hand. */
+  function raw(path: string, headers: string): Promise<string> {
+    const port = Number(new URL(server.url).port);
+    return new Promise((resolve, reject) => {
+      const socket = connect(port, "127.0.0.1", () => socket.write(`GET ${path} HTTP/1.1\r\n${headers}Accept: text/html\r\nConnection: close\r\n\r\n`));
+      let data = "";
+      socket.on("data", (d) => (data += d));
+      socket.on("end", () => resolve(data.split("\r\n")[0]!));
+      socket.on("error", reject);
+    });
+  }
+
+  it.each(["a b", "[::1", "%", "x:y:z"])("Host %j is a 400 where the URL is needed, not a 500", async (host) => {
+    expect(await raw("/guarded?x=1", `Host: ${host}\r\n`)).toBe("HTTP/1.1 400 Bad Request");
+  });
+
+  it("a malformed X-Forwarded-Host (trusted) is a 400 too", async () => {
+    expect(await raw("/name", "Host: ok\r\nX-Forwarded-Host: a b\r\n")).toBe("HTTP/1.1 400 Bad Request");
+  });
+
+  it("an ordinary Host still gets the login redirect", async () => {
+    expect(await raw("/guarded?x=1", "Host: app.example\r\n")).toBe("HTTP/1.1 303 See Other");
   });
 });

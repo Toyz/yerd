@@ -18,6 +18,7 @@ import { parseCookies, serializeCookie, type CookieOptions } from "./cookies.js"
 import type { Outgoing } from "../respond/coerce.js";
 import type { ResponseDefaults } from "../decorators/response.js";
 import { REQUEST_SPAN, newSpanId, type Span } from "../log/span.js";
+import { HttpError } from "../respond/response.js";
 
 export interface RequestEnv {
   secrets: readonly string[];
@@ -95,7 +96,12 @@ export class RequestContext implements YerdContext {
       const tls = (this.req.socket as { encrypted?: boolean }).encrypted === true;
       const proto = (this.env.trustProxy ? forwarded("x-forwarded-proto") : undefined) ?? (tls ? "https" : "http");
       const host = (this.env.trustProxy ? forwarded("x-forwarded-host") : undefined) ?? headers.host ?? "localhost";
-      this.#url = new URL(this.path + this.#search, `${proto === "https" ? "https" : "http"}://${host}`);
+      try {
+        this.#url = new URL(this.path + this.#search, `${proto === "https" ? "https" : "http"}://${host}`);
+      } catch {
+        // The client's own fault ("Host: a b"): a 400, not a crash logged as a server error.
+        throw new HttpError(400, "Malformed Host header");
+      }
     }
     return this.#url;
   }
