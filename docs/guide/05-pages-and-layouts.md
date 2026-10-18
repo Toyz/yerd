@@ -80,7 +80,7 @@ Attribute names are the real HTML names, lowercase: `for`, `maxlength`, `tabinde
 | number | as is (`NaN` attributes are dropped) |
 | `true` | a bare attribute (`disabled`) |
 | `false`, `null`, `undefined` | nothing (children and attributes) |
-| `aria-*`, `draggable`, `spellcheck`, `contenteditable` + boolean | the words `"true"` / `"false"` |
+| `aria-*`, `draggable`, `spellcheck`, `contenteditable`, `writingsuggestions` + boolean | the words `"true"` / `"false"` (`translate`: `"yes"` / `"no"`, `autocorrect`: `"on"` / `"off"`) |
 | `class` / `className` | strings, arrays and `{ name: boolean }` objects, merged into one attribute |
 | `style` object | camelCase to kebab-case, `--custom` kept, empty values skipped |
 | `Date` / `URL` attribute | ISO string / `href` |

@@ -987,9 +987,10 @@ export function yerdRuntime(): void {
         else if (name === "value") (el as HTMLInputElement).value = value === null || value === undefined ? "" : String(value);
         else if (name === "checked") (el as HTMLInputElement).checked = Boolean(value);
         // Like the server renders them: aria-* and the enumerated attributes
-        // take the words ("true" / "false", translate "yes" / "no"), not presence.
-        else if (typeof value === "boolean" && (name.startsWith("aria-") || name === "draggable" || name === "spellcheck" || name === "contenteditable")) el.setAttribute(name, String(value));
+        // take the words ("true" / "false", translate "yes" / "no", autocorrect "on" / "off"), not presence.
+        else if (typeof value === "boolean" && (name.startsWith("aria-") || name === "draggable" || name === "spellcheck" || name === "contenteditable" || name === "writingsuggestions")) el.setAttribute(name, String(value));
         else if (typeof value === "boolean" && name === "translate") el.setAttribute(name, value ? "yes" : "no");
+        else if (typeof value === "boolean" && name === "autocorrect") el.setAttribute(name, value ? "on" : "off");
         else if (value === false || value === null || value === undefined) el.removeAttribute(name);
         else el.setAttribute(name, value === true ? "" : String(value));
       }

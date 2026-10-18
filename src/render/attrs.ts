@@ -135,11 +135,15 @@ export function safeUrl(name: string, url: string): string {
  */
 function enumerated(name: string, value: boolean): string | undefined {
   switch (name.charCodeAt(0)) {
-    case 97: return name.startsWith("aria-") ? (value ? "true" : "false") : undefined;
+    case 97:
+      if (name.startsWith("aria-")) return value ? "true" : "false";
+      // Omitted, autocorrect means on: false has to say "off".
+      return name === "autocorrect" ? (value ? "on" : "off") : undefined;
     case 100: return name === "draggable" ? (value ? "true" : "false") : undefined;
     case 115: return name === "spellcheck" || name === "spellCheck" ? (value ? "true" : "false") : undefined;
     case 99: return name === "contenteditable" || name === "contentEditable" ? (value ? "true" : "false") : undefined;
     case 116: return name === "translate" ? (value ? "yes" : "no") : undefined;
+    case 119: return name === "writingsuggestions" ? (value ? "true" : "false") : undefined;
   }
   return undefined;
 }

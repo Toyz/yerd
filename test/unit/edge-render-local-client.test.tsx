@@ -56,6 +56,24 @@ describe("bindings whose names have a colon", () => {
   });
 });
 
+describe("enumerated attributes in the browser", () => {
+  it("say the words, like the server renders them", async () => {
+    await mount(
+      <Local state={{ on: true }}>
+        {(s) => (
+          <textarea id="t" autocorrect={s.on} writingsuggestions={s.on} translate={s.on} spellcheck={s.on} aria-busy={s.on} hidden={not(s.on)}
+            onClick={() => (s.on = !s.on)} />
+        )}
+      </Local>,
+    );
+    const t = $("#t");
+    const read = () => ["autocorrect", "writingsuggestions", "translate", "spellcheck", "aria-busy", "hidden"].map((n) => t.getAttribute(n));
+    expect(read()).toEqual(["on", "true", "yes", "true", "true", null]);
+    t.click();
+    expect(read()).toEqual(["off", "false", "no", "false", "false", ""]);
+  });
+});
+
 describe("handlers in the browser", () => {
   it("a method from a spread object runs", async () => {
     await mount(
