@@ -1,5 +1,9 @@
 # yerd
 
+[![npm](https://img.shields.io/npm/v/@toyz/yerd)](https://www.npmjs.com/package/@toyz/yerd)
+[![ci](https://github.com/Toyz/yerd/actions/workflows/ci.yml/badge.svg)](https://github.com/Toyz/yerd/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/@toyz/yerd)](LICENSE)
+
 A TypeScript web server for Node where routes are decorated classes, TSX is
 the template engine, and a handler can return anything. Zero runtime
 dependencies.
