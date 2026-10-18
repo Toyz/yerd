@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ILogger, instrument, yerd, type LogRecord } from "@toyz/yerd";
+import { ILogger, instrument, log, yerd, type LogRecord } from "@toyz/yerd";
 
 interface Signup {
   email: string;
@@ -48,5 +48,60 @@ describe("@instrument skip paths", () => {
       }
       void Wrong;
     }).toThrow(/login\(password\) has no parameter "pasword"/);
+  });
+});
+
+describe("@instrument targets and filters", () => {
+  function capture(filter: string) {
+    const records: LogRecord[] = [];
+    const app = yerd({ routes: [], services: [] })
+      .logging({ filter })
+      .services((s) => s.value(ILogger, { write: (r) => records.push(r) }));
+    return { app, records };
+  }
+
+  it("names spans after the calling class, a subclass and its base taking turns", async () => {
+    class Base {
+      @instrument({ level: "info" })
+      run(n: number) {
+        return n;
+      }
+    }
+    class Sub extends Base {}
+    const { app, records } = capture("info");
+    await app.scope(() => [new Base().run(1), new Sub().run(2), new Base().run(3), new Sub().run(4)]);
+    const entered = records.filter((r) => r.kind === "span-enter");
+    expect(entered.map((r) => `${r.target} ${r.message}`)).toEqual(["Base Base::run", "Sub Sub::run", "Base Base::run", "Sub Sub::run"]);
+  });
+
+  it("is called directly when off, with its own this and arguments, building no fields", async () => {
+    let built = 0;
+    class Quiet {
+      factor = 3;
+      @instrument({ fields: () => (built++, {}) })
+      times(n: number) {
+        return n * this.factor;
+      }
+    }
+    const { app, records } = capture("info");
+    expect(await app.scope(() => new Quiet().times(5))).toBe(15);
+    expect(built).toBe(0);
+    expect(records).toEqual([]);
+  });
+
+  it("follows span directives: on inside a span the filter opens, off outside it", async () => {
+    class Deep {
+      @instrument()
+      dig() {
+        log.debug("digging");
+        return "dug";
+      }
+    }
+    const { app, records } = capture("info,[mine]=debug");
+    await app.scope(() => new Deep().dig());
+    expect(records).toEqual([]);
+    await app.scope(() => log.span("mine", {}, () => new Deep().dig()));
+    expect(records.filter((r) => r.kind === "span-enter").map((r) => r.message)).toEqual(["mine", "Deep::dig"]);
+    expect(records.find((r) => r.kind === "event")?.message).toBe("digging");
   });
 });

@@ -17,6 +17,23 @@ const SECRET_WORDS = new Set([
   "signature", "otp",
 ]);
 
+/**
+ * Answers by key: the same few keys (`method`, `path`, `status`...) come up
+ * in every record, and splitting one into words costs a few regex passes.
+ * Bounded like the filter's target cache; past it, keys are just worked out.
+ */
+const secretKeys = new Map<string, boolean>();
+const SECRET_CACHE_MAX = 1024;
+
+function isSecret(key: string): boolean {
+  let secret = secretKeys.get(key);
+  if (secret === undefined) {
+    secret = isSecretKey(key);
+    if (secretKeys.size < SECRET_CACHE_MAX) secretKeys.set(key, secret);
+  }
+  return secret;
+}
+
 function isSecretKey(key: string): boolean {
   // A trailing number doesn't change the word: `password2`, `token0`.
   const words = key
@@ -32,7 +49,6 @@ function isSecretKey(key: string): boolean {
   return false;
 }
 
-const SECRET = { test: isSecretKey };
 const MAX_DEPTH = 4;
 const MAX_STRING = 256;
 const MAX_ITEMS = 20;
@@ -42,7 +58,7 @@ export function safeFields(fields: Record<string, unknown> | undefined): Record<
   const out: Record<string, unknown> = {};
   if (!fields) return out;
   const seen = new Set<object>();
-  for (const key of Object.keys(fields)) out[key] = SECRET.test(key) ? "[redacted]" : safeValue(fields[key], 1, seen);
+  for (const key of Object.keys(fields)) out[key] = isSecret(key) ? "[redacted]" : safeValue(fields[key], 1, seen);
   return out;
 }
 
@@ -100,7 +116,7 @@ function objectValue(object: object, depth: number, seen: Set<object>): unknown 
       } catch {
         v = "[getter threw]";
       }
-      out[key] = SECRET.test(key) ? "[redacted]" : safeValue(v, depth + 1, seen);
+      out[key] = isSecret(key) ? "[redacted]" : safeValue(v, depth + 1, seen);
     }
     const name = object.constructor?.name;
     return name && name !== "Object" ? { [`${name}`]: out } : out;

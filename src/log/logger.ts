@@ -1,7 +1,10 @@
 /**
  * The Logger facade: what code calls. It builds records and hands them to
  * the app's ILogger (or the built-in ConsoleLogger), only after the filter
- * says the level is wanted, so a disabled call costs one cached lookup.
+ * says the level is wanted. A disabled call costs the filter's cached
+ * per-target lookup; the current span is read only for a call that's
+ * written (or under span directives), and the current app only when the
+ * process has more than one.
  *
  * ```ts
  * @service
@@ -65,7 +68,7 @@ export class Logger {
    * ```
    */
   enabled(level: Level): boolean {
-    return enabledHere(activeBinding(), level, this.target, currentSpan());
+    return enabledHere(activeBinding(), level, this.target);
   }
 
   /**
@@ -78,10 +81,9 @@ export class Logger {
    */
   log(level: Level, message: string, fields?: Record<string, unknown>, error?: unknown): void {
     const binding = activeBinding();
-    const span = currentSpan();
-    if (!enabledHere(binding, level, this.target, span)) return;
+    if (!enabledHere(binding, level, this.target)) return;
     const all = Object.keys(this.bound).length > 0 ? { ...this.bound, ...fields } : fields;
-    emit(binding, level, this.target, "event", message, all, span, error === undefined ? {} : { error });
+    emit(binding, level, this.target, "event", message, all, currentSpan(), error === undefined ? {} : { error });
   }
 
   /**

@@ -19,7 +19,7 @@ import { ConsoleLogger } from "./console.js";
 import { LogFilter, defaultFilter } from "./filter.js";
 import type { ILogger, Level, LogRecord, SpanRecord } from "./ilogger.js";
 import { prunePaths } from "./paths.js";
-import { errorInfo, safeFields, safeValue } from "./serialize.js";
+import { errorInfo, safeFields } from "./serialize.js";
 
 export interface LogBinding {
   sink: ILogger;
@@ -48,15 +48,21 @@ export interface Span {
 const bindings = new WeakMap<object, LogBinding>();
 let latest: LogBinding | undefined;
 let fallback: LogBinding | undefined;
+/** Containers ever bound. While it's one, every lookup would find `latest`. */
+let boundContainers = 0;
 
 /** An app's sink and filter, for code running with its container in scope. */
 export function bindLogging(container: object, binding: LogBinding): void {
+  if (!bindings.has(container)) boundContainers++;
   bindings.set(container, binding);
   latest = binding;
 }
 
 /** The sink and filter for the code running now. */
 export function activeBinding(): LogBinding {
+  // One app in the process (the usual case): its binding, wherever the code
+  // runs, so skip the async-context lookups that find the current container.
+  if (boundContainers === 1) return latest!;
   const services = currentServices();
   const bound = services && bindings.get(services.container);
   if (bound) return bound;
@@ -108,11 +114,17 @@ function newTraceId(): string {
   return randomHex(16);
 }
 
-export function enabledHere(binding: LogBinding, level: Level, target: string, span: Span | undefined, extraSpan?: string): boolean {
-  if (!binding.filter.hasSpanDirectives) return binding.filter.enabled(level, target);
-  const names = [...spanNames(span)];
+/**
+ * Whether a record at `level` for `target` is written here (`extraSpan`: in
+ * a span about to open). The current span is looked up only when span
+ * directives make it matter, so a disabled call skips that async-context read.
+ */
+export function enabledHere(binding: LogBinding, level: Level, target: string, extraSpan?: string): boolean {
+  const filter = binding.filter;
+  if (!filter.hasSpanDirectives) return filter.enabled(level, target);
+  const names = [...spanNames(currentSpan())];
   if (extraSpan) names.push(extraSpan);
-  return binding.filter.enabled(level, target, names);
+  return filter.enabled(level, target, names);
 }
 
 /** Build and write one record. Callers have already checked the filter. */
@@ -137,9 +149,7 @@ export function emit(
   };
   if (extra.durationMs !== undefined) record.durationMs = extra.durationMs;
   if (extra.error !== undefined) record.error = errorInfo(extra.error);
-  let root = span;
-  while (root?.parent) root = root.parent;
-  if (root) record.traceId = root.traceId;
+  if (span) record.traceId = rootOf(span).traceId;
   try {
     binding.sink.write(record);
   } catch (error) {
@@ -152,7 +162,8 @@ export interface SpanOptions {
   name: string;
   target: string;
   level?: Level;
-  fields?: Record<string, unknown>;
+  /** The span's fields, or a function building them, called only once the span is known to be enabled. */
+  fields?: Record<string, unknown> | (() => Record<string, unknown>);
   /** Fields for the exit record, from the return value (e.g. `ret`). */
   onReturn?: (value: unknown) => Record<string, unknown> | undefined;
   /** Log a throw at error level (default true). */
@@ -167,14 +178,15 @@ export interface SpanOptions {
 export function withSpan<T>(options: SpanOptions, fn: () => T): T {
   const binding = activeBinding();
   const level = options.level ?? "info";
+  if (!enabledHere(binding, level, options.target, options.name)) return fn();
   const parent = currentSpan();
-  if (!enabledHere(binding, level, options.target, parent, options.name)) return fn();
+  const fields = options.fields;
   const span: Span = {
     name: options.name,
     target: options.target,
     id: newSpanId(),
     traceId: parent ? rootOf(parent).traceId : newTraceId(),
-    fields: recordFields(binding, options.fields),
+    fields: recordFields(binding, typeof fields === "function" ? fields() : fields),
     parent,
     start: performance.now(),
     level,
@@ -252,11 +264,4 @@ export function startRequestSpan(binding: LogBinding, req: IncomingMessage, meth
 export function endRequestSpan(binding: LogBinding, span: Span, status: number): void {
   const level: Level = status >= 500 ? "error" : status >= 400 ? "warn" : "info";
   emit(binding, level, span.target, "span-exit", span.name, { status }, span, { durationMs: elapsed(span) });
-}
-
-/** Format a value for a pretty log line. */
-export function formatValue(value: unknown): string {
-  if (typeof value === "string") return /^[^\s"=]*$/.test(value) && value !== "" ? value : JSON.stringify(value);
-  const safe = safeValue(value);
-  return typeof safe === "string" ? safe : JSON.stringify(safe);
 }

@@ -4,7 +4,7 @@ import {
   type LogRecord, type RunningServer,
 } from "@toyz/yerd";
 import { parameterNames } from "../../src/log/instrument.js";
-import { safeValue } from "../../src/log/serialize.js";
+import { safeFields, safeValue } from "../../src/log/serialize.js";
 
 const records: LogRecord[] = [];
 const sink: ILogger = { write: (r) => records.push(r) };
@@ -186,6 +186,15 @@ describe("serialization", () => {
     expect(safeValue({ headers: { Authorization: "Bearer x", "x-api-key": "k", cookie: "c" } })).toEqual({
       headers: { Authorization: "[redacted]", "x-api-key": "[redacted]", cookie: "[redacted]" },
     });
+  });
+
+  it("redacts by key the same way before and after its key cache fills", () => {
+    const keys = { password: "p", passengers: 2, apiKey: "k", tokenizer: "t", sessionId: "s" };
+    const expected = { password: "[redacted]", passengers: 2, apiKey: "[redacted]", tokenizer: "t", sessionId: "[redacted]" };
+    expect(safeFields(keys)).toEqual(expected);
+    expect(safeFields(keys)).toEqual(expected);
+    for (let i = 0; i < 1100; i++) safeFields({ [`field${i}x`]: i, [`secret${i}x`]: i });
+    expect(safeFields({ ...keys, privateKeys: "pk", passengerCount: 3 })).toEqual({ ...expected, privateKeys: "[redacted]", passengerCount: 3 });
   });
 
   it("reads parameter names from compiled source", () => {
