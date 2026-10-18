@@ -296,3 +296,19 @@ describe("guard boot checks", () => {
     expect(orphan.problems).toEqual(['NeedsOrphan.g: unknown guard "orphan" (its @guard class isn\'t one of this app\'s services)']);
   });
 });
+
+describe("auth.current() on a request that matched no route", () => {
+  it("is nobody, so a root layout can ask on the 404 page", async () => {
+    const { createAuth: make } = await import("@toyz/yerd/auth");
+    const { yerd: app_ } = await import("@toyz/yerd");
+    const a = make<{ id: string }>({ load: (id) => ({ id }), sessionKey: "unmatched_uid" });
+    const app = app_({ routes: [], services: [], handleSignals: false })
+      .sessions({})
+      .use(a)
+      .layout(({ children }) => <html><body><p>{a.current() ? "signed in" : "guest"}</p>{children}</body></html>)
+      .errorPage(({ status }) => <h1>error {status}</h1>);
+    const r = await app.request("/nope", { headers: { accept: "text/html" } });
+    expect(r.status).toBe(404);
+    expect(await r.text()).toContain("<p>guest</p>");
+  });
+});

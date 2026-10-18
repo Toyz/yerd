@@ -344,7 +344,13 @@ export function createAuth<User>(options: AuthOptions<User>): Auth<User> {
 
   const current = (ctx: YerdContext): User | undefined => {
     const state = stateOf(ctx);
-    if (!state) throw new Error("auth.middleware isn't installed: add app.use(auth)");
+    if (!state) {
+      // A request that matched no route (the 404 page) never ran middleware:
+      // nobody is signed in as far as its layouts can tell. Anywhere else the
+      // middleware is missing.
+      if (ctx.route.target === undefined) return undefined;
+      throw new Error("auth.middleware isn't installed: add app.use(auth)");
+    }
     return state.user;
   };
 

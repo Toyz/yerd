@@ -19,8 +19,7 @@ function cartCount(): number {
 
 /** The document. Every HTML response goes through it, error pages included. */
 export function RootLayout({ children, meta }: LayoutProps) {
-  // Middleware only runs for matched routes, so on a 404 for an unknown path auth never looked: nobody is signed in there.
-  const me = currentContext().route.target ? auth.current() : undefined;
+  const me = auth.current();
   return (
     <html lang="en">
       <head>

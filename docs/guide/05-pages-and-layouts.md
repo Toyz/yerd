@@ -168,8 +168,7 @@ Every page needs the same header with the brand, the cart badge and the account 
 // src/layouts.tsx
 /** The document. Every HTML response goes through it, error pages included. */
 export function RootLayout({ children, meta }: LayoutProps) {
-  // Middleware only runs for matched routes, so on a 404 for an unknown path auth never looked: nobody is signed in there.
-  const me = currentContext().route.target ? auth.current() : undefined;
+  const me = auth.current();
   return (
     <html lang="en">
       <head>
@@ -331,7 +330,7 @@ content-type: text/html; charset=utf-8
 - Only requests that accept HTML get the page; API clients still get text or JSON.
 - `message` is the YerdError's message below 500, else the status text (`Internal Server Error`). `meta.title` is the message unless the route set a title.
 - Use `error` to tell cases apart (`error instanceof NotSignedIn`). Don't print its message or stack in production: it can hold secrets, SQL or paths.
-- A 404 for an unknown path matched no route, so middleware (auth's included) never ran and `ctx.route.target` is undefined. A layout that asks who's signed in checks that first, as `RootLayout` does.
+- A 404 for an unknown path matched no route, so middleware never ran: there, `auth.current()` is `undefined` and the layout shows the signed-out header.
 
 ## Assets
 

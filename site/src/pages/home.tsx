@@ -59,7 +59,7 @@ const sheet = css`
   .choices button[aria-pressed="true"] { background: var(--bg-raised); color: var(--text); box-shadow: 0 1px 2px rgba(60, 40, 20, 0.18); }
   .demo pre {
     margin: 0; padding: 16px 0; background: var(--code-bg); color: var(--code-text);
-    font: 0.84rem/1.65 var(--mono); overflow-x: auto; scrollbar-width: thin;
+    font: 0.8rem/1.65 var(--mono); overflow-x: auto; scrollbar-width: thin;
   }
   .demo pre code { display: inline-block; min-width: 100%; }
   .demo pre .line { display: block; padding: 0 18px; border-left: 3px solid transparent; min-height: 1.65em; }

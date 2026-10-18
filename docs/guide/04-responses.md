@@ -83,7 +83,7 @@ set-cookie: yerd_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax
 
 - Returning a `YerdError` works like throwing it: same status, same body, same [@catches](#handling-errors-with-catches) and error page. It's how you use one in an expression, since TypeScript has no `?? throw`.
 - Errors are the named classes (`NotFound`, `Conflict`, [the list](#the-ready-made-classes)). A bare number is for a status without a body: `return 204` after a delete, `return 201` after a create.
-- Objects become JSON: plain objects, your own class instances (a validated DTO sends its fields), anything with `toJSON` (a `Date`). `Map`, `Set` and `Error` are refused with a 500 whose log line says what to do.
+- Objects become JSON: plain objects, your own class instances (a validated DTO sends its fields), anything with `toJSON` (a `Date`). `Map` and `Set` are refused with a 500 whose log line says what to do.
 
 > [!TAKE]
 > Handlers return; they don't call `res.send()`. A returned value can be tested without a server, negotiated, wrapped in layouts and given headers by decorators, because nothing has been sent yet. You give up writing to the socket mid-handler; for that, return a stream.
