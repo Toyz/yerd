@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import { MemoryStore, yerd } from "@toyz/yerd";
 import { ErrorPage, RootLayout } from "./layouts.js";
 import { ShopConfig, readOnlyMode, timing } from "./shop.js";
+// Services that only react to events (@on) are never injected anywhere, so nothing else imports
+// them; a @service is registered when its module loads, so load it here.
+import "./reactions.js";
 import { auth } from "./users.js";
 
 /** The app, without routes: main.ts (Vite) and server.ts (plain node) add them their own way. */

@@ -351,3 +351,15 @@ tr.highlight td { background: var(--accent-soft); }
 .return-thumbs img { border-radius: 6px; display: block; }
 .return-row .row { display: inline-flex; margin-left: 8px; }
 .return-row form { margin: 0; }
+
+/* ── event log ── */
+.event-log { list-style: none; display: grid; gap: 0; padding: 6px 18px; }
+.event-row { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.event-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.event-head time { color: var(--muted); font-size: 12px; margin-left: auto; }
+.event-row.call .tag { color: var(--ok); }
+.handlers { list-style: none; padding: 0; margin: 6px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.handler { font-size: 12px; padding: 2px 10px; border-radius: 999px; background: var(--surface-2); }
+.handler.ok { color: var(--ok); }
+.handler.retrying { color: var(--warn); }
+.handler.failed { color: var(--danger); }

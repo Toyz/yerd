@@ -4,6 +4,7 @@ import { CATEGORIES, CATEGORY_IDS, Catalog, DroppedPhotos, EditProductForm, NewP
 import { Stock } from "../components.js";
 import { Orders, orderChannel, type Uuid } from "../cart.js";
 import { AdminLayout } from "../layouts.js";
+import { EventLog, eventLogChannel } from "../events.js";
 import { FindOrder, Returns } from "../returns.js";
 import { SalesFeed, salesChannel } from "../sales.js";
 import { Presence } from "../shop.js";
@@ -352,5 +353,57 @@ export class AdminOrders {
     const { id } = form.parse(FindOrder);
     if (!this.orders.get(id as Uuid)) throw new HttpError(404, "No order with that id.");
     return this.list(id);
+  }
+}
+
+/** Every change to the event log pings here; the event log page refreshes (data-yx-live). */
+@route("/event-log/events", { group: Admin })
+export class EventLogEvents {
+  @inject(Channels) accessor channels!: Channels;
+  @signal accessor stop!: AbortSignal;
+
+  @get @sse feed() {
+    return this.channels.subscribe(eventLogChannel, this.stop);
+  }
+}
+
+/**
+ * The event bus, watched: the last 50 events and calls, and which handlers
+ * ran for each (a Warehouse retry shows as "retrying" until it gets there).
+ * Place an order in another tab and watch it arrive.
+ */
+@route("/event-log", { group: Admin, meta: { title: "Event log", area: "event-log" } })
+export class AdminEventLog {
+  @inject(EventLog) accessor log!: EventLog;
+
+  @get page() {
+    return (
+      <>
+        <h1 class="page-title">Event log</h1>
+        <p class="meta-line">
+          Checkout emits <code>order.placed</code>; Receipts, Warehouse, SalesFeed, Carts and OrderFeed each react on their own (<code>@on</code>).
+          The cart's shipping estimate is a call (<code>shipping.quote</code>) that Shipping answers. A declined card emits nothing.
+        </p>
+        <div data-yx-live="/admin/event-log/events" hidden></div>
+        <Region id="event-log" as="ol" class="panel event-log">
+          {this.log.recent().length === 0 ? <li class="muted">Nothing yet. Place an order, or open the cart.</li> : null}
+          {this.log.recent().map((entry) => (
+            <li key={entry.id} class={["event-row", entry.kind]} data-name={entry.name}>
+              <div class="event-head">
+                <span class="tag">{entry.kind}</span> <code class="event-name">{entry.name || "(arriving)"}</code> <span>{entry.summary}</span> <Ago iso={entry.at} />
+              </div>
+              <ul class="handlers">
+                {entry.handlers.map((run) => (
+                  <li class={["handler", run.status]} data-handler={run.handler}>
+                    <code>{run.handler}</code> {run.status}
+                    {run.note ? <span class="muted"> · {run.note}</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </Region>
+      </>
+    );
   }
 }

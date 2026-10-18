@@ -10,7 +10,7 @@ From the repo root:
 ```sh
 npm run kitchen      # Vite dev server on http://localhost:3300 (PORT to change it)
 npx vite build --config examples/kitchen-sink/vite.config.ts
-NODE_ENV=production node examples/kitchen-sink/dist/server/server.js
+node examples/kitchen-sink/dist/server/server.js
 npx playwright test --project=kitchen-dev --project=kitchen-prod
 ```
 
@@ -44,6 +44,7 @@ Demo accounts (also listed on `/login`):
 | `/admin` | dashboard: live sales, polled pulse, lazy panel | `RootLayout` > `AdminLayout` (group, staff only) |
 | `/admin/products` | inline editing, photo drop zones, new product with staged photos | same |
 | `/admin/orders` | move orders along, approve or refuse returns, find an order (`is.uuid`) | same |
+| `/admin/event-log` | the last 50 events and calls, and which handlers ran, live | same |
 | `/admin/board` | the staff kanban board | same |
 | `/img/products/:slug` | product art drawn as SVG in TSX (or an uploaded photo) | `@noLayout` |
 | `/products/:slug/embed` | an embeddable card | none (`bare()`) |
@@ -96,12 +97,31 @@ publishes each sale) and a `@hosted` `RestockWorker`.
 are UUIDs, checked and branded by a `[trim, toUuid]` pipeline on `@param`
 (a malformed or someone else's id is a 404). Status changes (the
 `@every("5s")` warehouse job, staff on `/admin/orders`, a cancel) are
-published on `orderChannel`; the order pages listen through a per-user SSE
-route and `data-yx-live`. A shipped order takes one return: a reason
+`OrderStatusChanged` events; `OrderFeed` turns them into pings on
+`orderChannel`, and the order pages listen through a per-user SSE route and
+`data-yx-live`. A shipped order takes one return: a reason
 (`is.oneOf`), a note and up to five photos (`is.files`, images only), from the
 file input or dropped on its `dropTo` staging zone, shown in the same `eq()`
 slider as product photos and served by `/img/returns/:id` to the owner and
 staff only.
+
+**Events and calls** (`src/events.ts`, `src/reactions.ts`, `src/shipping.ts`):
+checkout creates the order and emits `OrderPlaced` (`@named("order.placed")`)
+instead of calling anything. `Receipts`, `Warehouse` (whose forklift jams
+now and then: `@on(OrderPlaced, { retries: 3, backoff: "200ms" })`),
+`SalesFeed` (the live ticker and dashboard), `Carts` (clears the saved cart)
+and `OrderFeed` (the live order pages) each react on their own, in the
+background, after the request has succeeded. Status changes (packed, shipped,
+cancelled, a return asked for or decided) are `OrderStatusChanged` events.
+The card is charged after the event is emitted: the decline test card
+(4000 0000 0000 0002) throws there, the request fails, and yerd drops the
+event, so no receipt goes out and no stock is taken. The cart's shipping
+estimate is a call, `await events.call(new QuoteShipping(...))`, answered by
+`Shipping`'s `@handles`; its 422 for Antarctica comes back as an `HttpError`
+and is shown under the country select. `/admin/event-log` lists the last 50
+events and calls with the handlers that ran for each, live. Services that
+only react to events are never injected, so `src/app.ts` imports
+`reactions.ts` itself (a `@service` registers when its module loads).
 
 **A cart that follows the user** (`src/carts.ts`, `src/users.ts`): `createAuth`'s
 `onLogin` hook merges the guest's cart into the user's saved one (quantities
@@ -194,7 +214,10 @@ curl -H 'x-api-key: let-me-in' -H 'content-type: application/json' \
 | `src/app.ts` | the app: sessions, middleware, guard, config, logging |
 | `src/shop.ts` | `ShopConfig` and `Mailer` tokens, `Presence`, `readOnlyMode`, `timing` |
 | `src/catalog.ts` | `Catalog` (60 seeded products, photos, reviews), DTOs, `ProductNotFound` |
-| `src/cart.ts` | the `Cart` session shape, `CheckoutForm`, `Orders` (status, returns, warehouse job), `toUuid` |
+| `src/cart.ts` | the `Cart` session shape, `CheckoutForm`, `Orders` (status, returns, warehouse job, charge), `toUuid` |
+| `src/events.ts` | `OrderPlaced`, `OrderStatusChanged`, the `QuoteShipping` call, and the `EventLog` |
+| `src/reactions.ts` | `Receipts`, `Warehouse` (with retries) and `OrderFeed`: services that react to orders |
+| `src/shipping.ts` | `Shipping`, which answers `QuoteShipping` |
 | `src/carts.ts` | `Carts`: saved carts per user, and the merge |
 | `src/returns.ts` | return DTOs (`ReturnRequest`, `OrderReturnForm`, `FindOrder`) and guest return tickets |
 | `src/sales.ts` | `SalesFeed` (`@every`), `RestockWorker` (`@hosted`), `salesChannel` |
@@ -209,6 +232,6 @@ curl -H 'x-api-key: let-me-in' -H 'content-type: application/json' \
 | `src/hero.svg` | the hero image |
 | `public/humans.txt` | a file served as is from `public/` |
 
-`vite build` doesn't set `NODE_ENV` in the server it writes, so start it with
-`NODE_ENV=production` (JSON logs, the missing-secret warning). The error page
-also refuses to show stacks in any Vite build, whatever `NODE_ENV` says.
+The built `server.js` runs with `NODE_ENV=production` unless told otherwise
+(JSON logs, the missing-secret warning). The error page also refuses to show
+stacks in any Vite build, whatever `NODE_ENV` says.

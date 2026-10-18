@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { Channels, HttpError, channel, every, inject, instrument, is, length, logger, matches, maybe, service, trim, uuid, type Logger, type Transform } from "@toyz/yerd";
+import { Events, HttpError, channel, every, inject, instrument, is, length, logger, matches, service, trim, uuid, type Logger, type Transform } from "@toyz/yerd";
 import { Catalog, type Photo, type Product } from "./catalog.js";
-import { SalesFeed } from "./sales.js";
-import { Mailer, ShopConfig } from "./shop.js";
+import { OrderStatusChanged } from "./events.js";
 
 export interface CartLine {
   id: string;
@@ -127,29 +126,29 @@ function luhn(number: string): boolean {
 @service
 export class Orders {
   @inject(Catalog) accessor catalog!: Catalog;
-  @inject(SalesFeed) accessor sales!: SalesFeed;
-  @inject(ShopConfig) accessor config!: ShopConfig;
-  @inject(Channels) accessor channels!: Channels;
-  /** Optional: undefined unless something registers a Mailer. */
-  @maybe(Mailer) accessor mailer: Mailer | undefined;
+  /** Status changes go out as events; OrderFeed turns them into live updates, EventLog records them. */
+  @inject(Events) accessor events!: Events;
   @logger accessor log!: Logger;
   #orders: Order[] = [];
   #returnPhotos = new Map<Uuid, Photo[]>();
   #next = 1001;
 
   /**
+   * Create the order. Nothing else happens here: the checkout emits
+   * OrderPlaced, and the receipt, the stock, the sales feed and the saved
+   * cart are each handled by whoever listens (src/reactions.ts and friends).
+   *
    * A span per order with the customer and the lines, but not the card: the
    * skip paths go into the argument (`payment.card`), and a typo there is a
    * compile error.
    */
   @instrument({ level: "info", skip: ["payment.card", "payment.cvc"], ret: false })
-  async place(customer: { id: string; name: string }, lines: CartLine[], payment: CheckoutForm): Promise<Order> {
+  place(customer: { id: string; name: string }, lines: CartLine[], payment: CheckoutForm, shippingCents: number): Order {
     if (lines.length === 0) throw new HttpError(400, "Your cart is empty.");
     if (!luhn(payment.card)) throw new PaymentDeclined("That card number has a typo in it (it fails the checksum).");
-    // The classic test card that always declines.
-    if (payment.card === "4000000000000002") throw new PaymentDeclined("The bank said no. The gnomes are sympathetic.");
     for (const line of lines) {
-      if (!this.catalog.take(line.id, line.qty)) throw new PaymentDeclined(`Sorry, ${line.name} sold out while you were deciding.`);
+      // Only a check: the Warehouse takes the stock when it hears about the order.
+      if ((this.catalog.get(line.id)?.stock ?? 0) < line.qty) throw new PaymentDeclined(`Sorry, ${line.name} sold out while you were deciding.`);
     }
     const totalCents = lines.reduce((sum, l) => sum + l.priceCents * l.qty, 0);
     const now = new Date().toISOString();
@@ -161,18 +160,27 @@ export class Orders {
       address: payment.address,
       lines: structuredClone(lines),
       totalCents,
-      shippingCents: totalCents >= this.config.freeShippingCents ? 0 : 799,
+      shippingCents,
       card: payment.card.slice(-4),
       status: "pending",
       at: now,
       updatedAt: now,
     };
     this.#orders.push(order);
-    for (const line of lines) {
-      await this.sales.record({ productId: line.id, name: line.name, qty: line.qty, totalCents: line.priceCents * line.qty, city: "right here", source: "order" });
-    }
-    await this.mailer?.send(customer.name, `Your Bazaar order ${order.number}`, `${lines.length} item(s) on their way.`);
     return order;
+  }
+
+  /**
+   * Take the money, after the order exists (and after the checkout has
+   * emitted OrderPlaced). The classic decline test card throws: the order is
+   * rolled back, the request fails, and yerd drops the event it emitted, so
+   * no receipt goes out and the warehouse never hears of it.
+   */
+  charge(order: Order, payment: CheckoutForm): void {
+    if (payment.card === "4000000000000002") {
+      this.#orders = this.#orders.filter((o) => o !== order);
+      throw new PaymentDeclined("The bank said no. The gnomes are sympathetic.");
+    }
   }
 
   get(id: Uuid): Order | undefined {
@@ -252,7 +260,8 @@ export class Orders {
     await this.#changed(order);
   }
 
-  async #changed(order: Order): Promise<void> {
-    await this.channels.publish(orderChannel, { id: order.id, userId: order.userId, status: order.status });
+  /** Inside a request (staff, a cancel) it goes out once the request has succeeded; from the warehouse job, at once. */
+  #changed(order: Order): void {
+    this.events.emit(new OrderStatusChanged(order));
   }
 }

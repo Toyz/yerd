@@ -230,6 +230,73 @@ test("a saved cart: the guest's items merge into it on sign-in and it survives s
   await elsewhere.close();
 });
 
+test("events: the cart's shipping is a call, and an order fans out to every handler, live in the event log", async ({ page, browser }) => {
+  const staff = await browser.newContext();
+  const log = await staff.newPage();
+  await ada(log, "/admin/event-log");
+  await expect(log.locator("h1")).toHaveText("Event log");
+
+  await cy(page);
+  await page.locator(".add-form button:enabled").first().click();
+  await expect(page.locator("#cart-badge .badge")).toHaveText("1");
+  await page.goto("/cart");
+  await expect(page.locator("#shipping .cart-total")).toContainText(/Shipping (Free|\$\d)/);
+
+  // The Shipping handler's 422 comes back through events.call() and lands on the select.
+  await page.getByLabel("Ship to").selectOption("AQ");
+  await expect(page.locator('[data-yx-error="country"]')).toHaveText("We don't ship to Antarctica: the penguins send everything back.");
+  await page.getByLabel("Ship to").selectOption("PT");
+  await expect(page.locator('[data-yx-error="country"]')).toBeEmpty();
+  await expect(page.getByLabel("Ship to")).toHaveValue("PT");
+
+  await page.getByLabel("Name").fill("Cy Rock");
+  await page.getByLabel("Address").fill("1 Boulder Lane, Lisbon");
+  await page.getByLabel("Card number").fill("4242 4242 4242 4242");
+  await page.getByLabel("CVC").fill("123");
+  await page.getByRole("button", { name: "Place order" }).click();
+  await expect(page).toHaveURL(/\/orders\/[0-9a-f-]{36}$/);
+  const number = (await page.locator(".receipt h1").textContent())!.replace("Order ", "");
+
+  // The staff tab updates by itself: one order.placed, five handlers (the Warehouse may need a retry or two).
+  const entry = log.locator('.event-row[data-name="order.placed"]', { hasText: number });
+  await expect(entry).toHaveCount(1);
+  for (const handler of ["Receipts.send", "Warehouse.reserve", "SalesFeed.fromOrder", "Carts.forget", "OrderFeed.placed"]) {
+    await expect(entry.locator(`.handler.ok[data-handler="${handler}"]`)).toHaveCount(1, { timeout: 10_000 });
+  }
+  await expect(log.locator('.event-row[data-name="shipping.quote"]').first()).toContainText("Shipping.quote");
+  await staff.close();
+});
+
+test("events: a declined card fails the request after emitting, so nothing is sent", async ({ page, browser }) => {
+  const staff = await browser.newContext();
+  const log = await staff.newPage();
+  await ada(log, "/admin/event-log");
+  const placed = log.locator('.event-row[data-name="order.placed"]');
+  const before = await placed.count();
+
+  await cy(page);
+  await page.locator(".add-form button:enabled").first().click();
+  await expect(page.locator("#cart-badge .badge")).toHaveText("1");
+  await page.goto("/cart");
+  await page.getByLabel("Name").fill("Cy Rock");
+  await page.getByLabel("Address").fill("1 Boulder Lane");
+  await page.getByLabel("Card number").fill("4000 0000 0000 0002");
+  await page.getByLabel("CVC").fill("123");
+  await page.getByRole("button", { name: "Place order" }).click();
+  await expect(page.locator(".checkout .form-error")).toHaveText("The bank said no. The gnomes are sympathetic.");
+  await expect(page).toHaveURL(/\/cart$/);
+  // The cart is still there (the request failed), and no order was kept.
+  await expect(page.locator("#cart-badge .badge")).toHaveText("1");
+
+  // Give any stray event time to arrive, then check it never did.
+  await log.waitForTimeout(1500);
+  await log.reload();
+  await expect(placed).toHaveCount(before);
+  await page.goto("/orders");
+  await expect(page.locator("#my-orders")).not.toContainText("Cy Rock");
+  await staff.close();
+});
+
 test("the back office: guests go to login, customers get a 403, staff get in", async ({ page }) => {
   await page.goto("/admin");
   await expect(page).toHaveURL(/\/login\?next=%2Fadmin$/);

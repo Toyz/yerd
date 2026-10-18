@@ -120,6 +120,13 @@ const FEATURES: Array<[string, Feature[]]> = [
     { name: "Named @guard on a service", href: "/chat", how: "Muted users can't post (the notMuted guard lives on the Chat service)." },
     { name: "Method-level guards", href: "/chat", how: "Posting needs a login; muting needs staff. Checkout is @post @auth.required." },
   ]],
+  ["Events and calls", [
+    { name: "Events: emit() and @on handlers", href: "/admin/event-log", how: "Place an order: checkout emits order.placed, and Receipts, Warehouse, SalesFeed, Carts and OrderFeed each react, live in the log." },
+    { name: "Retries with backoff", href: "/admin/event-log", how: "The Warehouse's forklift jams now and then: watch it retry (@on with retries and backoff)." },
+    { name: "Order status as events", href: "/admin/orders", how: "Mark an order packed: order.status drives the customer's live order page." },
+    { name: "Calls: events.call() and @handles", href: "/cart", how: "The shipping estimate is a call the Shipping service answers; pick Antarctica for its 422, shown on the select." },
+    { name: "A failing request emits nothing", href: "/cart", how: "Check out with 4000 0000 0000 0002: the card is declined after the event was emitted, so the event is dropped." },
+  ]],
   ["Live", [
     { name: "SSE with named events", href: "/", how: "The ticker under the nav." },
     { name: "data-yx-live", href: "/chat", how: "Open two tabs (also /orders, /admin, /admin/board)." },

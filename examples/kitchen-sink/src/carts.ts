@@ -1,5 +1,6 @@
-import { inject, logger, service, type Logger } from "@toyz/yerd";
+import { inject, logger, on, service, type Logger } from "@toyz/yerd";
 import { Catalog } from "./catalog.js";
+import { EventLog, OrderPlaced } from "./events.js";
 import type { CartLine } from "./cart.js";
 
 /** A demo account starts with something in its saved cart, so the merge on sign-in has something to show. */
@@ -18,6 +19,7 @@ const SEEDED: Record<string, Array<{ slug: string; qty: number }>> = {
 @service
 export class Carts {
   @inject(Catalog) accessor catalog!: Catalog;
+  @inject(EventLog) accessor eventLog!: EventLog;
   @logger accessor log!: Logger;
   #saved = new Map<string, CartLine[]>();
   #seeded = new Set<string>();
@@ -36,6 +38,12 @@ export class Carts {
 
   save(userId: string, lines: readonly CartLine[]): void {
     this.#saved.set(userId, structuredClone([...lines]));
+  }
+
+  /** Bought: the saved cart starts over (the session's cart was emptied by the checkout itself). */
+  @on(OrderPlaced) forget(event: OrderPlaced) {
+    this.save(event.userId, []);
+    this.eventLog.ran(event.id, "Carts.forget", "ok", "saved cart cleared");
   }
 
   /**

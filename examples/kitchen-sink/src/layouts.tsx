@@ -6,7 +6,7 @@ import { LogoutRoute } from "./routes/auth.js";
 declare module "@toyz/yerd" {
   interface PageMeta {
     /** Which nav item is active. */
-    area?: "shop" | "catalog" | "lookbook" | "chat" | "cart" | "orders" | "about" | "features" | "dashboard" | "products" | "admin-orders" | "board";
+    area?: "shop" | "catalog" | "lookbook" | "chat" | "cart" | "orders" | "about" | "features" | "dashboard" | "products" | "admin-orders" | "board" | "event-log";
     /** The page's absolute URL, for <link rel="canonical"> and og:url. */
     url?: string;
     /** Set on the image of a product page, for og:image. */
@@ -17,9 +17,9 @@ declare module "@toyz/yerd" {
 }
 
 /**
- * Development: not NODE_ENV=production, and not a `vite build` (which sets
- * import.meta.env.DEV to false at build time). The built server.js doesn't
- * set NODE_ENV itself, so NODE_ENV alone would show stacks in production.
+ * Development: not NODE_ENV=production (the built server.js defaults to
+ * production), and, belt and braces, not a `vite build` either (which sets
+ * import.meta.env.DEV to false at build time, whatever NODE_ENV says).
  */
 const DEVELOPMENT = process.env.NODE_ENV !== "production" && import.meta.env?.DEV !== false;
 
@@ -186,6 +186,7 @@ export function AdminLayout({ children, meta }: LayoutProps) {
           {nav("/admin/products", "Products", "products")}
           {nav("/admin/orders", "Orders", "admin-orders")}
           {nav("/admin/board", "Staff board", "board")}
+          {nav("/admin/event-log", "Event log", "event-log")}
           <a href="/">Back to the shop</a>
           <a href="/features">Feature tour</a>
         </nav>

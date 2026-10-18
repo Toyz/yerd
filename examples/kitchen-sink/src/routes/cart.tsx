@@ -1,14 +1,16 @@
-import { HttpError, Region, action, body, catches, get, inject, post, redirect, route } from "@toyz/yerd";
+import { ActionForm, Events, HttpError, Region, action, body, catches, get, inject, post, redirect, route } from "@toyz/yerd";
 import { Price } from "../attributes.js";
 import { CheckoutForm, Orders, PaymentDeclined, type Cart } from "../cart.js";
+import { OrderPlaced, QuoteShipping } from "../events.js";
 import { CartBadge } from "../layouts.js";
+import { COUNTRIES } from "../shipping.js";
 import { ShopConfig, firstIssue } from "../shop.js";
 import { auth, type User } from "../users.js";
 import { Viewer } from "../viewer.js";
 import { Shop } from "./shop.js";
 
 
-function CartLines({ cart, actions, freeShippingCents }: { cart: Cart; actions: CartPage; freeShippingCents: number }) {
+function CartLines({ cart, actions }: { cart: Cart; actions: CartPage }) {
   return (
     <Region id="cart" class="panel cart">
       {cart.lines.length === 0 ? (
@@ -43,11 +45,39 @@ function CartLines({ cart, actions, freeShippingCents }: { cart: Cart; actions: 
           <p class="cart-total">
             Total <Price cents={cart.total} class="price-big" />
           </p>
-          <p class="muted small">
-            {cart.total >= freeShippingCents ? "Free shipping. The flamingos will deliver it personally." : <>Free shipping from <Price cents={freeShippingCents} />.</>}
-          </p>
         </>
       )}
+    </Region>
+  );
+}
+
+/**
+ * The shipping estimate, from a call (`events.call(new QuoteShipping(...))`)
+ * that the Shipping service answers. The country select submits its form on
+ * change; an impossible destination comes back from the handler as a 422,
+ * shown in the select's own error box.
+ */
+function ShippingEstimate({ country, cents, freeFromCents, quote }: { country: string; cents: number; freeFromCents: number; quote: CartPage["quote"] }) {
+  return (
+    <Region id="shipping" class="panel shipping">
+      <form action={quote}>
+        <div class="row">
+          <div class="field grow">
+            <label for="country">Ship to</label>
+            <select class="input" id="country" name="country" data-yx-submit>
+              {COUNTRIES.map(([code, name]) => <option value={code} selected={code === country}>{name}</option>)}
+            </select>
+            <span class="field-error" data-yx-error="country"></span>
+          </div>
+          <noscript><button class="btn btn-ghost">Update</button></noscript>
+        </div>
+      </form>
+      <p class="cart-total">
+        Shipping {cents === 0 ? <span class="price">Free</span> : <Price cents={cents} />}
+      </p>
+      <p class="muted small">
+        {cents === 0 ? "Free shipping. The flamingos will deliver it personally." : <>Free shipping from <Price cents={freeFromCents} />.</>}
+      </p>
     </Region>
   );
 }
@@ -63,6 +93,7 @@ export class CartPage {
   @inject(Viewer) accessor viewer!: Viewer;
   @inject(Orders) accessor orders!: Orders;
   @inject(ShopConfig) accessor config!: ShopConfig;
+  @inject(Events) accessor events!: Events;
   @auth.maybeUser accessor me: User | undefined;
   @body(CheckoutForm) accessor checkoutForm!: Promise<CheckoutForm>;
 
@@ -70,7 +101,22 @@ export class CartPage {
     return this.viewer.cart;
   }
 
-  @get page() {
+  get country() {
+    return this.viewer.session.shipTo ?? "US";
+  }
+
+  /** Ask whoever answers QuoteShipping (the Shipping service) and wait for the number. */
+  shippingFor(country: string): Promise<number> {
+    const lines = this.cart.lines.map(({ id, qty }) => ({ id, qty }));
+    return this.events.call(new QuoteShipping(lines, country, this.cart.total), { timeout: "3s" });
+  }
+
+  async shipping() {
+    const cents = await this.shippingFor(this.country);
+    return <ShippingEstimate country={this.country} cents={cents} freeFromCents={this.config.freeShippingCents} quote={this.quote} />;
+  }
+
+  @get async page() {
     const error = this.cart.flash("error") as string | undefined;
     // Set by the sign-in hook when it merged a saved cart; shown once.
     const kept = this.viewer.session.cartWelcome;
@@ -83,7 +129,8 @@ export class CartPage {
             Welcome back, we kept {kept} item{kept === 1 ? "" : "s"} from last time.
           </p>
         ) : null}
-        <CartLines cart={this.cart} actions={this} freeShippingCents={this.config.freeShippingCents} />
+        <CartLines cart={this.cart} actions={this} />
+        {this.cart.lines.length > 0 ? await this.shipping() : null}
         {this.cart.lines.length > 0 ? (
           <section class="panel checkout">
             <h2>Check out</h2>
@@ -110,25 +157,44 @@ export class CartPage {
     );
   }
 
-  regions() {
+  /** Every Region a cart change touches: the lines, the badge, and the estimate (quoted again). */
+  async regions() {
     return (
       <>
-        <CartLines cart={this.cart} actions={this} freeShippingCents={this.config.freeShippingCents} />
+        <CartLines cart={this.cart} actions={this} />
         <CartBadge count={this.cart.count} />
+        {this.cart.lines.length > 0 ? await this.shipping() : null}
       </>
     );
   }
 
-  @action setQty({ id, qty }: { id: string; qty: number }) {
+  @action async setQty({ id, qty }: { id: string; qty: number }) {
     this.cart.setQty(id, qty);
     this.viewer.cartChanged();
     return this.regions();
   }
 
-  @action remove({ id }: { id: string }) {
+  @action async remove({ id }: { id: string }) {
     this.cart.remove(id);
     this.viewer.cartChanged();
     return this.regions();
+  }
+
+  /**
+   * A new destination. The handler's HttpError arrives here as an HttpError;
+   * re-thrown with an issue for `country`, the runtime puts its message in
+   * the select's [data-yx-error="country"] box.
+   */
+  @action async quote(_: {}, form: ActionForm) {
+    const country = form.string("country");
+    try {
+      await this.shippingFor(country);
+    } catch (error) {
+      if (!(error instanceof HttpError)) throw error;
+      throw new HttpError(error.status, error.message, { details: { issues: [{ path: "country", message: error.message }] } });
+    }
+    this.viewer.session.shipTo = country;
+    return this.shipping();
   }
 
   @post @auth.required async checkout() {
@@ -140,9 +206,13 @@ export class CartPage {
       this.cart.flash("error", firstIssue(error));
       return redirect("/cart");
     }
-    const order = await this.orders.place({ id: this.me!.id, name: this.me!.name }, this.cart.lines, form);
+    const order = this.orders.place({ id: this.me!.id, name: this.me!.name }, this.cart.lines, form, await this.shippingFor(this.country));
+    // Announce it. Inside a request, the event waits until the handler has succeeded:
+    this.events.emit(new OrderPlaced(order, this.me!.name));
+    // ...so when the card is declined here, the request fails and the event is dropped (no receipt, no stock taken).
+    this.orders.charge(order, form);
+    // The saved cart is cleared by Carts, which hears OrderPlaced.
     this.cart.empty();
-    this.viewer.cartChanged();
     this.cart.flash("notice", `Order ${order.number} placed. The gnomes are packing it now.`);
     return redirect(`/orders/${order.id}`);
   }

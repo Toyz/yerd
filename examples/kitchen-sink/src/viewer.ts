@@ -11,6 +11,8 @@ declare module "@toyz/yerd" {
     lines?: CartLine[];
     /** How many saved items a sign-in brought back; the cart page says so once. */
     cartWelcome?: number;
+    /** Where the cart's shipping estimate is for (a country code). */
+    shipTo?: string;
   }
 }
 

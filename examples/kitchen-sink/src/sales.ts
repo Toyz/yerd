@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { Channels, channel, every, hosted, inject, logger, service, type HostedService, type Logger } from "@toyz/yerd";
+import { Channels, channel, every, hosted, inject, logger, on, service, type HostedService, type Logger } from "@toyz/yerd";
 import { Catalog } from "./catalog.js";
+import { EventLog, OrderPlaced } from "./events.js";
 
 export interface Sale {
   id: string;
@@ -29,6 +30,7 @@ const CITIES = ["Ohio", "Lisbon", "Osaka", "a moving vehicle", "Reykjavik", "Dul
 export class SalesFeed {
   @inject(Catalog) accessor catalog!: Catalog;
   @inject(Channels) accessor channels!: Channels;
+  @inject(EventLog) accessor eventLog!: EventLog;
   @logger accessor log!: Logger;
   #sales: Sale[] = [];
   #tick = 0;
@@ -42,6 +44,14 @@ export class SalesFeed {
     const qty = 1 + (this.#tick % 3 === 0 ? 1 : 0);
     if (!this.catalog.take(product.id, qty)) return;
     await this.record({ productId: product.id, name: product.name, qty, totalCents: product.priceCents * qty, city: CITIES[this.#tick % CITIES.length]!, source: "crowd" });
+  }
+
+  /** A real order: each line is a sale on the ticker and the dashboard. */
+  @on(OrderPlaced) async fromOrder(event: OrderPlaced) {
+    for (const line of event.lines) {
+      await this.record({ productId: line.id, name: line.name, qty: line.qty, totalCents: line.priceCents * line.qty, city: "right here", source: "order" });
+    }
+    this.eventLog.ran(event.id, "SalesFeed.fromOrder", "ok", `${event.lines.length} sale${event.lines.length === 1 ? "" : "s"} on the ticker`);
   }
 
   async record(sale: Omit<Sale, "id" | "at">): Promise<Sale> {
