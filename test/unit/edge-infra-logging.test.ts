@@ -542,14 +542,15 @@ describe("request spans", () => {
       .logging({ filter: "info" })
       .listen(0, "127.0.0.1");
     try {
-      await fetch(server.url + "/q?token=abc&reset=1");
+      // Not hex: a random trace or span id can't contain it by chance.
+      await fetch(server.url + "/q?token=not-a-hex-token-zq&reset=1");
       await new Promise((r) => setTimeout(r, 5));
     } finally {
       await server.close();
     }
     const access = records.find((r) => r.target === "yerd::request")!;
     expect(access.spans[0]!.fields).toEqual({ method: "GET", path: "/q" });
-    expect(JSON.stringify(records)).not.toContain("abc");
+    expect(JSON.stringify(records)).not.toContain("not-a-hex-token-zq");
   });
 });
 
