@@ -30,6 +30,7 @@ export {
 } from "./decorators/request.js";
 
 export { res, redirect, bare, YerdResponse, type ResponseInit } from "./respond/response.js";
+export { HttpStatus } from "./respond/status.js";
 export {
   YerdError, BadRequest, Unauthorized, Forbidden, NotFound, MethodNotAllowed, NotAcceptable, Conflict, Gone,
   PayloadTooLarge, UnsupportedMediaType, ValidationFailed, TooManyRequests, ServiceUnavailable,

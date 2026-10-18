@@ -42,7 +42,7 @@ import { acceptsEncoding, createMount, serveStatic, type StaticMount, type Stati
 import { useManifest } from "../assets.js";
 import { runWithContext, type RouteInfo, type YerdContext } from "./context.js";
 import { RequestContext, type RequestEnv } from "./request-context.js";
-import { abortOnClose, forwarded, isStreamBody, mergeVary, splitTarget, wantsPage } from "./http.js";
+import { abortOnClose, forwarded, isDevelopment, isStreamBody, mergeVary, splitTarget, wantsPage } from "./http.js";
 import { catchesOf, responseDefaults, type CatchEntry, type ResponseDefaults } from "../decorators/response.js";
 import { ConsoleLogger } from "../log/console.js";
 import { LogFilter, defaultFilter } from "../log/filter.js";
@@ -1708,6 +1708,16 @@ export class YerdApp {
     return { result };
   }
 
+  /** Unlisted statuses already warned about, once each per handler. */
+  readonly #unlisted = new Set<string>();
+
+  #warnUnlisted(context: RequestContext, code: number, listed: readonly number[]): void {
+    const key = `${context.route.className}.${String(context.route.method)} ${code}`;
+    if (this.#unlisted.has(key) || this.#unlisted.size > 500) return;
+    this.#unlisted.add(key);
+    requestLog.warn(`${context.route.className}.${String(context.route.method)} answered ${code}, which its @status([${listed.join(", ")}]) doesn't list`);
+  }
+
   /** The runtime's cue stream: `GET /_yerd/cues?room=a&room=b` (no room: the default one). */
   async #serveCues(res: ServerResponse, search: string): Promise<void> {
     const asked = new URLSearchParams(search).getAll("room");
@@ -1791,6 +1801,9 @@ export class YerdApp {
    */
   async #finalize(context: RequestContext, out: Outgoing, options: { failed: boolean; commit: boolean }): Promise<Outgoing> {
     out = context.finish(out, options.failed);
+    // @status([...]) said what this handler answers; say so in development when it doesn't.
+    const listed = context.declared?.listed;
+    if (listed && out.status < 500 && out.status !== 304 && !listed.includes(out.status) && isDevelopment()) this.#warnUnlisted(context, out.status, listed);
     // fetch() follows redirects on its own; scripted requests get told where to go instead.
     if (context.req.headers["yx"] !== undefined && out.status >= 300 && out.status < 400 && out.headers.location) {
       out = { status: 200, headers: { "yx-location": out.headers.location }, body: null, cookies: out.cookies };

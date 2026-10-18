@@ -18,6 +18,8 @@ import { assertStatus, checkHeader } from "../respond/response.js";
 
 export interface ResponseDefaults {
   status?: number;
+  /** Every status @status([...]) listed, when it was given a list: what the handler says it can answer. */
+  listed?: readonly number[];
   headers: Record<string, string>;
 }
 
@@ -26,10 +28,14 @@ const HEADERS = methodValue<Readonly<Record<string, string>>>("setHeader");
 
 /** What @status and @setHeader declared for a handler method, or undefined when neither did. */
 export function responseDefaults(target: DecoratorTarget, method: string | symbol): ResponseDefaults | undefined {
-  const code = status.get(target, method);
+  const declared = STATUS.get(target, method);
   const headers = HEADERS.get(target, method);
-  if (code === undefined && headers === undefined) return undefined;
-  return { ...(code === undefined ? {} : { status: code }), headers: { ...headers } };
+  if (declared === undefined && headers === undefined) return undefined;
+  return {
+    ...(declared === undefined ? {} : { status: declared.code }),
+    ...(declared?.listed ? { listed: declared.listed } : {}),
+    headers: { ...headers },
+  };
 }
 
 export interface CatchEntry {
@@ -43,27 +49,68 @@ export function catchesOf(target: DecoratorTarget): CatchEntry[] {
   return [...catches.entries(target)].map(([method, types]) => ({ method, types }));
 }
 
+interface StatusDeclaration {
+  /** The status a plain return value gets. */
+  code: number;
+  /** Given as a list: every status the handler says it can answer. */
+  listed?: readonly number[];
+}
+
+const STATUS = methodValue<StatusDeclaration>("status", {
+  validate: ({ code, listed }) => {
+    for (const c of listed ?? [code]) assertStatus(c, "@status");
+    return listed && listed.length === 0 ? "give at least one status" : undefined;
+  },
+});
+
 /**
  * The status for this handler's result when it would otherwise be the
  * default 200 (or 204 for nothing). An explicit `res(..., { status })` or a
- * returned number still wins. It doesn't apply when the handler throws: an
- * error keeps its own status. For a status decided at run time, use
- * `ctx.status(code)`.
+ * returned status still wins, and an error keeps its own. For a status
+ * decided at run time, use `ctx.status(code)`.
+ *
+ * Given a list, it also says every status the endpoint can answer: the first
+ * is the default, and in development yerd warns when the handler answers
+ * with one that isn't listed (5xx crashes and 304s aside). The list is
+ * optional; tooling can read it with `status.listed()`.
  *
  * ```ts
- * @route("/comments")
- * export class Comments {
- *   @post @status(201) create() {
- *     return { id: 7 }; // 201, JSON
+ * @route("/products")
+ * export class Products {
+ *   @post @status(HttpStatus.Created) create() {
+ *     return this.catalog.add(this.input); // 201, JSON
  *   }
  *
- *   @post @status(202) queue() {
- *     return { queued: true };
+ *   @put @status([HttpStatus.Ok, HttpStatus.Created, HttpStatus.Conflict]) upsert() {
+ *     if (this.catalog.locked(this.id)) return new Conflict("Locked");
+ *     return this.catalog.save(this.id, this.input); // 200, the first listed
  *   }
  * }
  * ```
  */
-export const status = methodValue<number>("status", { validate: (code) => assertStatus(code, "@status") });
+export const status = Object.assign(
+  (codes: number | readonly number[]) =>
+    STATUS(Array.isArray(codes) ? { code: (codes as readonly number[])[0]!, listed: [...(codes as readonly number[])] } : { code: codes as number }),
+  {
+    /**
+     * The default status @status declared for a handler method, or undefined.
+     *
+     * ```ts
+     * status.get(Products, "create"); // 201
+     * ```
+     */
+    get: (target: DecoratorTarget, method: string | symbol): number | undefined => STATUS.get(target, method)?.code,
+    /**
+     * Every status @status([...]) listed for a handler method, or undefined
+     * when it wasn't given a list: for docs and API tooling.
+     *
+     * ```ts
+     * status.listed(Products, "upsert"); // [200, 201, 409]
+     * ```
+     */
+    listed: (target: DecoratorTarget, method: string | symbol): readonly number[] | undefined => STATUS.get(target, method)?.listed,
+  },
+);
 
 /**
  * A header on this handler's responses (a header the result sets itself

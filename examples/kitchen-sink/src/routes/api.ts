@@ -1,5 +1,5 @@
 import {
-  Channels, Unauthorized, between, body, createGuard, currentContext, del, event, get, inject, ndjson, oneOf, param, patch, post, put, query, resolve, route, setHeader, signal,
+  Channels, HttpStatus, Unauthorized, between, body, createGuard, currentContext, del, event, get, inject, ndjson, oneOf, param, patch, post, put, query, resolve, route, setHeader, signal,
   sse, status, toInt, trim,
 } from "@toyz/yerd";
 import { CATEGORY_IDS, Catalog, ProductChanges, ProductInput, ProductNotFound, type CategoryId, type Product } from "../catalog.js";
@@ -49,7 +49,7 @@ export class ProductsApi {
   }
 
   /** 201 with the new product, and where it lives (only known once it exists, hence ctx.setHeader). */
-  @post @apiWriter @status(201) @setHeader("cache-control", "no-store")
+  @post @apiWriter @status(HttpStatus.Created) @setHeader("cache-control", "no-store")
   async create() {
     const product = this.catalog.create(await this.input);
     currentContext().setHeader("location", `/api/products/${product.id}`);

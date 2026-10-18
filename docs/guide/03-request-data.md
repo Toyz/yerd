@@ -433,7 +433,7 @@ For lower-level work, `currentContext()` gives the same context anywhere in a re
 The same kit makes method and class decorators that store a value you read back later; yerd's own `@get`, `@status`, `@catches`, `@prerender` and `@onBoot` are built this way.
 
 ```tsx
-import { classValue, get, methodFlag, methodList, methodValue, post, route } from "@toyz/yerd";
+import { HttpStatus, classValue, get, methodFlag, methodList, methodValue, post, route } from "@toyz/yerd";
 
 export const internal = methodFlag("internal");                   // @internal
 export const summary = methodValue<string>("summary", {           // @summary("...")
@@ -446,7 +446,7 @@ export const feature = classValue<string>("feature");             // @feature("b
 @route("/reports")
 export class Reports {
   @get @summary("List reports") @tags("reports") list() { return []; }
-  @post @internal @tags("reports", "admin") rebuild() { return 204; }
+  @post @internal @tags("reports", "admin") rebuild() { return HttpStatus.NoContent; }
 }
 ```
 

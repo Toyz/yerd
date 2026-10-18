@@ -59,7 +59,8 @@ content-type: application/json; charset=utf-8
 - A tutorial step whose code is a subset of the shop answers for that subset: run it, or elide the parts the step doesn't have yet so the answer holds for both.
 
 Errors are the named classes (`NotFound`, `Conflict`...), returned or thrown, never a bare
-`404`. Numbers are for statuses without a body: `return 204` after a delete.
+`404`. A status without a body is named: `return HttpStatus.NoContent` after a delete,
+`@status(HttpStatus.Created)`; no bare numbers in examples.
 
 ## yerd's take
 

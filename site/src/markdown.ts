@@ -68,7 +68,7 @@ function apiTarget(code: string, ctx: LinkContext): string | undefined {
  * other identifiers only when the block imports them from yerd, so a local
  * variable that happens to share an export's name stays plain.
  */
-function codeLinker(source: string, ctx: LinkContext): CodeLinker | undefined {
+export function codeLinker(source: string, ctx: LinkContext): CodeLinker | undefined {
   const resolve = ctx.resolveApi;
   if (!resolve) return undefined;
   const imported = new Set<string>();

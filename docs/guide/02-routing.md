@@ -182,7 +182,7 @@ export class Q3 {
 A guard runs before a handler and decides whether it runs. The shop's `auth.required` comes from [createAuth](09-sessions-and-auth.md#sign-in-with-createauth); your own are made with [createGuard](api:yerd.createGuard), a function of the request context.
 
 ```tsx
-import { Forbidden, createGuard, get, post, route } from "@toyz/yerd";
+import { Forbidden, HttpStatus, createGuard, get, post, route } from "@toyz/yerd";
 
 const businessHours = createGuard("businessHours", () => {
   const hour = new Date().getHours();
@@ -196,7 +196,7 @@ export class Support {
   }
 
   @post @businessHours open() {
-    return 201;
+    return HttpStatus.Created;
   }
 }
 ```

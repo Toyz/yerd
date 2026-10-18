@@ -423,7 +423,7 @@ yerd's client runtime gets the redirect as a `yx-location` header.
 [createGuard](api:yerd.createGuard), what a guard may return, and the order guards run in are covered in [routing](02-routing.md#guards). Named guards live on services, so they can inject things: declare one with [guard](api:yerd.guard) and refer to it by name.
 
 ```ts
-import { guard, guards, inject, post, route, service, type YerdContext } from "@toyz/yerd";
+import { HttpStatus, guard, guards, inject, post, route, service, type YerdContext } from "@toyz/yerd";
 
 @service
 export class Flags {
@@ -437,7 +437,7 @@ export class Flags {
 @route("/beta", { guards: ["beta"] })
 export class Beta {
   @post @guards(auth.required) vote() {
-    return 204;
+    return HttpStatus.NoContent;
   }
 }
 ```

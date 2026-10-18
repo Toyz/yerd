@@ -82,7 +82,7 @@ set-cookie: yerd_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax
 ```
 
 - Returning a `YerdError` works like throwing it: same status, same body, same [@catches](#handling-errors-with-catches) and error page. It's how you use one in an expression, since TypeScript has no `?? throw`.
-- Errors are the named classes (`NotFound`, `Conflict`, [the list](#the-ready-made-classes)). A bare number is for a status without a body: `return 204` after a delete, `return 201` after a create.
+- Errors are the named classes (`NotFound`, `Conflict`, [the list](#the-ready-made-classes)). A status alone is for an answer without a body: `return HttpStatus.NoContent` after a delete. [HttpStatus](api:yerd.HttpStatus) names every code; a plain number works too.
 - Objects become JSON: plain objects, your own class instances (a validated DTO sends its fields), anything with `toJSON` (a `Date`). `Map` and `Set` are refused with a 500 whose log line says what to do.
 
 > [!TAKE]
@@ -94,7 +94,7 @@ set-cookie: yerd_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax
 | a string | 200 `text/plain` |
 | a plain object, array or boolean | 200 `application/json` |
 | a `YerdError` | as if thrown: its status, and its JSON body ([below](#errors-with-yerderror)) |
-| a number | that status with an empty body (`return 204`) |
+| a status | that status with an empty body (`return HttpStatus.NoContent`, or `return 204`) |
 | `undefined` or `null` | 204 No Content |
 | a `Uint8Array` | 200 `application/octet-stream` |
 | an async iterable (e.g. `async *gen()`) | 200 `text/plain`, streamed chunk by chunk |
@@ -111,7 +111,7 @@ set-cookie: yerd_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax
 ```tsx
 @post create() {
   return res({ id: 2 }, {
-    status: 201,
+    status: HttpStatus.Created,
     headers: { Location: "/things/2", "Cache-Control": "no-store" },
     cookies: [{ name: "last", value: "2", maxAge: 3600 }],
   });
@@ -168,11 +168,11 @@ set-cookie: yerd_session=vgHbzfh-...; Max-Age=1209600; Path=/; HttpOnly; SameSit
 Declare a fixed status or header on the method and keep returning plain values.
 
 ```tsx
-import { post, route, setHeader, status } from "@toyz/yerd";
+import { HttpStatus, post, route, setHeader, status } from "@toyz/yerd";
 
 @route("/comments")
 export class Comments {
-  @post @status(201) @setHeader("cache-control", "no-store")
+  @post @status(HttpStatus.Created) @setHeader("cache-control", "no-store")
   create() {
     return { id: 7 }; // 201, JSON, Cache-Control: no-store
   }

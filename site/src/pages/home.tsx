@@ -7,7 +7,8 @@
 import { LoomElement, component, css, mount, reactive, styles } from "@toyz/loom";
 import { route } from "@toyz/loom/router";
 import { BASELINE, BenchBars, benchStyles, fastestFramework, formatNumber } from "../bench-chart";
-import { loadApi, loadBenchmarks, type Api, type BenchState } from "../data";
+import { linkContext, loadApi, loadBenchmarks, type Api, type BenchState } from "../data";
+import { codeLinker } from "../markdown";
 import { highlight } from "../highlight";
 import { Mark, onCopyClick } from "../ui";
 
@@ -137,6 +138,8 @@ const sheet = css`
   }
 `;
 
+const HERO_IMPORTS = `import { HttpStatus, NotFound, redirect, toInt } from "@toyz/yerd";`;
+
 const ROUTE_HEAD = `@route("/products/:id")
 class ProductPage {
   @param("id", { transform: toInt }) accessor id!: number;
@@ -194,9 +197,9 @@ const ANSWERS: Record<string, Answer> = {
     exchanges: [{ request: PRODUCT, status: "200 OK", headers: ["content-type: text/plain"], body: "Field notebook: 3 in stock" }],
   },
   number: {
-    label: "a number",
+    label: "a status",
     handler: "remove",
-    line: "return 204;",
+    line: "return HttpStatus.NoContent;",
     exchanges: [{ request: "DELETE /products/7", status: "204 No Content", headers: [], body: "empty" }],
   },
   stream: {
@@ -270,9 +273,11 @@ export class PageHome extends LoomElement {
 
   #code() {
     const a = ANSWERS[this.answer]!;
-    const top = highlight(`${ROUTE_HEAD}\n${HANDLERS[a.handler]}`, "tsx").split("\n");
-    const bottom = highlight(ROUTE_END, "tsx").split("\n");
-    const changed = highlight(`    ${a.line}`, "tsx");
+    // The hero's code has no import line: name the yerd exports it uses, so they get hover cards like guide code.
+    const link = this.api ? codeLinker(HERO_IMPORTS, linkContext(this.api, [])) : undefined;
+    const top = highlight(`${ROUTE_HEAD}\n${HANDLERS[a.handler]}`, "tsx", link).split("\n");
+    const bottom = highlight(ROUTE_END, "tsx", link).split("\n");
+    const changed = highlight(`    ${a.line}`, "tsx", link);
     return (
       <pre aria-label="A yerd route class" style={`min-height: ${CODE_LINES * 1.65}em`}>
         <code>
@@ -395,7 +400,7 @@ export class PageHome extends LoomElement {
           <div>
             <h1>Routes are classes. Handlers return anything.</h1>
             <p class="pitch">
-              yerd is a TypeScript web server for Node. Decorate a class, return what fits (a page in TSX, an object, a number, a stream) and
+              yerd is a TypeScript web server for Node. Decorate a class, return what fits (a page in TSX, an object, a status, a stream) and
               yerd turns it into the response. No runtime dependencies.
             </p>
             <div class="actions">
