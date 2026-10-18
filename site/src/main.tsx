@@ -9,6 +9,7 @@ import "./api-tip";
 import { app } from "@toyz/loom";
 import { LoomRouter } from "@toyz/loom/router";
 
+import "./palette";
 import "./app";
 import "./pages/home";
 import "./pages/guide";

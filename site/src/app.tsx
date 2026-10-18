@@ -7,6 +7,7 @@
 import { LoomElement, component, css, mount, on, reactive, styles } from "@toyz/loom";
 import { RouteChanged } from "@toyz/loom/router";
 import { entryId, loadApi, loadGuides, sectionId, type Api, type GuideInfo } from "./data";
+import { OpenPalette, PALETTE_HOTKEY } from "./palette";
 import { pageStyles } from "./shared";
 
 const sheet = css`
@@ -38,15 +39,26 @@ const sheet = css`
   .pill.main { color: var(--accent); border-color: var(--accent-dim); }
 
   .search { padding: 4px 14px 12px; border-bottom: 1px solid var(--border); }
-  input {
+  .search-button {
     width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     padding: 8px 10px;
     border-radius: 6px;
     border: 1px solid var(--border-strong);
     background: var(--bg-sunken);
-    color: var(--text);
+    color: var(--text-faint);
     font: inherit;
     font-size: 0.88rem;
+    cursor: pointer;
+    text-align: left;
+  }
+  .search-button:hover { border-color: var(--accent-dim); color: var(--text-dim); }
+  .search-button kbd {
+    font-family: var(--mono); font-size: 0.7rem; padding: 1px 6px; border: 1px solid var(--border);
+    border-radius: 5px; background: var(--bg-raised); color: var(--text-faint);
   }
   input:focus { outline: none; border-color: var(--accent-dim); }
 
@@ -89,8 +101,6 @@ const sheet = css`
   .nav-link.active loom-link::part(anchor) { color: var(--accent); background: var(--accent-bg); font-weight: 600; }
   .nav-link.featured loom-link::part(anchor)::after { content: " ✦"; color: var(--accent); font-size: 0.75em; }
 
-  .result loom-link::part(anchor) { font-family: var(--mono); font-size: 0.84rem; }
-  .result .module { color: var(--text-faint); font-size: 0.72rem; padding: 0 22px 4px; margin-top: -3px; font-family: var(--mono); }
   .hint { padding: 6px 22px; font-size: 0.8rem; color: var(--text-faint); }
 
   .foot { padding: 12px 20px; border-top: 1px solid var(--border); font-size: 0.78rem; color: var(--text-faint); }
@@ -142,7 +152,6 @@ export class YerdDocs extends LoomElement {
   @reactive accessor path = currentPath();
   @reactive accessor api: Api | undefined = undefined;
   @reactive accessor guides: GuideInfo[] = [];
-  @reactive accessor query = "";
   @reactive accessor open = false;
   @reactive accessor collapsed: Set<string> = readCollapsed();
 
@@ -184,67 +193,6 @@ export class YerdDocs extends LoomElement {
         </button>
         <div class="items">{items}</div>
       </div>
-    );
-  }
-
-  #results() {
-    const q = this.query.trim().toLowerCase();
-    const api = this.api!;
-    const matches = api.entries
-      .filter((e) => e.name.toLowerCase().includes(q))
-      .sort((a, b) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)) || a.name.localeCompare(b.name))
-      .slice(0, 40);
-    const guides = this.guides.filter((g) => g.title.toLowerCase().includes(q)).slice(0, 6);
-    // Members ("generateId" finds SessionOptions.generateId) and guide sections ("Custom session ids").
-    const members = api.entries
-      .flatMap((e) => (e.members ?? []).filter((m) => m.name.toLowerCase().includes(q)).map((m) => ({ e, m })))
-      .sort((a, b) => Number(!a.m.name.toLowerCase().startsWith(q)) - Number(!b.m.name.toLowerCase().startsWith(q)) || a.m.name.localeCompare(b.m.name))
-      .slice(0, 20);
-    const sections = this.guides
-      .flatMap((g) => (g.sections ?? []).filter((s) => s.text.toLowerCase().includes(q)).map((s) => ({ g, s })))
-      .slice(0, 12);
-    if (matches.length === 0 && guides.length === 0 && members.length === 0 && sections.length === 0) {
-      return <div class="hint">Nothing matches “{this.query.trim()}”.</div>;
-    }
-    return (
-      <>
-        {guides.length ? (
-          <div class="group">
-            <div class="hint">Guides</div>
-            {guides.map((g) => this.#link(g.slug === "overview" ? "/" : `/guide/${g.slug}`, g.title))}
-          </div>
-        ) : null}
-        {sections.length ? (
-          <div class="group">
-            <div class="hint">In the guides</div>
-            {sections.map(({ g, s }) => (
-              <div class="result" loom-key={`${g.slug}/${s.id}`}>
-                {this.#link(`/guide/${g.slug}/${s.id}`, s.text)}
-                <div class="module">{g.title}</div>
-              </div>
-            ))}
-          </div>
-        ) : null}
-        {members.length ? (
-          <div class="group">
-            <div class="hint">Members</div>
-            {members.map(({ e, m }) => (
-              <div class="result" loom-key={`${entryId(e)}/${m.name}`}>{this.#link(`/api/${entryId(e)}/${m.name}`, `${e.name}.${m.name}`)}</div>
-            ))}
-          </div>
-        ) : null}
-        {matches.length ? (
-          <div class="group">
-            <div class="hint">{matches.length === 40 ? "API: first 40 matches" : `API: ${matches.length}`}</div>
-            {matches.map((e) => (
-              <div class="result" loom-key={entryId(e)}>
-                {this.#link(`/api/${entryId(e)}`, e.name)}
-                {e.module !== "@toyz/yerd" ? <div class="module">{e.module}</div> : null}
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </>
     );
   }
 
@@ -312,14 +260,12 @@ export class YerdDocs extends LoomElement {
             ) : null}
           </div>
           <div class="search">
-            <input
-              type="search"
-              placeholder="Search guides and API…"
-              value={this.query}
-              onInput={(e: Event) => (this.query = (e.target as HTMLInputElement).value)}
-            />
+            <button class="search-button" onClick={() => OpenPalette.dispatch()}>
+              <span>Search guides and API...</span>
+              <kbd>{PALETTE_HOTKEY}</kbd>
+            </button>
           </div>
-          <nav>{api && this.query.trim() ? this.#results() : this.#nav()}</nav>
+          <nav>{this.#nav()}</nav>
           <div class="foot">
             <a href="https://github.com/Toyz/yerd" target="_blank" rel="noopener">GitHub</a> ·{" "}
             <a href="https://www.npmjs.com/package/@toyz/yerd" target="_blank" rel="noopener">npm</a> ·{" "}
@@ -330,6 +276,7 @@ export class YerdDocs extends LoomElement {
         <main>
           <loom-outlet styles={[pageStyles]}></loom-outlet>
         </main>
+        <doc-palette></doc-palette>
       </div>
     );
   }
