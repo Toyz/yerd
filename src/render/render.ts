@@ -235,9 +235,10 @@ function renderNode(node: YerdNode, state: State): Step {
   return undefined;
 }
 
-// Where the parser drops a <style> (<select>) or closes the element at one
-// (<colgroup>): rules for classes inside wait until the element has closed.
-const HOLDS_CSS = new Set(["select", "colgroup"]);
+// Where the parser drops a <style> (<select>), closes the element at one
+// (<colgroup>), or reads it as markup or not at all (<svg>, <math>): rules for
+// classes inside wait until the element has closed.
+const HOLDS_CSS = new Set(["select", "colgroup", "svg", "math"]);
 // Contents that aren't part of the page (<template>), or aren't once scripts
 // run (<noscript>): rules sent inside don't count as sent for the rest of it.
 const OWN_CSS = new Set(["template", "noscript"]);

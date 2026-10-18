@@ -227,6 +227,18 @@ export function useCssBundle(href: string, classes: readonly string[]): void {
   bundle = { href, classes: new Set(classes) };
 }
 
+/**
+ * @internal Forget every rule and the bundle: the dev server's reload, before
+ * the app's modules run again and register what they have now.
+ */
+export function resetCss(): void {
+  rules.clear();
+  globals.length = 0;
+  globalSet.clear();
+  globalNeeds.clear();
+  bundle = undefined;
+}
+
 /** @internal Forget the bundle (dev servers, tests). */
 export function resetCssBundle(): void {
   bundle = undefined;

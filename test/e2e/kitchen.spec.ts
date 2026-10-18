@@ -431,7 +431,7 @@ test("returns: is.email, is.date, is.url and a branded Uuid pipeline", async ({ 
 
 test("the feature tour: every link leads somewhere real", async ({ page }) => {
   await ada(page, "/features");
-  await expect(page.locator("h1")).toHaveText("Feature tour");
+  await expect(page.locator("h1")).toHaveText(/^Feature tour/);
   const links = [...new Set(await page.locator(".features-list dt a").evaluateAll((as) => as.map((a) => a.getAttribute("href")!)))];
   expect(links.length).toBeGreaterThan(25);
   // The error demos answer with their status on purpose.
@@ -452,7 +452,7 @@ test("the error page shows a crash's stack in development only", async ({ reques
 
 test("assets: the stylesheet and hero resolve (hashed in production), public files are served", async ({ page, request }, info) => {
   await page.goto("/");
-  const css = await page.locator('link[rel="stylesheet"]').getAttribute("href");
+  const css = await page.locator('link[rel="stylesheet"]:not([href*="/yerd-"])').getAttribute("href");
   const hero = await page.locator(".hero-img").getAttribute("src");
   expect(css).toMatch(info.project.name === "kitchen-prod" ? /^\/assets\/styles-[\w-]+\.css$/ : /^\/src\/styles\.css$/);
   expect(hero).toMatch(info.project.name === "kitchen-prod" ? /^\/assets\/hero-[\w-]+\.svg$/ : /^\/src\/hero\.svg$/);

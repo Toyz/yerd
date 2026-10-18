@@ -238,11 +238,22 @@ describe("elements in every context", () => {
     expect(html.indexOf(`data-yx-css="${card}"`)).toBeLessThan(html.indexOf("<svg"));
   });
 
-  // Inside <svg>/<math> the parser makes <style> a foreign element: in SVG it
-  // still applies (but its text is parsed as markup, so `<` or `&name;` in a
-  // rule would change), in MathML it does nothing. Holding the rules until
-  // </svg> (as for <select>) would fix both, at the cost of a late paint.
-  it.todo("holds rules for classes used inside <svg>/<math> until the foreign element closes");
+  // Inside <svg>/<math> the parser makes <style> a foreign element: in SVG its
+  // text is parsed as markup, in MathML it does nothing. So rules for classes
+  // inside wait until the foreign element has closed, back in HTML.
+  it("holds rules for classes used inside <svg>/<math> until the foreign element closes", async () => {
+    const html = await renderToString(
+      <div>
+        <svg viewBox="0 0 10 10">
+          <circle class={active} cx="5" cy="5" r="4" />
+        </svg>
+        {jsx("math", { children: jsx("mi", { class: muted, children: "x" }) })}
+      </div>,
+    );
+    expect(html.indexOf(`data-yx-css="${active}"`)).toBeGreaterThan(html.indexOf("</svg>"));
+    expect(html.indexOf(`data-yx-css="${muted}"`)).toBeGreaterThan(html.indexOf("</math>"));
+    expect(html.slice(html.indexOf("<svg"), html.indexOf("</svg>"))).not.toContain("<style");
+  });
 
   it("writes rules for <head> elements inside <head>", async () => {
     const html = await renderToString(
