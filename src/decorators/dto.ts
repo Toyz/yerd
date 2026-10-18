@@ -190,7 +190,10 @@ interface Pipeline {
 }
 
 function pipelineOf(options: AnyIsOptions | undefined): Pipeline {
-  return { transforms: steps(options?.transform as Transform<any, any> | readonly Transform<any, any>[] | undefined), validators: steps(options?.validate) };
+  return {
+    transforms: steps(options?.transform as Transform<any, any> | readonly Transform<any, any>[] | undefined),
+    validators: steps(options?.validate),
+  };
 }
 
 function finish(input: unknown, path: Path, issues: Issue[], pipeline: Pipeline): unknown {

@@ -211,7 +211,11 @@ function pipelineOf(options: AnyOptions | undefined): Pipeline {
   if (!options) return NO_PIPELINE;
   let pipeline = pipelines.get(options);
   if (!pipeline) {
-    pipeline = { transforms: steps(options.transform as Transform<any, any> | readonly Transform<any, any>[]), validators: steps(options.validate), required: options.required === true };
+    pipeline = {
+      transforms: steps(options.transform as Transform<any, any> | readonly Transform<any, any>[] | undefined),
+      validators: steps(options.validate),
+      required: options.required === true,
+    };
     pipelines.set(options, pipeline);
   }
   return pipeline;
