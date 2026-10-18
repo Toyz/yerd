@@ -1,4 +1,13 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
+
+/**
+ * The shop's inputs carry browser checks (type="email", min, max), which stop
+ * a bad submit before it leaves the page. These tests are about the server's
+ * answer, so they turn those checks off on the field's form.
+ */
+async function skipBrowserChecks(field: Locator): Promise<void> {
+  await field.evaluate((el) => ((el as HTMLInputElement).form!.noValidate = true));
+}
 
 /** Set a marker on window; if it survives, the page was never fully reloaded. */
 async function markPage(page: Page) {
@@ -24,9 +33,9 @@ test("searches and filters the catalog", async ({ page }) => {
   await expect(page).toHaveURL(/\?q=notebook/);
   await expect(page.locator(".card a")).toHaveText(["Pocket notebook", "Field notebook"]);
 
-  await page.getByRole("link", { name: "desk" }).click();
+  await page.getByRole("link", { name: "desk", exact: true }).click();
   await expect(page.locator(".card a")).toHaveText(["Desk lamp", "Brass ruler"]);
-  await expect(page.getByRole("link", { name: "desk" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("link", { name: "desk", exact: true })).toHaveAttribute("aria-current", "page");
 
   await page.getByRole("searchbox", { name: "Search" }).fill("zebra");
   await page.getByRole("button", { name: "Search" }).click();
@@ -56,6 +65,8 @@ test("adds to the cart, changes the quantity and removes it, without reloading",
   await expect(page.locator(".total")).toHaveText("Total $30.00");
   await expect(page.locator("#cart-badge .badge")).toHaveText("4");
 
+  // The browser would stop -2 itself (min="0"); switch that off to see the server's answer.
+  await skipBrowserChecks(qty);
   await qty.fill("-2");
   await qty.press("Enter");
   await expect(page.locator('[data-yx-error="qty"]')).toContainText("Must be from 0 to 99");
@@ -86,6 +97,7 @@ test("checks out behind a sign-in that keeps the cart, with errors under their f
   await expect(page.locator(".summary")).toContainText("1 x Pocket notebook");
   await expect(page.locator("#cart-badge .badge")).toHaveText("1");
 
+  await skipBrowserChecks(page.getByLabel("Name"));
   await page.getByLabel("Name").fill("A");
   await page.getByLabel("Email").fill("nope");
   await page.getByRole("button", { name: "Place order" }).click();
@@ -113,6 +125,7 @@ test("checkout errors work without JavaScript too", async ({ browser }) => {
   await signIn(page);
   await expect(page).toHaveURL(/\/checkout$/);
 
+  await skipBrowserChecks(page.getByLabel("Email"));
   await page.getByLabel("Email").fill("nope");
   await page.getByRole("button", { name: "Place order" }).click();
   await expect(page.locator('[data-yx-error="email"]')).toHaveText("Expected an email address");
