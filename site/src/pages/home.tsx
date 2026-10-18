@@ -1,182 +1,445 @@
-/** The landing page: what yerd is, where to start, and what's in it. */
+/**
+ * The landing page: what yerd is in one look (a route class, and what each
+ * kind of return value turns into), how to install it, where to go next,
+ * and how it measures up.
+ */
 
 import { LoomElement, component, css, mount, reactive, styles } from "@toyz/loom";
 import { route } from "@toyz/loom/router";
-import { entryId, loadApi, type Api } from "../data";
-import { Code, SinceBadge } from "../ui";
+import { BASELINE, BenchBars, benchStyles, fastestFramework, formatNumber } from "../bench-chart";
+import { loadApi, loadBenchmarks, type Api, type BenchState } from "../data";
+import { highlight } from "../highlight";
+import { GnomeMark, onCopyClick } from "../ui";
 
 const sheet = css`
-  .hero { padding: 24px 0 8px; }
-  .eyebrow { font: 700 0.75rem var(--mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); }
-  .hero h1 { font-size: 3rem; margin: 6px 0 14px; letter-spacing: -0.03em; }
-  .tagline { font-size: 1.25rem; line-height: 1.5; color: var(--text-dim); max-width: 720px; margin: 0 0 26px; }
-  .tagline strong { color: var(--text); font-weight: 600; }
+  ${benchStyles}
+  :host { padding-top: 0; }
+  .wrap { max-width: 1160px; margin: 0 auto; }
 
-  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 26px; }
+  /* ── hero ── */
+  .hero {
+    display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 56px; align-items: center;
+    padding: 64px 0 56px;
+  }
+  .hero h1 { font-size: clamp(2.5rem, 1.6rem + 3vw, 3.9rem); line-height: 1.04; letter-spacing: -0.02em; margin: 0 0 22px; }
+  .hero .pitch { font-size: 1.15rem; line-height: 1.6; color: var(--text-dim); margin: 0 0 30px; max-width: 34rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 22px; }
   .btn {
     display: inline-flex; align-items: center; gap: 8px;
-    padding: 10px 18px; border-radius: 8px; font-weight: 600; font-size: 0.95rem;
+    padding: 11px 20px; border-radius: 6px; font-weight: 700; font-size: 0.98rem; text-decoration: none;
     border: 1px solid var(--border-strong); color: var(--text); background: var(--bg-raised);
   }
-  .btn:hover { text-decoration: none; border-color: var(--accent-dim); }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-  .btn.primary:hover { filter: brightness(1.08); }
-
-  .install { max-width: 560px; }
-  .install pre.code { margin: 0; }
-
-  .showcase { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 28px; align-items: center; margin: 48px 0 12px; }
-  .showcase h2 { border: 0; margin: 0 0 10px; padding: 0; font-size: 1.4rem; }
-  .showcase p { margin: 0 0 10px; }
-  .showcase ul { margin: 8px 0 0; padding-left: 1.2em; }
-  .showcase pre.code { margin: 0; }
-  @media (max-width: 980px) { .showcase { grid-template-columns: 1fr; } }
-
-  h2.features-title { margin-top: 56px; }
-  .features { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
-  a.feature {
-    display: block; padding: 16px 18px; border-radius: var(--radius);
-    border: 1px solid var(--border); background: var(--bg-raised); color: var(--text);
-    transition: border-color 0.12s ease, transform 0.12s ease;
+  .btn:hover { border-color: var(--text-faint); }
+  .btn.primary { background: light-dark(#b23c21, #e0573b); border-color: transparent; color: light-dark(#fff, #1b1814); }
+  .btn.primary:hover { background: light-dark(#9a321b, #ea6a4f); }
+  .install {
+    display: flex; align-items: center; gap: 12px; max-width: 30rem;
+    padding: 6px 6px 6px 16px; border-radius: 6px;
+    background: var(--code-bg); border: 1px solid var(--border);
+    font: 0.92rem var(--mono); color: var(--code-text);
   }
-  a.feature:hover { border-color: var(--accent-dim); text-decoration: none; transform: translateY(-1px); }
-  .feature b { display: block; font-size: 1rem; margin-bottom: 4px; }
-  .feature span { display: block; font-size: 0.87rem; color: var(--text-dim); line-height: 1.5; }
-  .feature code { font-size: 0.78rem; }
+  .install .prompt { color: var(--text-faint); user-select: none; }
+  .install code { background: none; padding: 0; font-size: inherit; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .install button {
+    font: 700 0.78rem var(--font); padding: 6px 12px; border-radius: 4px; cursor: pointer;
+    border: 1px solid var(--border-strong); background: var(--bg-raised); color: var(--text-dim);
+  }
+  .install button:hover { color: var(--accent); border-color: var(--accent-dim); }
 
-  .pending { margin: 40px 0 0; padding: 14px 18px; border: 1px solid rgba(232, 196, 106, 0.35); background: var(--warn-bg); border-radius: var(--radius); }
-  .pending-title { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; color: var(--text); font-weight: 600; }
-  .pending a { display: inline-block; margin: 2px 14px 2px 0; font-family: var(--mono); font-size: 0.85rem; }
+  /* ── the demo: one route, five return values ── */
+  .demo { border-radius: 10px; border: 1px solid var(--border-strong); background: var(--bg-raised); overflow: hidden; box-shadow: var(--shadow); }
+  .demo-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .demo-bar .ask { font-size: 0.85rem; color: var(--text-dim); }
+  .choices { display: flex; gap: 2px; flex-wrap: wrap; padding: 3px; border-radius: 7px; background: var(--bg-sunken); }
+  .choices button {
+    font: 600 0.84rem var(--font); padding: 5px 11px; border-radius: 5px; border: 0; cursor: pointer;
+    background: none; color: var(--text-dim);
+  }
+  .choices button:hover { color: var(--text); }
+  .choices button[aria-pressed="true"] { background: var(--bg-raised); color: var(--text); box-shadow: 0 1px 2px rgba(60, 40, 20, 0.18); }
+  .demo pre {
+    margin: 0; padding: 16px 0; background: var(--code-bg); color: var(--code-text);
+    font: 0.84rem/1.65 var(--mono); overflow-x: auto; scrollbar-width: thin;
+  }
+  .demo pre code { display: inline-block; min-width: 100%; }
+  .demo pre .line { display: block; padding: 0 18px; border-left: 3px solid transparent; min-height: 1.65em; }
+  .demo pre .line.changed { background: var(--accent-bg); border-left-color: var(--hat); }
+  .file { font: 0.76rem var(--mono); color: var(--text-faint); padding: 8px 18px 0; background: var(--code-bg); }
+  .response { padding: 14px 18px 18px; border-top: 1px dashed var(--border-strong); min-height: 168px; }
+  .req { font: 0.8rem var(--mono); color: var(--text-faint); margin-bottom: 8px; }
+  .status { font: 600 0.84rem var(--mono); color: var(--text); }
+  .status.bad { color: var(--warn); }
+  .header-line { font: 0.8rem var(--mono); color: var(--text-dim); }
+  .body { margin-top: 10px; font: 0.84rem/1.6 var(--mono); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .body.empty { color: var(--text-faint); font-style: italic; font-family: var(--font); }
+  .body .chunk { display: block; animation: arrive 0.3s ease both; }
+  @keyframes arrive { from { opacity: 0; transform: translateY(3px); } }
 
-  .meta { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--border); font-size: 0.82rem; color: var(--text-faint); display: flex; flex-wrap: wrap; gap: 6px 22px; }
-  .meta b { color: var(--text-dim); font-weight: 600; }
+  .card {
+    margin-top: 10px; display: flex; gap: 14px; align-items: center;
+    padding: 12px 14px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border);
+    font-family: var(--font);
+  }
+  .card .gnome { flex: none; }
+  .card b { display: block; font: 400 1.15rem var(--display); color: var(--text); }
+  .card span { display: block; font-size: 0.85rem; color: var(--text-dim); }
+  .card .price { margin-left: auto; text-align: right; font-weight: 700; color: var(--text); }
+  .card .price small { display: block; font-weight: 400; color: var(--moss); font-size: 0.8rem; }
+
+  /* ── sections ── */
+  section.band { padding: 56px 0; border-top: 1px solid var(--border); }
+  section.band > h2 { margin: 0 0 8px; font-size: 1.9rem; }
+  section.band > p.intro { margin: 0 0 30px; max-width: var(--measure); }
+
+  .features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 32px; }
+  a.feature { display: block; padding: 14px 0 16px; color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border); }
+  a.feature b { display: flex; align-items: center; gap: 9px; font-size: 1.06rem; margin-bottom: 4px; }
+  a.feature b::before {
+    content: ""; flex: none; width: 0; height: 0;
+    border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 11px solid var(--hat);
+  }
+  a.feature span { display: block; color: var(--text-dim); font-size: 0.95rem; line-height: 1.55; }
+  a.feature code { display: block; margin-top: 8px; background: none; padding: 0; font-size: 0.8rem; color: var(--text-faint); }
+  a.feature:hover b { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+  .more { margin-top: 22px; font-weight: 700; }
+
+  .deps { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: 48px; align-items: start; }
+  .tree {
+    margin: 0; padding: 18px 20px; border-radius: 8px; background: var(--code-bg); border: 1px solid var(--border);
+    font: 0.9rem/1.7 var(--mono); color: var(--code-text); overflow-x: auto;
+  }
+  .tree .dim { color: var(--text-faint); }
+  .tree .pkg { color: var(--accent); font-weight: 600; }
+  .deps h2 { margin: 0 0 10px; font-size: 1.9rem; }
+  .deps p { margin: 0 0 18px; }
+  .inbox { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .inbox li {
+    margin: 0; padding: 5px 12px; border-radius: 999px; font-size: 0.9rem; color: var(--text);
+    background: var(--moss-bg);
+  }
+
+  .teaser-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; margin-bottom: 6px; }
+  .teaser-head h2 { margin: 0; font-size: 1.9rem; }
+  .teaser h3 { margin: 14px 0 12px; font-size: 1rem; color: var(--text-dim); font-weight: 400; }
+  .teaser h3 b { color: var(--text); }
+  .teaser .chart { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 8px 0; }
+  .teaser .sample { font-size: 0.85rem; color: var(--warn); margin: 10px 0 0; }
+
+  @media (max-width: 980px) {
+    .hero { grid-template-columns: minmax(0, 1fr); gap: 36px; padding: 40px 0; }
+    .features { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .deps { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  }
+  @media (max-width: 620px) {
+    .features { grid-template-columns: minmax(0, 1fr); }
+    .demo pre { font-size: 0.78rem; }
+    .demo pre .line { padding: 0 12px; }
+    .response { padding: 12px; }
+    section.band { padding: 44px 0; }
+  }
 `;
 
-const SAMPLE = `import { get, post, route, body, is, yerd } from "@toyz/yerd";
+const ROUTE_TOP = `@route("/gnomes/:id")
+class GnomePage {
+  @param("id", { transform: toInt }) accessor id!: number;
+  @inject(Bazaar) accessor bazaar!: Bazaar;
 
-class NewTodo {
-  @is.string({ validate: (s: string) => s.length > 0 }) title!: string;
-}
-const todos: NewTodo[] = [];
+  @get show() {
+    const gnome = this.bazaar.find(this.id);`;
+const ROUTE_BOTTOM = `  }
+}`;
 
-@route("/todos")
-class Todos {
-  @body(NewTodo) accessor input!: Promise<NewTodo>;
+type Answer = {
+  label: string;
+  line: string;
+  status: string;
+  headers: string[];
+  body: "card" | "empty" | string | string[];
+};
 
-  @get list() {
-    return <ul>{todos.map((t) => <li>{t.title}</li>)}</ul>;
-  }
+const ANSWERS: Record<string, Answer> = {
+  jsx: {
+    label: "JSX",
+    line: "return <GnomeCard gnome={gnome} />;",
+    status: "200 OK",
+    headers: ["content-type: text/html", "(inside your layouts, streamed)"],
+    body: "card",
+  },
+  object: {
+    label: "an object",
+    line: "return gnome;",
+    status: "200 OK",
+    headers: ["content-type: application/json"],
+    body: `{"id":7,"name":"Fennel","kind":"fishing","price":24,"stock":3}`,
+  },
+  string: {
+    label: "a string",
+    line: "return `${gnome.name} is out in the yard`;",
+    status: "200 OK",
+    headers: ["content-type: text/plain"],
+    body: "Fennel is out in the yard",
+  },
+  number: {
+    label: "a number",
+    line: "return 404;",
+    status: "404 Not Found",
+    headers: ["content-length: 0"],
+    body: "empty",
+  },
+  stream: {
+    label: "a stream",
+    line: "return this.bazaar.restocks(gnome); // async iterable",
+    status: "200 OK",
+    headers: ["content-type: text/plain", "transfer-encoding: chunked"],
+    body: ["Fennel: 3 left\n", "Fennel: 2 left\n", "Fennel: 2 left (one on hold)\n", "Fennel: sold out\n"],
+  },
+};
 
-  @post async add() {
-    todos.push(await this.input); // validated (or a 400)
-    return 201;
-  }
-}
-
-await yerd().listen(3000);`;
-
-const FEATURES: Array<[title: string, text: string, guide: string]> = [
-  ["Routing", "Decorated classes, groups, layouts anywhere, guards, content negotiation.", "routing"],
-  ["Request data", "Typed accessors for params, query, bodies and uploads; DTO classes that validate.", "request-data"],
-  ["Return anything", "Strings, numbers, objects, streams, JSX pages, or full control with res().", "responses"],
-  ["Pages and layouts", "TSX on the server, nested layouts, error pages, prerendering with live parts.", "pages-and-layouts"],
-  ["Interactivity", "Forms that work without JavaScript and update in place with it. No client framework.", "interactivity"],
-  ["Streaming and live", "NDJSON, Server-Sent Events, and channels that push updates to the right users.", "streaming-and-live"],
-  ["Services", "C#-style DI: singleton, scoped and transient lifetimes, hooks, background work.", "services"],
-  ["Sessions and auth", "Sealed sessions, typed users, roles, CSRF protection that's on by default.", "sessions-and-auth"],
-  ["Logging", "Spans like Rust's tracing, request ids, @instrument, bring-your-own sink.", "logging"],
-  ["Deploying", "A Vite plugin for dev and builds, or plain tsc and node. Graceful shutdown built in.", "deploying"],
-  ["Testing", "Boot the app on a random port and fetch it. Fakes through DI.", "testing"],
+const FEATURES: Array<{ title: string; text: string; code: string; guide: string }> = [
+  { title: "Routing", text: "A class per URL, a method per verb. Groups, guards and layouts nest the way your folders do.", code: "@route @get @post @group", guide: "routing" },
+  { title: "Request data", text: "Typed accessors for params, query, headers and bodies. DTO classes validate before your handler runs.", code: "@param @query @body is.string()", guide: "request-data" },
+  { title: "Pages in TSX", text: "TSX rendered on the server, nested layouts, error pages, and prerendering with live parts.", code: "<Layout> <Dynamic>", guide: "pages-and-layouts" },
+  { title: "Forms that work without JS", text: "Actions post with or without JavaScript and update the page in place when it's there.", code: "@action <Region>", guide: "interactivity" },
+  { title: "Services", text: "Singleton, scoped and transient lifetimes, injected into routes, with hooks and background work.", code: "@service @inject @every", guide: "services" },
+  { title: "Sessions and auth", text: "Sealed sessions, typed users and roles, argon2id passwords, CSRF checks on by default.", code: "createAuth() @session", guide: "sessions-and-auth" },
 ];
+
+const BUILT_IN = [
+  "router",
+  "body parsing",
+  "validation",
+  "TSX renderer",
+  "layouts",
+  "sessions",
+  "auth and CSRF",
+  "DI container",
+  "SSE and NDJSON",
+  "live channels",
+  "client runtime",
+  "structured logging",
+  "Vite plugin",
+];
+
+/** Popular rather than fast: the one most readers are coming from. */
+const FAMILIAR = "express";
 
 @route("/")
 @component("page-home")
 @styles(sheet)
 export class PageHome extends LoomElement {
   @reactive accessor api: Api | undefined = undefined;
+  @reactive accessor bench: BenchState | undefined = undefined;
+  @reactive accessor answer = "jsx";
+  @reactive accessor copied = false;
 
   @mount async load() {
     window.scrollTo(0, 0);
-    this.api = await loadApi();
+    const [api, bench] = await Promise.all([loadApi(), loadBenchmarks()]);
+    this.api = api;
+    this.bench = bench;
+  }
+
+  #copyInstall() {
+    void navigator.clipboard?.writeText("npm install @toyz/yerd").then(() => {
+      this.copied = true;
+      setTimeout(() => (this.copied = false), 1400);
+    });
+  }
+
+  #code() {
+    const a = ANSWERS[this.answer]!;
+    const top = highlight(ROUTE_TOP, "tsx").split("\n");
+    const bottom = highlight(ROUTE_BOTTOM, "tsx").split("\n");
+    const changed = highlight(`    ${a.line}`, "tsx");
+    return (
+      <pre aria-label="A yerd route class">
+        <code>
+          {top.map((html) => <span class="line" rawHTML={html}></span>)}
+          <span class="line changed" rawHTML={changed}></span>
+          {bottom.map((html) => <span class="line" rawHTML={html}></span>)}
+        </code>
+      </pre>
+    );
+  }
+
+  #response() {
+    const a = ANSWERS[this.answer]!;
+    let body: unknown;
+    if (a.body === "card") {
+      body = (
+        <div class="card">
+          <GnomeMark size={40} />
+          <div>
+            <b>Fennel</b>
+            <span>Fishing gnome, 30 cm, hand painted</span>
+          </div>
+          <div class="price">
+            $24
+            <small>3 in stock</small>
+          </div>
+        </div>
+      );
+    } else if (a.body === "empty") {
+      body = <div class="body empty">No body: the number is the status.</div>;
+    } else if (Array.isArray(a.body)) {
+      body = (
+        <div class="body">
+          {a.body.map((chunk, i) => (
+            <span class="chunk" style={`animation-delay: ${i * 0.35}s`} loom-key={`${this.answer}-${i}`}>
+              {chunk.trimEnd()}
+            </span>
+          ))}
+        </div>
+      );
+    } else {
+      body = <div class="body">{a.body}</div>;
+    }
+    return (
+      <div class="response" aria-live="polite">
+        <div class="req">GET /gnomes/7</div>
+        <div class={`status ${a.status.startsWith("2") ? "" : "bad"}`}>HTTP/1.1 {a.status}</div>
+        {a.headers.map((h) => (
+          <div class="header-line">{h}</div>
+        ))}
+        {body}
+      </div>
+    );
+  }
+
+  #teaser() {
+    const state = this.bench;
+    if (!state) return null;
+    const data = state.data;
+    if (!data || data.scenarios.length === 0) {
+      return (
+        <section class="band teaser">
+          <div class="teaser-head">
+            <h2>Benchmarks</h2>
+            <a href="#/benchmarks">How they're run</a>
+          </div>
+          <p class="intro">
+            yerd against Express, Fastify, Hono, Koa and NestJS, on the same machine with the same apps. The numbers haven't been run for this
+            build of the docs yet.
+          </p>
+        </section>
+      );
+    }
+    // The harness's first scenario, whatever it shows: the page doesn't pick the flattering one.
+    const scenario = data.scenarios[0]!;
+    const yerd = scenario.results.find((r) => r.framework === "yerd");
+    const fastest = fastestFramework(scenario.results);
+    const only = [...new Set(["yerd", fastest?.framework, FAMILIAR, BASELINE].filter((id): id is string => !!id && scenario.results.some((r) => r.framework === id)))];
+    const nameOf = (id: string | undefined) => data.frameworks.find((f) => f.id === id)?.name ?? id ?? "";
+    const others = data.frameworks.filter((f) => f.id !== "yerd" && f.id !== BASELINE).length;
+    return (
+      <section class="band teaser">
+        <div class="teaser-head">
+          <h2>Benchmarks</h2>
+          <a href="#/benchmarks">
+            All {data.scenarios.length} scenarios, {others} other frameworks
+          </a>
+        </div>
+        <p class="intro">Same machine, same apps, same load. A few rows from the first scenario; the full page has every framework and every number.</p>
+        {yerd && fastest ? (
+          <h3>
+            <b>{scenario.title}</b>: yerd serves {formatNumber(Math.round(yerd.reqPerSec))} requests a second,{" "}
+            {Math.round((yerd.reqPerSec / fastest.reqPerSec) * 100)}% of {fastest.framework === "yerd" ? "itself (the fastest here)" : nameOf(fastest.framework)}.
+          </h3>
+        ) : (
+          <h3>
+            <b>{scenario.title}</b>
+          </h3>
+        )}
+        <div class="chart">
+          <BenchBars data={data} scenario={scenario} only={only} />
+        </div>
+        {state.sample ? <p class="sample">Sample data, shown in development only.</p> : null}
+      </section>
+    );
   }
 
   update() {
-    const api = this.api;
-    const unreleased = api ? api.entries.filter((e) => e.since === null) : [];
-    const newMembers = api ? api.entries.flatMap((e) => (e.members ?? []).filter((m) => m.since === null).map((m) => ({ e, m }))) : [];
     return (
-      <div>
+      <div class="wrap">
         <div class="hero">
-          <div class="eyebrow">TypeScript web server for Node</div>
-          <h1>yerd</h1>
-          <p class="tagline">
-            Routes are <strong>decorated classes</strong>, <strong>TSX</strong> is the template engine, and a handler can{" "}
-            <strong>return anything</strong>. Zero runtime dependencies.
-          </p>
-          <div class="actions">
-            <a class="btn primary" href="#/guide/getting-started">Get started →</a>
-            <a class="btn" href="#/guide/your-first-app">Build your first app</a>
-            <a class="btn" href="#/api">API reference</a>
-          </div>
-          <div class="install">
-            <Code code={"npm install @toyz/yerd"} lang="sh" />
-          </div>
-        </div>
-
-        <div class="showcase">
-          <Code code={SAMPLE} lang="tsx" />
           <div>
-            <h2>One class, one URL</h2>
-            <p>Each route is a class. Methods answer verbs, accessors pull typed, validated request data, and whatever you return becomes the response.</p>
-            <ul>
-              <li>A string is text, a number is a status, an object is JSON.</li>
-              <li>JSX is an HTML page, wrapped in your layouts.</li>
-              <li>An async iterable streams.</li>
-            </ul>
+            <h1>Routes are classes. Handlers return anything.</h1>
+            <p class="pitch">
+              yerd is a TypeScript web server for Node. Decorate a class, return what fits (a page in TSX, an object, a number, a stream) and
+              yerd turns it into the response. No runtime dependencies.
+            </p>
+            <div class="actions">
+              <a class="btn primary" href="#/guide/getting-started">Get started</a>
+              <a class="btn" href="#/guide/your-first-app">Build your first app</a>
+            </div>
+            <div class="install">
+              <span class="prompt">$</span>
+              <code>npm install @toyz/yerd</code>
+              <button type="button" onClick={() => this.#copyInstall()} aria-label="Copy the install command">
+                {this.copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+          </div>
+
+          <div class="demo">
+            <div class="demo-bar">
+              <span class="ask" id="returns">The handler returns</span>
+              <div class="choices" role="group" aria-labelledby="returns">
+                {Object.entries(ANSWERS).map(([id, a]) => (
+                  <button type="button" aria-pressed={this.answer === id ? "true" : "false"} onClick={() => (this.answer = id)}>
+                    {a.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div class="file">src/routes/gnome.tsx</div>
+            {this.#code()}
+            {this.#response()}
           </div>
         </div>
 
-        <h2 class="features-title">What's in the box</h2>
-        <div class="features">
-          {FEATURES.map(([title, text, guide]) => (
-            <a class="feature" href={`#/guide/${guide}`}>
-              <b>{title}</b>
-              <span>{text}</span>
-            </a>
-          ))}
-        </div>
-
-        {unreleased.length + newMembers.length > 0 ? (
-          <div class="pending">
-            <div class="pending-title">
-              On main, not released yet <SinceBadge since={null} />
-            </div>
-            {unreleased.map((e) => (
-              <a href={`#/api/${entryId(e)}`}>{e.name}</a>
-            ))}
-            {newMembers.map(({ e, m }) => (
-              <a href={`#/api/${entryId(e)}`}>
-                {e.name}.{m.name}
+        <section class="band">
+          <h2>What's in it</h2>
+          <p class="intro">Everything a server-rendered app needs, each with a guide that starts from a working example.</p>
+          <div class="features" onClick={onCopyClick}>
+            {FEATURES.map((f) => (
+              <a class="feature" href={`#/guide/${f.guide}`}>
+                <b>{f.title}</b>
+                <span>{f.text}</span>
+                <code>{f.code}</code>
               </a>
             ))}
           </div>
-        ) : null}
+          <p class="more">
+            <a href="#/guide/getting-started">All guides</a>, or the <a href="#/api">API reference</a>
+            {this.api ? `, ${this.api.entries.length} exports generated from the source` : ""}.
+          </p>
+        </section>
 
-        {api ? (
-          <div class="meta">
-            <span>
-              <b>{api.entries.length}</b> public exports
-            </span>
-            <span>
-              latest release <b>{api.latest ? `v${api.latest}` : "none"}</b>
-            </span>
-            <span>
-              docs built from main at <b>{api.commit}</b>
-            </span>
-            <a href="https://github.com/Toyz/yerd" target="_blank" rel="noopener">GitHub</a>
-            <a href="https://www.npmjs.com/package/@toyz/yerd" target="_blank" rel="noopener">npm</a>
+        <section class="band">
+          <div class="deps">
+            <pre class="tree" aria-label="npm ls output for an app using yerd">
+              <span class="dim">$ npm ls --omit=dev</span>
+              {"\n"}gnome-bazaar@1.0.0{"\n"}└── <span class="pkg">@toyz/yerd@{this.api?.latest ?? this.api?.version ?? "0.x"}</span>
+              {"\n"}
+              <span class="dim">{"\n"}(that's the whole tree)</span>
+            </pre>
+            <div>
+              <h2>One package, nothing under it</h2>
+              <p>
+                yerd has zero runtime dependencies. What you'd usually assemble from a dozen packages ships in the one you install, written and
+                tested together:
+              </p>
+              <ul class="inbox">
+                {BUILT_IN.map((item) => (
+                  <li>{item}</li>
+                ))}
+              </ul>
+            </div>
           </div>
-        ) : null}
+        </section>
+
+        {this.#teaser()}
       </div>
     );
   }
