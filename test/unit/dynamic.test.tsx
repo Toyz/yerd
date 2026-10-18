@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Dynamic, currentContext, get, prerender, renderToString, resetManifest, route, yerd, type LayoutProps } from "@toyz/yerd";
+import { Dynamic, action, css, currentContext, get, prerender, renderToString, resetManifest, route, yerd, type LayoutProps } from "@toyz/yerd";
 
 const page = (
   <main>
@@ -46,6 +46,45 @@ describe("<Dynamic> rendering", () => {
 
   it("renders nothing but the Dynamic parts for the runtime's fill-in request", async () => {
     expect(await renderToString(page, { dynamic: "only" })).toBe('<span class="who" id="who" data-yx-region><b>ada</b></span>');
+  });
+});
+
+describe("<Dynamic> wrapper: an element like any other", () => {
+  const inner = css`--dynamic-wrapper: 1;`;
+
+  it("rewrites dropTo and the Cues props", async () => {
+    expect(await renderToString(<Dynamic id="d" dropTo="#f" cue="x">{() => "y"}</Dynamic>)).toBe(
+      '<div id="d" data-yx-region data-yx-drop-to="#f" data-yx-cue="x">y</div>',
+    );
+  });
+
+  it("holds rules for classes inside a <select> wrapper until it closes", async () => {
+    const html = await renderToString(
+      <Dynamic id="pick" as="select">{() => <option class={inner}>a</option>}</Dynamic>,
+    );
+    expect(html).toBe(`<select id="pick" data-yx-region><option class="${inner}">a</option></select><style data-yx-css="${inner}">.${inner}{--dynamic-wrapper: 1;}</style>`);
+  });
+
+  it("refuses a void or raw-text wrapper", async () => {
+    await expect(renderToString(<Dynamic id="i" as="img">{() => "x"}</Dynamic>)).rejects.toThrow(/as="img"/);
+    await expect(renderToString(<Dynamic id="s" as="script">{() => "x"}</Dynamic>)).rejects.toThrow(/as="script"/);
+  });
+
+  it("writes the doctype when it's the document's first element", async () => {
+    expect(await renderToString(<Dynamic id="doc" as="html">{() => "x"}</Dynamic>, { document: true })).toBe('<!doctype html><html id="doc" data-yx-region>x</html>');
+  });
+
+  it("takes an action, like any element", async () => {
+    @route("/dyn-action")
+    class WithAction {
+      @get page() {
+        return <Dynamic id="go" action={this.go} trigger="visible">{() => "x"}</Dynamic>;
+      }
+      @action go() {}
+    }
+    const app = yerd({ routes: [WithAction], services: [], handleSignals: false, secret: "w".repeat(32) });
+    const html = await (await app.request("/dyn-action")).text();
+    expect(html).toMatch(/^<div id="go" data-yx-region data-yx-action="\/dyn-action" data-yx-token="[^"]+" data-yx-trigger="visible">x<\/div>$/);
   });
 });
 

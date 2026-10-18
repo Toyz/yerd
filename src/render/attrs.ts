@@ -7,13 +7,24 @@ import { bindingSpec, isBinding, type Binding } from "./local.js";
 // rather than trusted.
 const VALID_ATTR_NAME = /^[^\s"'<>/=\x00-\x1f\x7f]+$/;
 
+// Props the renderer rewrites before they're attributes (see rewriteProps in
+// render.ts): an action (`action`, `formaction` on a submit button), which
+// is never a string, `dropTo`, and the Cues props, whatever their value.
+const UNLESS_STRING = 1;
+const ALWAYS = 2;
+const RENDERER_PROPS = new Map([
+  ["action", UNLESS_STRING], ["formaction", UNLESS_STRING], ["formAction", UNLESS_STRING],
+  ["dropTo", ALWAYS], ["sync", ALWAYS], ["cue", ALWAYS], ["cueRoom", ALWAYS], ["cueFrom", ALWAYS],
+]);
+
 // Names repeat constantly across a page, so what we know about each (valid?
-// a custom attribute?) is looked up once and remembered: one Map lookup per
-// attribute on the hot path. Capped, in case names come from user data, and
-// dropped when custom attributes are (re)defined.
+// a custom attribute? the renderer's?) is looked up once and remembered: one
+// Map lookup per attribute on the hot path. Capped, in case names come from
+// user data, and dropped when custom attributes are (re)defined.
 interface NameInfo {
   valid: boolean;
   custom: AttributeDef<any> | undefined;
+  renderer: number;
 }
 const names = new Map<string, NameInfo>();
 let namesVersion = -1;
@@ -21,7 +32,7 @@ let namesVersion = -1;
 function nameInfo(name: string): NameInfo {
   let info = names.get(name);
   if (info === undefined) {
-    info = { valid: VALID_ATTR_NAME.test(name), custom: customAttribute(name) };
+    info = { valid: VALID_ATTR_NAME.test(name), custom: customAttribute(name), renderer: RENDERER_PROPS.get(name) ?? 0 };
     if (names.size < 2048) names.set(name, info);
   }
   return info;
@@ -172,6 +183,19 @@ function isEventHandlerName(name: string): boolean {
  * output, so a custom attribute can write its own name as a plain attribute.
  */
 export function renderAttributes(props: Record<string, unknown>, tag = "", custom = true, local = false): string {
+  return attributes(props, tag, custom, local, false)!;
+}
+
+/**
+ * An element's own props, as renderAttributes(), or undefined when one of
+ * them is the renderer's to rewrite first (an action, `dropTo`, the Cues
+ * props): it checks for those as it goes, so other elements pay nothing.
+ */
+export function elementAttributes(props: Record<string, unknown>, tag: string, local: boolean): string | undefined {
+  return attributes(props, tag, true, local, true);
+}
+
+function attributes(props: Record<string, unknown>, tag: string, custom: boolean, local: boolean, renderer: boolean): string | undefined {
   let out = "";
   let classDone = false;
   // <Local> bindings on this element: "hidden:!open;class.active:sel".
@@ -184,6 +208,8 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
     if (name === "children" || name === "key") continue;
     let value = props[name];
     if (value === null || value === undefined) continue;
+    const info = nameInfo(name);
+    if (renderer && info.renderer && (info.renderer === ALWAYS || typeof value !== "string")) return undefined;
     if (isBinding(value)) {
       const b = value as Binding;
       if (name === "class" || name === "className") {
@@ -195,7 +221,6 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
       value = b.value;
       if (value === null || value === undefined) continue;
     }
-    const info = nameInfo(name);
     if (custom) {
       const def = info.custom;
       if (def) {

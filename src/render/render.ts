@@ -12,10 +12,10 @@
  * finishes, without emitting a chunk per tag.
  */
 
-import { Fragment, isYerdNode, type Child, type YerdNode } from "../jsx/jsx-runtime.js";
-import { renderAttributes } from "./attrs.js";
-import { escapeHtml, isRawHtml, type RawHtml } from "./escape.js";
-import { formAction, isAction, isBoundAction } from "../actions/action.js";
+import { Fragment, isYerdNode, jsx, type Child, type YerdNode } from "../jsx/jsx-runtime.js";
+import { elementAttributes, renderAttributes } from "./attrs.js";
+import { escapeHtml, isRawHtml, raw, type RawHtml } from "./escape.js";
+import { formAction, isBoundAction } from "../actions/action.js";
 import { DYNAMIC_ID, Dynamic, type DynamicProps } from "./dynamic.js";
 import { Styles, classesIn, keyframesIn, stylesFor } from "./css.js";
 import { Local, bindingSpec, isBinding, localState, stateName, type Binding, type LocalProps } from "./local.js";
@@ -25,15 +25,36 @@ const VOID_ELEMENTS = new Set([
   "link", "meta", "param", "source", "track", "wbr",
 ]);
 
+// Where the parser drops a <style> (<select>), closes the element at one
+// (<colgroup>), or reads it as markup or not at all (<svg>, <math>): rules for
+// classes inside wait until the element has closed.
+const HOLDS_CSS_ELEMENTS = new Set(["select", "colgroup", "svg", "math"]);
+// Contents that aren't part of the page (<template>), or aren't once scripts
+// run (<noscript>): rules sent inside don't count as sent for the rest of it.
+const OWN_CSS_ELEMENTS = new Set(["template", "noscript"]);
+
+/** What the renderer does differently for a tag; see tagFlags(). */
+const VOID = 1;
+const HOLDS_CSS = 2;
+const OWN_CSS = 4;
+const RAW_TEXT = 8;
+
 const VALID_TAG = /^[a-zA-Z][a-zA-Z0-9-]*$/;
 
-// Tags repeat constantly; remember the ones already checked (capped).
-const checkedTags = new Set<string>();
+// Tags repeat constantly: each is checked and classified the first time it's
+// seen, then it's one Map lookup per element (capped).
+const tags = new Map<string, number>();
 
-function checkTag(tag: string): void {
-  if (checkedTags.has(tag)) return;
+function tagFlags(tag: string): number {
+  let flags = tags.get(tag);
+  if (flags !== undefined) return flags;
   if (!VALID_TAG.test(tag)) throw new TypeError(`Invalid element name: ${JSON.stringify(tag)}`);
-  if (checkedTags.size < 1024) checkedTags.add(tag);
+  flags = (VOID_ELEMENTS.has(tag) ? VOID : 0)
+    | (HOLDS_CSS_ELEMENTS.has(tag) ? HOLDS_CSS : 0)
+    | (OWN_CSS_ELEMENTS.has(tag) ? OWN_CSS : 0)
+    | (tag === "script" || tag === "style" ? RAW_TEXT : 0);
+  if (tags.size < 1024) tags.set(tag, flags);
+  return flags;
 }
 
 /**
@@ -84,6 +105,8 @@ interface State {
   cssHead: string;
   /** Inside a <select>, where the parser drops <style>: rules wait here for it to close. */
   cssHeld: Set<string> | undefined;
+  /** cssSent outside each open <template> / <noscript>, innermost last (see OWN_CSS_ELEMENTS). */
+  cssOuter: Set<string>[] | undefined;
   /** Flushed chunks waiting for the stream's consumer. */
   chunks: string[];
   /** Wakes the stream's consumer when a chunk is flushed. */
@@ -93,8 +116,31 @@ interface State {
 /** `undefined`: finished synchronously. A promise: continue after it. */
 type Step = Promise<void> | undefined;
 
+/** Whether output is kept: in "only" mode, just inside a <Dynamic>. */
+function emitting(state: State): boolean {
+  return state.dynamic !== "only" || state.insideDynamic > 0;
+}
+
 function write(state: State, html: string): void {
-  if (state.dynamic !== "only" || state.insideDynamic > 0) state.buffer += html;
+  if (emitting(state)) state.buffer += html;
+}
+
+/**
+ * Run `fn` with a scope counter raised (inside a <Local>, a <Dynamic>),
+ * lowering it again when its step settles or it throws.
+ */
+function scoped(state: State, counter: "insideLocal" | "insideDynamic", fn: () => Step): Step {
+  state[counter]++;
+  let step: Step;
+  try {
+    step = fn();
+  } finally {
+    // Finished synchronously, or threw: the scope is over now.
+    if (!step) state[counter]--;
+  }
+  return step?.finally(() => {
+    state[counter]--;
+  });
 }
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
@@ -134,6 +180,8 @@ function renderChild(child: unknown, state: State): Step {
     write(state, String(child));
     return undefined;
   }
+  // Elements first: the common case. A binding is never one (it's a function proxy).
+  if (isYerdNode(child)) return renderNode(child, state);
   // A field read from <Local> state: the value now, kept live in the browser.
   if (isBinding(child)) {
     const b = child as Binding;
@@ -141,7 +189,6 @@ function renderChild(child: unknown, state: State): Step {
     return undefined;
   }
   if (typeof child !== "object") throw new TypeError(`Cannot render ${typeof child} as a child`);
-  if (isYerdNode(child)) return renderNode(child, state);
   if (Array.isArray(child)) return renderList(child, 0, state);
   if (isRawHtml(child)) {
     write(state, child.html);
@@ -177,7 +224,7 @@ function renderNode(node: YerdNode, state: State): Step {
       placeHeadRules(state);
       write(state, (Styles() as RawHtml).html);
       // Rules this page uses go here from now on, while the head is still in the buffer.
-      if (state.dynamic !== "only" || state.insideDynamic > 0) state.cssAnchor = state.buffer.length;
+      if (emitting(state)) state.cssAnchor = state.buffer.length;
       return undefined;
     }
     if (type === Local) return renderLocal(props as unknown as LocalProps<object>, state);
@@ -186,30 +233,106 @@ function renderNode(node: YerdNode, state: State): Step {
     return renderChild(type(props), state);
   }
 
-  checkTag(type);
-
-  if (!state.started) {
-    state.started = true;
-    if (state.document && type.toLowerCase() === "html") write(state, "<!doctype html>");
-  }
-
-  const isVoid = VOID_ELEMENTS.has(type);
-  if (isVoid && !isEmpty(props.children)) {
+  const flags = tagFlags(type);
+  if (flags & VOID && !isEmpty(props.children)) {
     throw new TypeError(`<${type}> is a void element and cannot have children`);
   }
 
   // "only" mode, outside every <Dynamic>: the tags would be dropped, so don't
   // build them (or sign action tokens for them). The children may hold one.
-  if (state.dynamic === "only" && state.insideDynamic === 0) {
-    return isVoid ? undefined : renderChild(props.children, state);
+  if (!emitting(state)) {
+    state.started = true;
+    return flags & VOID ? undefined : renderChild(props.children, state);
   }
 
-  writeClassStyles(props, state);
-  const holdsCss = HOLDS_CSS.has(type) && !state.cssHeld;
-  if (holdsCss) state.cssHeld = new Set();
-  const outerSent = OWN_CSS.has(type) ? state.cssSent : undefined;
-  if (outerSent) state.cssSent = new Set(outerSent);
+  const open = openElement(type, flags, props, node.key, state);
+  if (flags & VOID) return undefined;
+  if (flags & RAW_TEXT) {
+    writeRawText(type, props.children, state);
+    write(state, `</${type}>`);
+    return undefined;
+  }
+  const step = renderChild(props.children, state);
+  if (step) return step.then(() => closeElement(type, open, state));
+  closeElement(type, open, state);
+  return undefined;
+}
 
+/**
+ * Write an element's start tag (after the rules its classes need), and set up
+ * the CSS scope it opens. Returns what closeElement() needs: the tag's flags,
+ * less HOLDS_CSS when an outer element is already holding.
+ */
+function openElement(type: string, flags: number, props: Record<string, unknown>, key: YerdNode["key"], state: State): number {
+  if (!state.started) {
+    state.started = true;
+    if (state.document && type.toLowerCase() === "html") write(state, "<!doctype html>");
+  }
+  writeClassStyles(props, state);
+  if (flags & HOLDS_CSS) {
+    if (state.cssHeld) flags &= ~HOLDS_CSS;
+    else state.cssHeld = new Set();
+  }
+  if (flags & OWN_CSS) {
+    (state.cssOuter ??= []).push(state.cssSent);
+    state.cssSent = new Set(state.cssSent);
+  }
+  const local = state.insideLocal > 0;
+  let attrs = elementAttributes(props, type, local);
+  let hidden = "";
+  if (attrs === undefined) {
+    // An action, dropTo or a Cues prop: rewritten into what the runtime reads.
+    const rewritten = rewriteProps(type, props);
+    attrs = renderAttributes(rewritten.attrs, type, true, local);
+    hidden = rewritten.hidden;
+  }
+  // null is nothing, as for any attribute: a null key isn't written, and
+  // data-key={null} doesn't stand in for the key.
+  const keyAttr = key == null || props["data-key"] != null ? "" : ` data-key="${escapeHtml(String(key))}"`;
+  write(state, `<${type}${attrs}${keyAttr}>${hidden}`);
+  return flags;
+}
+
+/** The end tag, and the end of the CSS scope openElement() set up. */
+function closeElement(type: string, open: number, state: State): void {
+  write(state, `</${type}>`);
+  if (open & OWN_CSS) state.cssSent = state.cssOuter!.pop()!;
+  if (open & HOLDS_CSS) {
+    const held = state.cssHeld!;
+    state.cssHeld = undefined;
+    if (held.size) writeStyles(state, stylesFor(held, state.cssSent));
+  }
+}
+
+/** css`` classes in class / className: their rules go just before the first element using them (or are held). */
+function writeClassStyles(props: Record<string, unknown>, state: State): void {
+  const classes = props.class !== undefined || props.className !== undefined ? classesIn([props.class, props.className]) : new Set<string>();
+  // `style={{ animation: `${pop} 1s` }}`: the keyframes go too.
+  if (props.style !== undefined) keyframesIn(props.style, classes);
+  if (!classes.size) return;
+  // In <head> there's nothing to hold for: <select>, <svg> and the rest don't matter there.
+  if (state.cssHeld && state.cssAnchor === undefined) for (const name of classes) state.cssHeld.add(name);
+  else writeStyles(state, stylesFor(classes, state.cssSent));
+}
+
+/** Rules into <head> at <Styles /> while it's still in the buffer, else inline here. */
+function writeStyles(state: State, html: string): void {
+  if (!html) return;
+  if (state.cssAnchor === undefined) {
+    write(state, html);
+    return;
+  }
+  // Splicing each one in would copy the whole buffer per class.
+  state.cssHead += html;
+}
+
+/**
+ * The props elementAttributes() leaves to the renderer (it returns undefined
+ * when there's one): an action becomes the attributes the runtime posts with,
+ * `dropTo` and the Cues props their data-yx-* forms. `hidden` goes right
+ * after the start tag. Rare, so copying the props is fine.
+ */
+function rewriteProps(type: string, props: Record<string, unknown>): { attrs: Record<string, unknown>; hidden: string } {
   let attrs = props;
   let hidden = "";
   if (type === "form") {
@@ -221,7 +344,7 @@ function renderNode(node: YerdNode, state: State): Step {
       hidden = `<input type="hidden" name="_yx" value="${escapeHtml(target.token)}">`;
     }
   } else if ((type === "button" || type === "input") && (props.formaction !== undefined || props.formAction !== undefined)) {
-    attrs = submitterAttributes(type, props, state);
+    attrs = submitterAttributes(type, props);
   } else if (isActionValue(props.action)) {
     // An action on any other element: the runtime posts it when `trigger` fires (default: click).
     const target = formAction(props.action as Parameters<typeof formAction>[0]);
@@ -251,58 +374,7 @@ function renderNode(node: YerdNode, state: State): Step {
       "data-yx-cue-from": names ? cueFrom : undefined,
     };
   }
-  // null is nothing, as for any attribute: a null key isn't written, and
-  // data-key={null} doesn't stand in for the key.
-  const key = node.key == null || props["data-key"] != null ? "" : ` data-key="${escapeHtml(String(node.key))}"`;
-  write(state, `<${type}${renderAttributes(attrs, type, true, state.insideLocal > 0)}${key}>${hidden}`);
-  if (isVoid) return undefined;
-  if (type === "script" || type === "style") {
-    writeRawText(type, props.children, state);
-    write(state, `</${type}>`);
-    return undefined;
-  }
-  const close = holdsCss || outerSent ? () => {
-    write(state, `</${type}>`);
-    if (outerSent) state.cssSent = outerSent;
-    if (!holdsCss) return;
-    const held = state.cssHeld!;
-    state.cssHeld = undefined;
-    if (held.size) writeStyles(state, stylesFor(held, state.cssSent));
-  } : () => write(state, `</${type}>`);
-  const step = renderChild(props.children, state);
-  if (step) return step.then(close);
-  close();
-  return undefined;
-}
-
-// Where the parser drops a <style> (<select>), closes the element at one
-// (<colgroup>), or reads it as markup or not at all (<svg>, <math>): rules for
-// classes inside wait until the element has closed.
-const HOLDS_CSS = new Set(["select", "colgroup", "svg", "math"]);
-// Contents that aren't part of the page (<template>), or aren't once scripts
-// run (<noscript>): rules sent inside don't count as sent for the rest of it.
-const OWN_CSS = new Set(["template", "noscript"]);
-
-/** css`` classes in class / className: their rules go just before the first element using them (or are held). */
-function writeClassStyles(props: Record<string, unknown>, state: State): void {
-  const classes = props.class !== undefined || props.className !== undefined ? classesIn([props.class, props.className]) : new Set<string>();
-  // `style={{ animation: `${pop} 1s` }}`: the keyframes go too.
-  if (props.style !== undefined) keyframesIn(props.style, classes);
-  if (!classes.size) return;
-  // In <head> there's nothing to hold for: <select>, <svg> and the rest don't matter there.
-  if (state.cssHeld && state.cssAnchor === undefined) for (const name of classes) state.cssHeld.add(name);
-  else writeStyles(state, stylesFor(classes, state.cssSent));
-}
-
-/** Rules into <head> at <Styles /> while it's still in the buffer, else inline here. */
-function writeStyles(state: State, html: string): void {
-  if (!html) return;
-  if (state.cssAnchor === undefined) {
-    write(state, html);
-    return;
-  }
-  // Splicing each one in would copy the whole buffer per class.
-  state.cssHead += html;
+  return { attrs, hidden };
 }
 
 /** An @action, a lambda calling one, or bind(...) of one. */
@@ -330,7 +402,7 @@ function isEmpty(children: unknown): boolean {
  * form submit normally. Inside <form action={action}> too: the submitter's
  * _yx comes after the form's hidden one, and the server takes the last.
  */
-function submitterAttributes(type: string, props: Record<string, unknown>, state: State): Record<string, unknown> {
+function submitterAttributes(type: string, props: Record<string, unknown>): Record<string, unknown> {
   const prop = props.formaction !== undefined ? "formaction" : "formAction";
   const value = props[prop];
   // Strings are plain URLs; anything else that isn't an action is renderAttributes' to reject.
@@ -398,70 +470,38 @@ function renderLocal(props: LocalProps<object>, state: State): Step {
   if (store && !store.key) throw new TypeError("<Local persist> needs a non-empty key");
   const persisted = store ? ` data-yx-persist="${escapeHtml(store.key)}"${store.storage === "session" ? ' data-yx-storage="session"' : ""}` : "";
   write(state, `<yerd-local data-yx-local="${escapeHtml(json)}" data-yx-as="${name}"${persisted} style="display:contents">`);
-  state.insideLocal++;
-  const done = () => {
-    state.insideLocal--;
+  return scoped(state, "insideLocal", () => {
+    const step = renderChild(children(localState(initial)), state);
+    if (step) return step.then(() => write(state, "</yerd-local>"));
     write(state, "</yerd-local>");
-  };
-  let step: Step;
-  try {
-    step = renderChild(children(localState(initial)), state);
-  } catch (error) {
-    state.insideLocal--;
-    throw error;
-  }
-  if (step) return step.then(done, (error: unknown) => {
-    state.insideLocal--;
-    throw error;
+    return undefined;
   });
-  done();
-  return undefined;
 }
 
 function renderDynamic(props: DynamicProps, state: State): Step {
   const { id, fallback, noscript, children, as = "div", ...rest } = props;
-  checkTag(as);
+  const flags = tagFlags(as);
+  if (flags & (VOID | RAW_TEXT)) throw new TypeError(`<Dynamic as="${as}">: the wrapper must be an element that holds other elements`);
   if (!DYNAMIC_ID.test(id)) throw new TypeError(`<Dynamic> ids must be letters, digits, - and _ (got ${JSON.stringify(id)})`);
   const deferred = state.dynamic === "fallback";
   const attrs = { ...rest, id, "data-yx-region": true, "data-yx-defer": deferred || undefined };
-  state.insideDynamic++;
-  const finish = () => {
-    if (deferred && noscript !== undefined) {
+  return scoped(state, "insideDynamic", () => {
+    const open = openElement(as, flags, attrs, undefined, state);
+    const finish = (): Step => {
+      if (!deferred || noscript === undefined) {
+        closeElement(as, open, state);
+        return undefined;
+      }
       // Without JavaScript nothing fills the skeleton: hide it, show this instead.
-      write(state, `<noscript><style>#${id}>:not(noscript){display:none!important}</style>`);
-      // Its rules don't count as sent for the rest of the page (see OWN_CSS).
-      const outerSent = state.cssSent;
-      state.cssSent = new Set(outerSent);
-      const step = renderChild(noscript, state);
-      if (step) return step.then(() => {
-        state.cssSent = outerSent;
-        write(state, `</noscript></${as}>`);
-      });
-      state.cssSent = outerSent;
-      write(state, "</noscript>");
-    }
-    write(state, `</${as}>`);
-    return undefined;
-  };
-  const done = () => {
-    state.insideDynamic--;
-  };
-  try {
-    writeClassStyles(rest, state);
-    write(state, `<${as}${renderAttributes(attrs, as, true, state.insideLocal > 0)}>`);
+      const step = renderNode(jsx("noscript", { children: [raw(`<style>#${id}>:not(noscript){display:none!important}</style>`), noscript] }), state);
+      if (step) return step.then(() => closeElement(as, open, state));
+      closeElement(as, open, state);
+      return undefined;
+    };
     // Prerendering: the skeleton. Otherwise: the real content, per request.
     const step = renderChild(deferred ? fallback : children(), state);
-    const tail = step ? step.then(finish) : finish();
-    if (tail) return tail.then(done, (error: unknown) => {
-      done();
-      throw error;
-    });
-    done();
-    return undefined;
-  } catch (error) {
-    done();
-    throw error;
-  }
+    return step ? step.then(finish) : finish();
+  });
 }
 
 /**
@@ -503,6 +543,7 @@ export async function* renderToStream(child: Child, options: RenderOptions = {})
     cssAnchor: undefined,
     cssHead: "",
     cssHeld: undefined,
+    cssOuter: undefined,
     chunks: [],
     notify: undefined,
   };
