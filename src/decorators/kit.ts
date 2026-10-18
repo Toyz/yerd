@@ -10,7 +10,15 @@ import { createKey, localKey } from "./keys.js";
 /**
  * What a request decorator knows how to resolve. Attached to every decorator
  * createAccessor produces, so the same `param("id")` works on an accessor
- * field and inside `@args(...)`.
+ * field and inside `@args(...)`. You don't build one yourself: createAccessor
+ * does, from its function and options, and the app reads it at boot (for
+ * `validate`) and per request (for `resolve`).
+ *
+ * ```ts
+ * export const header = createAccessor((ctx, name: string) => ctx.headers[name], { name: "header" });
+ * // header("x-tenant") carries a Resolver with name "header", args ["x-tenant"],
+ * // and resolve(ctx) memoized per request.
+ * ```
  */
 export interface Resolver {
   /** The decorator's name, for boot errors (AccessorOptions.name). */
@@ -34,7 +42,21 @@ export const RESOLVER: unique symbol = Symbol.for("yerd.resolver");
 
 /** Phantom marker carrying the value type a decorator resolves to, for @args. */
 declare const OUTPUT: unique symbol;
-/** Carried by every decorator createAccessor() makes: its resolver, plus its value type for @args inference. */
+/**
+ * Carried by every decorator createAccessor() makes: its resolver, plus its
+ * value type for @args inference. It's why a decorator can go straight into
+ * `@args(...)` and the handler's parameter types are checked against it.
+ *
+ * ```ts
+ * const locale = createAccessor((ctx) => ctx.headers["accept-language"]?.split(",")[0] ?? "en");
+ * const forArgs: Resolves<string> = locale; // what @args reads
+ *
+ * @route("/greet")
+ * export class Greet {
+ *   @get @args(locale) page(lang: string) { return lang === "fr" ? "Bonjour" : "Hello"; }
+ * }
+ * ```
+ */
 export interface Resolves<Out> {
   /** Type-only: the value the decorator resolves to. Never set at runtime. */
   readonly [OUTPUT]?: Out;
@@ -45,7 +67,22 @@ export interface Resolves<Out> {
 /**
  * The decorator returned by createAccessor. If the field's type can't hold the
  * resolver's value, the return type is an object with no accessor members,
- * which TypeScript rejects at the decorator site.
+ * which TypeScript rejects at the decorator site. Name it when you export a
+ * decorator and want its value type spelled out (as `@toyz/yerd/auth` does
+ * for `auth.user`).
+ *
+ * ```tsx
+ * export const tenant: AccessorDecorator<string> = createAccessor(
+ *   (ctx) => ctx.headers.host?.split(".")[0] ?? "www",
+ *   { name: "tenant" },
+ * );
+ *
+ * @route("/")
+ * export class Home {
+ *   @tenant accessor tenant!: string; // `accessor tenant!: number` would be a compile error
+ *   @get page() { return <h1>{this.tenant}</h1>; }
+ * }
+ * ```
  */
 export type AccessorDecorator<T> = (<This, V>(
   target: ClassAccessorDecoratorTarget<This, V>,
@@ -55,11 +92,30 @@ export type AccessorDecorator<T> = (<This, V>(
   : { "accessor type does not accept the decorator's value": T }) &
   Resolves<T>;
 
-/** Options for createAccessor(). */
+/**
+ * Options for createAccessor(). `validate` turns a mistake in how the
+ * decorator is used into a boot error instead of a runtime surprise.
+ *
+ * ```ts
+ * export const slug = createAccessor((ctx, name: string) => ctx.params[name], {
+ *   name: "slug",
+ *   validate: (route, name) => (route.paramNames.includes(name) ? undefined : `:${name} is not in ${route.pattern}`),
+ * });
+ *
+ * @route("/posts/:slug")
+ * export class Post {
+ *   @slug("slug") accessor slug!: string; // @slug("id") here refuses to boot
+ *   @get page() { return this.slug; }
+ * }
+ * ```
+ */
 export interface AccessorOptions<A extends unknown[]> {
   /** Shown in boot errors, e.g. "param". */
   name?: string;
-  /** Runs at boot for each route class using this accessor. Return a message to refuse to boot. */
+  /**
+   * Runs at boot for each route class using this accessor (and each @args
+   * use), with the decorator's arguments. Return a message to refuse to boot.
+   */
   validate?: (route: RouteInfo, ...args: A) => string | void;
 }
 
@@ -185,7 +241,9 @@ type ArgTypes<R extends readonly Resolves<unknown>[]> = {
  *
  * @patch
  * @args(param("id", { transform: toInt }), body(TodoChanges))
- * update(id: number, changes: TodoChanges) { ... }
+ * update(id: number, changes: TodoChanges) {
+ *   return this.todos.update(id, changes);
+ * }
  * ```
  *
  * Any accessor works here, with the same options it takes as a field:

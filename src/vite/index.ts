@@ -17,16 +17,53 @@ import type { Plugin, ViteDevServer } from "vite";
 import type { ModuleRunner } from "vite/module-runner";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-/** Options for the `@toyz/yerd/vite` plugin (the package's default export). */
+/**
+ * Options for the `@toyz/yerd/vite` plugin (the package's default export).
+ * All optional: with none, the app is `src/main.ts`'s default export and
+ * the build goes to `dist/`.
+ *
+ * ```ts
+ * // vite.config.ts
+ * import { defineConfig } from "vite";
+ * import yerd from "@toyz/yerd/vite";
+ *
+ * export default defineConfig({
+ *   plugins: [yerd({ entry: "/src/main.ts", client: ["src/styles.css"] })],
+ * });
+ * ```
+ */
 export interface YerdViteOptions {
-  /** Module whose default export is the yerd app. Default "/src/main.ts". */
+  /**
+   * Module whose default export is the yerd app (it shouldn't call
+   * listen(): the plugin serves it in dev and the built server listens).
+   * Default "/src/main.ts".
+   *
+   * ```ts
+   * // src/server.ts: yerd({ entry: "/src/server.ts" })
+   * export default yerd().sessions().discover(import.meta.glob("./routes/*.tsx", { eager: true }));
+   * ```
+   */
   entry?: string;
   /**
    * Client build entries, relative to the Vite root: stylesheets and other
    * assets referenced with assetUrl() / <Stylesheet>. Hashed in production.
+   * In dev, referencing a file that isn't listed here logs a warning, since
+   * the build wouldn't include it.
+   *
+   * ```tsx
+   * // yerd({ client: ["src/styles.css"] }), then in a layout:
+   * <head><Stylesheet href="src/styles.css" /></head>
+   * ```
    */
   client?: string[];
-  /** Build output directory, relative to the Vite root. Default "dist". */
+  /**
+   * Build output directory, relative to the Vite root. Default "dist": the
+   * client build lands in `dist/client`, the server in `dist/server/server.js`.
+   *
+   * ```ts
+   * yerd({ outDir: "build" }); // then: node build/server/server.js
+   * ```
+   */
   outDir?: string;
 }
 
@@ -136,16 +173,34 @@ function loadEsbuild(): Promise<EsbuildModule> {
 
 /** Options for yerdDecorators(). */
 export interface DecoratorOptions {
-  /** esbuild target for client code. Default "es2016" (async lowered for the async-context polyfill). */
+  /**
+   * esbuild target for client code. Default "es2016": async functions are
+   * lowered to generators so the browser's async-context polyfill can
+   * follow them. Raise it only for client code that doesn't rely on that.
+   *
+   * ```ts
+   * plugins: [yerdDecorators({ clientTarget: "es2020" })],
+   * ```
+   */
   clientTarget?: string;
 }
 
 /**
  * Just the decorator-lowering part of the yerd plugin: compiles app .ts/.tsx
  * with esbuild (TC39 decorators, yerd JSX) and turns off Vite's Oxc
- * transform. The full plugin already includes it; use this alone to tune the
- * client target or in a Vite setup that doesn't run the yerd app. Needs
- * esbuild installed.
+ * transform. The full plugin already includes it; use this alone where the
+ * yerd app shouldn't be mounted or built, above all in vitest, which runs on
+ * Vite and can't compile TC39 decorators on its own. Needs esbuild installed.
+ *
+ * ```ts
+ * // vitest.config.ts
+ * import { defineConfig } from "vitest/config";
+ * import { yerdDecorators } from "@toyz/yerd/vite";
+ *
+ * export default defineConfig({
+ *   plugins: [yerdDecorators()],
+ * });
+ * ```
  */
 function decorators(options: DecoratorOptions = {}): Plugin {
   return {
