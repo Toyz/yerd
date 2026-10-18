@@ -210,6 +210,7 @@ export function yerdRuntime(): void {
   /** Morph every Region in `html` into the matching element on the page. Returns how many matched. */
   function apply(html: string): number {
     const doc = new DOMParser().parseFromString(html, "text/html");
+    hoistStyles(doc);
     let applied = 0;
     for (const region of Array.from(doc.querySelectorAll("[data-yx-region]"))) {
       const target = region.id ? document.getElementById(region.id) : null;
@@ -242,6 +243,7 @@ export function yerdRuntime(): void {
   /** Morph a whole page in: <body> and the title. */
   function showPage(html: string): void {
     const doc = new DOMParser().parseFromString(html, "text/html");
+    hoistStyles(doc);
     morph(document.body, document.importNode(doc.body, true));
     if (doc.title) document.title = doc.title;
   }
@@ -1517,9 +1519,12 @@ export function yerdRuntime(): void {
   // css`` rules arrive in <style data-yx-css> next to the first element that
   // uses them (in an action's response too). Keep one of each, in <head>, so
   // they outlive the element they came with and a morph can't drop them.
-  function hoistStyles(): void {
+  // apply() and showPage() take them out of a response before morphing (some
+  // sit outside every Region, before a class on the Region's own element, or
+  // in the new page's <head>, before a class on <body>).
+  function hoistStyles(from: ParentNode | null = document.body): void {
     const kept = new Set(Array.from(document.head.querySelectorAll("style[data-yx-css]"), (style) => style.getAttribute("data-yx-css")));
-    for (const style of Array.from(document.body?.querySelectorAll("style[data-yx-css]") ?? [])) {
+    for (const style of Array.from(from?.querySelectorAll("style[data-yx-css]") ?? [])) {
       const name = style.getAttribute("data-yx-css");
       if (kept.has(name)) style.remove();
       else {
@@ -1528,8 +1533,8 @@ export function yerdRuntime(): void {
       }
     }
   }
-  document.addEventListener("yx:applied", hoistStyles);
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", hoistStyles);
+  document.addEventListener("yx:applied", () => hoistStyles());
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => hoistStyles());
   else hoistStyles();
 
   function initLocals(): void {

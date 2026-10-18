@@ -27,12 +27,13 @@
  * - `css.global` adds rules that aren't scoped (resets, body, fonts):
  *   `<Styles />` in the head writes them.
  *
- * Classes are found in `class` / `className` props (strings, arrays, and the
- * keys of flag objects, `{ [active]: on }`). A class name buried in raw()
- * HTML isn't seen.
+ * Classes are found in `class` / `className` props (strings, arrays, raw()
+ * values, a <Local> binding's starting value, and the keys of flag objects,
+ * `{ [active]: on }`). A class name buried in raw() HTML isn't seen.
  */
 
-import { raw, type RawHtml } from "./escape.js";
+import { escapeHtml, isRawHtml, raw, type RawHtml } from "./escape.js";
+import { isBinding, type Binding } from "./local.js";
 
 /** A rule set registered by css`` or keyframes``. */
 interface Rule {
@@ -45,6 +46,8 @@ interface Rule {
 const rules = new Map<string, Rule>();
 const globals: string[] = [];
 const globalSet = new Set<string>();
+/** Keyframes the globals animate with: `<Styles />` writes them too. */
+const globalNeeds = new Set<string>();
 
 /** After `vite build`: where the bundle is, and which classes it holds. */
 let bundle: { href: string; classes: Set<string> } | undefined;
@@ -100,7 +103,12 @@ function build(strings: TemplateStringsArray, values: readonly unknown[]): Built
 function register(name: string, text: string, needs: string[]): string {
   checkText(text);
   const existing = rules.get(name);
-  if (existing && existing.text !== text) throw new Error(`css: two different rule sets hash to ${name}; change one slightly`);
+  if (existing) {
+    if (existing.text !== text) throw new Error(`css: two different rule sets hash to ${name}; change one slightly`);
+    // The same text again (a keyframes name typed out, say): keep what the first one needed.
+    for (const need of needs) if (!existing.needs.includes(need)) existing.needs.push(need);
+    return name;
+  }
   rules.set(name, { text, needs });
   return name;
 }
@@ -128,8 +136,9 @@ export function css(strings: TemplateStringsArray, ...values: unknown[]): string
  * ```
  */
 css.global = function global(strings: TemplateStringsArray, ...values: unknown[]): void {
-  const { body } = build(strings, values);
+  const { body, needs } = build(strings, values);
   checkText(body);
+  for (const need of needs) globalNeeds.add(need);
   if (globalSet.has(body)) return;
   globalSet.add(body);
   globals.push(body);
@@ -150,10 +159,17 @@ export function keyframes(strings: TemplateStringsArray, ...values: unknown[]): 
   return register(name, `@keyframes ${name}{${body}}`, []);
 }
 
-/** Every class name in a class / className value: strings, arrays, and flag objects' keys (on or off). */
+/**
+ * Every class name in a class / className value: strings, arrays, flag
+ * objects' keys (on or off), raw() text, and a <Local> binding's value now.
+ */
 export function classesIn(value: unknown, out: Set<string> = new Set()): Set<string> {
   if (typeof value === "string") {
     for (const token of value.split(/\s+/)) if (token && rules.has(token)) out.add(token);
+  } else if (isBinding(value)) {
+    classesIn((value as Binding).value, out);
+  } else if (isRawHtml(value)) {
+    classesIn(value.html, out);
   } else if (Array.isArray(value)) {
     for (const item of value) classesIn(item, out);
   } else if (value && typeof value === "object") {
@@ -191,8 +207,9 @@ export function stylesFor(classes: Set<string>, sent: Set<string>): string {
  * ```
  */
 export function Styles(): RawHtml {
-  if (bundle) return raw(`<link rel="stylesheet" href="${bundle.href.replace(/"/g, "&quot;")}">`);
-  return raw(globals.length ? `<style data-yx-css="global">${globals.join("\n")}</style>` : "");
+  if (bundle) return raw(`<link rel="stylesheet" href="${escapeHtml(bundle.href)}">`);
+  const text = [...[...globalNeeds].map((name) => rules.get(name)!.text), ...globals];
+  return raw(text.length ? `<style data-yx-css="global">${text.join("\n")}</style>` : "");
 }
 
 /** Every rule known now, globals first: the build's stylesheet. */

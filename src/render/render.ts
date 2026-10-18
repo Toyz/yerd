@@ -176,16 +176,11 @@ function renderNode(node: YerdNode, state: State): Step {
     return isVoid ? undefined : renderChild(props.children, state);
   }
 
-  // css`` classes: their rules go just before the first element using them.
-  if (props.class !== undefined || props.className !== undefined) {
-    const classes = classesIn([props.class, props.className]);
-    if (classes.size) {
-      if (state.cssHeld) for (const name of classes) state.cssHeld.add(name);
-      else write(state, stylesFor(classes, state.cssSent));
-    }
-  }
-  const holdsCss = type === "select" && !state.cssHeld;
+  writeClassStyles(props, state);
+  const holdsCss = HOLDS_CSS.has(type) && !state.cssHeld;
   if (holdsCss) state.cssHeld = new Set();
+  const outerSent = OWN_CSS.has(type) ? state.cssSent : undefined;
+  if (outerSent) state.cssSent = new Set(outerSent);
 
   let attrs = props;
   let hidden = "";
@@ -226,8 +221,10 @@ function renderNode(node: YerdNode, state: State): Step {
     write(state, `</${type}>`);
     return undefined;
   }
-  const close = holdsCss ? () => {
+  const close = holdsCss || outerSent ? () => {
     write(state, `</${type}>`);
+    if (outerSent) state.cssSent = outerSent;
+    if (!holdsCss) return;
     const held = state.cssHeld!;
     state.cssHeld = undefined;
     if (held.size) write(state, stylesFor(held, state.cssSent));
@@ -236,6 +233,22 @@ function renderNode(node: YerdNode, state: State): Step {
   if (step) return step.then(close);
   close();
   return undefined;
+}
+
+// Where the parser drops a <style> (<select>) or closes the element at one
+// (<colgroup>): rules for classes inside wait until the element has closed.
+const HOLDS_CSS = new Set(["select", "colgroup"]);
+// Contents that aren't part of the page (<template>), or aren't once scripts
+// run (<noscript>): rules sent inside don't count as sent for the rest of it.
+const OWN_CSS = new Set(["template", "noscript"]);
+
+/** css`` classes in class / className: their rules go just before the first element using them (or are held). */
+function writeClassStyles(props: Record<string, unknown>, state: State): void {
+  if (props.class === undefined && props.className === undefined) return;
+  const classes = classesIn([props.class, props.className]);
+  if (!classes.size) return;
+  if (state.cssHeld) for (const name of classes) state.cssHeld.add(name);
+  else write(state, stylesFor(classes, state.cssSent));
 }
 
 /** An @action, a lambda calling one, or bind(...) of one. */
@@ -362,8 +375,15 @@ function renderDynamic(props: DynamicProps, state: State): Step {
     if (deferred && noscript !== undefined) {
       // Without JavaScript nothing fills the skeleton: hide it, show this instead.
       write(state, `<noscript><style>#${id}>:not(noscript){display:none!important}</style>`);
+      // Its rules don't count as sent for the rest of the page (see OWN_CSS).
+      const outerSent = state.cssSent;
+      state.cssSent = new Set(outerSent);
       const step = renderChild(noscript, state);
-      if (step) return step.then(() => write(state, `</noscript></${as}>`));
+      if (step) return step.then(() => {
+        state.cssSent = outerSent;
+        write(state, `</noscript></${as}>`);
+      });
+      state.cssSent = outerSent;
       write(state, "</noscript>");
     }
     write(state, `</${as}>`);
@@ -373,6 +393,7 @@ function renderDynamic(props: DynamicProps, state: State): Step {
     state.insideDynamic--;
   };
   try {
+    writeClassStyles(rest, state);
     write(state, `<${as}${renderAttributes(attrs, as, true, state.insideLocal > 0)}>`);
     // Prerendering: the skeleton. Otherwise: the real content, per request.
     const step = renderChild(deferred ? fallback : children(), state);
