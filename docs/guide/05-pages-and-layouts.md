@@ -22,6 +22,7 @@ The product page returns JSX, and yerd renders it to HTML inside the layouts. Th
       </form>
       {/* Every stock change on the channel refreshes this page's Regions. */}
       <div data-yx-live={`/products/${product.id}/stock`} hidden></div>
+      {/* ...the recently viewed island (Client code) */}
     </article>
   );
 }
@@ -32,7 +33,7 @@ GET /products/7
 200 OK
 content-type: text/html; charset=utf-8
 
-<!doctype html><html lang="en"><head><!-- ... --></head><body><!-- ... --><main><article class="product"><h1>Field notebook</h1><p>Waterproof paper for notes in the rain.</p><span class="price">$24.00</span><p class="stock" aria-live="polite" id="stock" data-yx-region>12 in stock</p><form action="/products/7" method="post" data-yx><input type="hidden" name="_yx" value="eyJjIjoiUHJvZHVjdFBhZ2Ui..."><button>Add to cart</button></form><div data-yx-live="/products/7/stock" hidden></div></article></main></body></html>
+<!doctype html><html lang="en"><head><!-- ... --></head><body><!-- ... --><main><article class="product"><h1>Field notebook</h1><p>Waterproof paper for notes in the rain.</p><span class="price">$24.00</span><p class="stock" aria-live="polite" id="stock" data-yx-region>12 in stock</p><form action="/products/7" method="post" data-yx><input type="hidden" name="_yx" value="eyJjIjoiUHJvZHVjdFBhZ2Ui..."><button>Add to cart</button></form><div data-yx-live="/products/7/stock" hidden></div><!-- ... --></article></main></body></html>
 ```
 
 - `tsconfig.json` needs `"jsx": "react-jsx"` and `"jsxImportSource": "@toyz/yerd"` ([Getting started](01-getting-started.md#configure-typescript)).

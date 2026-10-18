@@ -707,4 +707,5 @@ The finished shop has more than this. Each guide adds a piece:
 | [Streaming and live](07-streaming-and-live.md) | stock that updates live on every open product page |
 | [Sessions and auth](09-sessions-and-auth.md) | sign-in that keeps the guest's cart |
 | [Events](14-events.md) | `OrderPlaced`, and a receipt sent after the response |
+| [Client code](17-client-code.md) | "Recently viewed" on the product page, in an island |
 | [Services](08-services.md), [Logging](10-logging.md), [Testing](12-testing.md), [Deploying](11-deploying.md) | the rest of running it |

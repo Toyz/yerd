@@ -18,7 +18,7 @@ Sign in with `ada` / `analytical-engine`.
 | Route | What |
 |-------|------|
 | `GET /` | the catalog; `?q=` searches, `?category=` filters |
-| `GET /products/:id` | a product, a 404 for an unknown id; stock updates live |
+| `GET /products/:id` | a product, a 404 for an unknown id; stock updates live; recently viewed, in the browser |
 | `GET /products/:id/stock` | the stock feed the product page listens to (SSE) |
 | `GET /cart` | the cart, in the session; quantity and remove are actions |
 | `GET /login`, `POST /logout` | sign in keeps a guest's cart |
@@ -38,5 +38,6 @@ after the response and logs a pretend receipt.
 | `src/receipts.ts` | the `@on(OrderPlaced)` handler |
 | `src/users.ts` | `Users`, the demo account, `createAuth(...)` |
 | `src/layouts.tsx` | `RootLayout` with the cart badge, `Narrow`, `ErrorPage` |
-| `src/components.tsx` | `Price`, `ProductCard`, `Field` |
+| `src/components.tsx` | `Price`, `ProductCard`, `Field`, the `RecentlyViewed` island |
+| `src/recent.client.ts` | the island's client module: recently viewed, in localStorage |
 | `src/routes/` | products, cart, checkout and orders, sign-in, the API |

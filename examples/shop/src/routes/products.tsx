@@ -1,7 +1,7 @@
 import { Channels, Conflict, Region, action, get, inject, oneOf, param, query, route, session, setMeta, signal, sse, toInt, trim, type Session } from "@toyz/yerd";
 import { Cart } from "../cart.js";
 import { CATEGORIES, Catalog, stockChannel, type Category } from "../catalog.js";
-import { Price, ProductCard } from "../components.js";
+import { Price, ProductCard, RecentlyViewed } from "../components.js";
 import { CartBadge } from "../layouts.js";
 
 /** The shop's front page: every product, narrowed by ?q= and ?category=. */
@@ -68,6 +68,8 @@ export class ProductPage {
         </form>
         {/* Every stock change on the channel refreshes this page's Regions. */}
         <div data-yx-live={`/products/${product.id}/stock`} hidden></div>
+        {/* Browser-only: empty until its module runs, and without JavaScript. */}
+        <RecentlyViewed class="recent" props={{ id: product.id, name: product.name }} />
       </article>
     );
   }

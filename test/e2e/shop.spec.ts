@@ -83,6 +83,20 @@ test("a sold-out product can't be added", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Add to cart" })).toBeDisabled();
 });
 
+test("product pages list what this browser looked at before", async ({ page }) => {
+  await page.goto("/products/2");
+  // The island mounts when the browser is idle; wait for it to remember this page.
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("paperyard:recent"))).toContain('"id":2');
+  await expect(page.locator(".recent")).toBeEmpty();
+
+  await page.goto("/products/5");
+  await expect(page.locator(".recent h2")).toHaveText("Recently viewed");
+  await expect(page.locator(".recent a")).toHaveText(["Gel pens, 3 pack"]);
+  await page.locator(".recent a").click();
+  await expect(page).toHaveTitle("Gel pens, 3 pack · Paperyard");
+  await expect(page.locator(".recent a")).toHaveText(["Brass ruler"]);
+});
+
 test("checks out behind a sign-in that keeps the cart, with errors under their fields", async ({ page }) => {
   await page.goto("/products/6");
   await page.getByRole("button", { name: "Add to cart" }).click();

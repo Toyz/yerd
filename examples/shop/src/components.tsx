@@ -1,4 +1,6 @@
+import { island } from "@toyz/yerd";
 import { formatPrice, type Product } from "./catalog.js";
+import type { RecentProps } from "./recent.client.js";
 
 export function Price({ cents }: { cents: number }) {
   return <span class="price">{formatPrice(cents)}</span>;
@@ -29,3 +31,10 @@ export function Field(props: { name: string; label: string; type?: string; value
     </p>
   );
 }
+
+/**
+ * "Recently viewed" on the product page: an island, mounted by
+ * src/recent.client.ts once the browser is idle. The type-only import keeps
+ * the client module out of the server.
+ */
+export const RecentlyViewed = island<RecentProps>("src/recent.client.ts", { when: "idle" });

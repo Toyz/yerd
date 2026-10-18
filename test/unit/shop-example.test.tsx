@@ -67,6 +67,12 @@ describe("the product page", () => {
     expect(html).toContain('data-yx-live="/products/7/stock"');
   });
 
+  it("leaves room for the recently viewed island, loaded when the browser is idle", async () => {
+    const html = await (await app.request("/products/7", { headers: page })).text();
+    expect(html).toContain('<yerd-island class="recent" data-yx-island="/src/recent.client.ts" data-yx-when="idle"');
+    expect(html).toContain('data-yx-props="{&quot;id&quot;:7,&quot;name&quot;:&quot;Field notebook&quot;}"');
+  });
+
   it("is a 404 for an unknown id: the error page for browsers, JSON for the rest", async () => {
     const html = await app.request("/products/99", { headers: page });
     expect(html.status).toBe(404);
