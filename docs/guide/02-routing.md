@@ -133,32 +133,12 @@ export class Q3 {
 
 ## Layouts anywhere
 
-[`@layout`](api:yerd.layout) adds layouts on a route class (every handler), a handler method, or a group class.
-
-```tsx
-import { get, layout, route } from "@toyz/yerd";
-
-@route("/about")
-@layout(RootLayout, MarketingLayout, Hero)
-export class About {
-  @get page() {
-    return <p>About us</p>;
-  }
-}
-
-@route("/team")
-@layout(MarketingLayout)
-export class Team {
-  @get @layout(Card) page() {
-    return <p>team</p>; // Root > Marketing > Card
-  }
-}
-```
+[`@layout`](api:yerd.layout) adds layouts on a route class (every handler), a handler method, or a group class; examples are in [nested layouts](05-pages-and-layouts.md#nested-layouts).
 
 - The chain, outermost first: `app.layout()`, group layouts (outer first), the class's `@layout`, the method's `@layout`, then any layout picked in `res()`.
-- Several layouts in one decorator, or stacked `@layout`s, read top to bottom.
-- A layout already in the chain isn't applied again, so `About` can name `RootLayout` and still get one `<html>`.
-- `{ inherit: false }` makes a layout the whole chain; [`@noLayout`](api:yerd.noLayout) drops all of them (see [nested layouts](05-pages-and-layouts.md#nested-layouts)).
+- Several layouts in one decorator (`@layout(RootLayout, MarketingLayout)`), or stacked `@layout`s, read top to bottom.
+- A layout already in the chain isn't applied again, so naming `RootLayout` twice still gives one `<html>`.
+- `{ inherit: false }` makes a layout the whole chain; [`@noLayout`](api:yerd.noLayout) drops all of them.
 
 Pick layouts at return time with [`res()`](api:yerd.res) when the choice depends on data:
 

@@ -138,7 +138,7 @@ Every route sees these keys, so keep it to a handful; feature data belongs in a 
 - The session opens on first use (`ctx.session`, `@session`, auth middleware, an action). A request that never uses it doesn't refresh it or consume a flash.
 - Changes are saved after the handler runs; an unchanged session sends no cookie unless a rolling refresh is due.
 - An unhandled crash (anything but an `YerdError`) saves nothing, so a half-finished login never sticks.
-- HTML sent to someone with a session gets `Cache-Control: private, no-cache` unless the handler set its own.
+- HTML sent to someone with a session isn't cacheable by others (see [caching headers](04-responses.md#caching-headers)).
 
 > [!NOTE]
 > Rendering action forms never starts a session, so pages with forms stay cacheable for first-time visitors. See [action tokens](15-security.md#action-tokens).

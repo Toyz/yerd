@@ -109,7 +109,6 @@ When a token is expired, signed with a dropped secret, or made for another sessi
 - **Its own key.** The session cookie key is separate from [seal()](api:yerd.seal) / [unseal()](api:yerd.unseal), so nothing your app seals passes for a session.
 - **Cookie flags.** `HttpOnly`, `SameSite=Lax`, `Path=/`; over HTTPS also `Secure` with the `__Host-` prefix, which stops subdomains planting it. Behind a proxy, set `trustProxy` (see [deploying](11-deploying.md#behind-a-proxy)).
 - **Expiry.** `maxAge` idle (14 days) and `absoluteMaxAge` from creation (30 days, never extended).
-- **Crashes don't save**, so a half-finished login never sticks.
 - **Not cached.** HTML for a request carrying a session cookie gets `Cache-Control: private, no-cache` unless the handler set its own. If you mark a page with forms cacheable yourself, send `Vary: Cookie`: its tokens are for whoever it was rendered for.
 
 The full behaviour and options are in [sessions and auth](09-sessions-and-auth.md).
@@ -132,9 +131,7 @@ The full behaviour and options are in [sessions and auth](09-sessions-and-auth.m
 
 ## Output
 
-- **Escaping.** Text and attributes are always escaped. [raw()](api:yerd.raw) is the only way around it; never pass it unsanitized user input.
-- **URL attributes.** `javascript:`, `vbscript:` and `data:` URLs (including tricks like `" java\tscript:"`) become `about:blank#blocked`; `data:image/...` is allowed on `src` and `poster`.
-- **Inline scripts.** Pass data with [json()](api:yerd.json); text that would end the element early throws.
+- **Escaping.** Text and attributes are always escaped; [raw()](api:yerd.raw) is the only way around it. URL attributes block `javascript:`, `vbscript:` and `data:` URLs (including tricks like `" java\tscript:"`), and [json()](api:yerd.json) makes data safe in inline scripts. See [what renders how](05-pages-and-layouts.md#what-renders-how).
 - **Headers.** Values with line breaks, NUL or other control characters are refused, so request data can't split a response.
 - **Errors.** A non-`YerdError` is a 500 with body `Internal Server Error`; message and stack go to the log only. `YerdError` messages are shown below 500. Show stacks on the [error page](05-pages-and-layouts.md#error-pages) in development only.
 - **Logs.** Fields named like secrets (`password`, `token`, `cookie`, ...) are redacted; see [logging](10-logging.md#redaction-and-limits).

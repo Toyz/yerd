@@ -352,11 +352,8 @@ export class Slow {
 import { YerdError, createAccessor, get, route } from "@toyz/yerd";
 import { findShop, type Shop } from "./shops.js";
 
-/** The visitor's first choice from Accept-Language: "pt-PT,pt;q=0.9,en;q=0.8" -> "pt-PT". */
-export const language = createAccessor(
-  (ctx) => ctx.headers["accept-language"]?.split(",")[0]?.split(";")[0]?.trim() || undefined,
-  { name: "language" },
-);
+/** The visitor's first choice from Accept-Language, or undefined (then the field's initializer). */
+export const language = createAccessor((ctx) => ctx.headers["accept-language"]?.split(/[,;]/)[0]?.trim() || undefined, { name: "language" });
 
 /** The shop this request is for, from the subdomain (acme.example.com). A 404 if there's none. */
 export const shop = createAccessor(
