@@ -1,0 +1,440 @@
+import { expect, test, type Page } from "@playwright/test";
+
+/** Log in through the form (the demo accounts are seeded at boot). */
+async function logIn(page: Page, name: string, password: string, next = "/") {
+  await page.goto(`/login?next=${encodeURIComponent(next)}`);
+  await page.getByLabel("Username").fill(name);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Log in" }).click();
+  await page.waitForURL((url) => url.pathname !== "/login");
+}
+
+const ada = (page: Page, next = "/admin") => logIn(page, "ada", "gnome-overlord", next);
+const cy = (page: Page, next = "/") => logIn(page, "cy", "rock-collector", next);
+
+/** Set a marker on window; if it survives, the page was never fully reloaded. */
+async function markPage(page: Page) {
+  await page.evaluate(() => ((window as unknown as { __noReload: boolean }).__noReload = true));
+}
+async function stillSamePage(page: Page) {
+  expect(await page.evaluate(() => (window as unknown as { __noReload?: boolean }).__noReload)).toBe(true);
+}
+
+/** A tiny SVG file, built in the page, for drop events. */
+const svgFiles = (page: Page, names: string[]) =>
+  page.evaluateHandle((names) => {
+    const transfer = new DataTransfer();
+    for (const name of names) {
+      transfer.items.add(new File([`<svg xmlns="http://www.w3.org/2000/svg" width="4" height="3"><rect width="4" height="3" fill="red"/></svg>`], name, { type: "image/svg+xml" }));
+    }
+    return transfer;
+  }, names);
+
+test("typeahead and the category select narrow the shelf in place", async ({ page }) => {
+  await page.goto("/");
+  await expect(page).toHaveTitle("Shop · Yerd Bazaar");
+  await expect(page.locator(".product")).toHaveCount(12);
+  await markPage(page);
+
+  await page.locator("#q").fill("googly");
+  await expect(page.locator("#result-count")).toHaveText('1 item matching "googly"');
+  await expect(page.locator(".product-name")).toHaveText(["Rock With Googly Eyes"]);
+  await expect(page.locator("#more")).toContainText("whole shelf");
+
+  // The select reads the search box with ref("#q"): clear it first, then pick an aisle.
+  await page.locator("#q").fill("");
+  await expect(page.locator(".product")).toHaveCount(12);
+  await page.locator("#category").selectOption("signs");
+  await expect(page.locator("#result-count")).toHaveText("12 items");
+  await expect(page.locator(".product-name").first()).toHaveText("Beware of the Gnome");
+  await stillSamePage(page);
+});
+
+test("infinite scroll appends the next page when the sentinel shows up", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".product")).toHaveCount(12);
+  await page.locator("#more").scrollIntoViewIfNeeded();
+  await expect(page.locator(".product")).toHaveCount(24);
+  await page.locator("#more").scrollIntoViewIfNeeded();
+  await expect(page.locator(".product")).toHaveCount(36);
+  await expect(page.locator(".product-name").nth(12)).toHaveText("Classic Pink Flamingo");
+});
+
+test("adds to the cart and changes the quantity", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#cart-badge .badge")).toHaveText("0");
+  const first = page.locator(".product").first();
+  const name = await first.locator(".product-name").textContent();
+  await first.getByRole("button", { name: "Add to cart" }).click();
+  await expect(page.locator("#cart-badge .badge")).toHaveText("1");
+  await expect(page.locator("#toast")).toContainText("is in your cart");
+
+  await page.locator("#cart-badge").click();
+  await expect(page).toHaveURL(/\/cart$/);
+  await expect(page.locator(".cart-name")).toHaveText([name!]);
+  await markPage(page);
+  const qty = page.getByLabel(`Quantity of ${name}`);
+  await qty.fill("3");
+  await qty.press("Tab");
+  await expect(page.locator("#cart-badge .badge")).toHaveText("3");
+  await page.getByRole("button", { name: `Remove ${name}` }).click();
+  await expect(page.locator("#cart .empty")).toBeVisible();
+  await expect(page.locator("#cart-badge .badge")).toHaveText("0");
+  await stillSamePage(page);
+});
+
+/** Sign in as cy, put something in the cart and check out; returns the order page's URL. */
+async function placeOrder(page: Page) {
+  await cy(page);
+  // The made-up crowd buys things out, so take whatever is still in stock.
+  await page.locator(".add-form button:enabled").first().click();
+  await expect(page.locator("#cart-badge .badge")).toHaveText("1");
+  await page.goto("/cart");
+  await page.getByLabel("Name").fill("Cy Rock");
+  await page.getByLabel("Address").fill("1 Boulder Lane");
+  await page.getByLabel("Card number").fill("4242 4242 4242 4242");
+  await page.getByLabel("CVC").fill("123");
+  await page.getByRole("button", { name: "Place order" }).click();
+  await expect(page).toHaveURL(/\/orders\/[0-9a-f-]{36}$/);
+  return page.url();
+}
+
+test("checks out behind a login and lands on the order, with a flash notice", async ({ page }) => {
+  await placeOrder(page);
+  await expect(page.locator(".receipt h1")).toHaveText(/Order Y-\d+/);
+  await expect(page.locator(".notice")).toContainText("placed");
+  await expect(page.locator(".steps .current")).toHaveText("Pending");
+  const number = (await page.locator(".receipt h1").textContent())!.replace("Order ", "");
+
+  // My orders: in the nav, newest first.
+  await page.getByRole("link", { name: "My orders", exact: true }).click();
+  await expect(page).toHaveURL(/\/orders$/);
+  await expect(page.locator("#my-orders tbody tr").first()).toContainText(number);
+  await expect(page.locator("#my-orders tbody tr").first().locator(".status")).toHaveText("Pending");
+});
+
+test("orders: cancel while pending, and someone else's order is a 404", async ({ page, browser }) => {
+  const url = await placeOrder(page);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Cancel order" }).click();
+  await expect(page.locator("#order-status")).toContainText("Cancelled");
+  await expect(page.getByRole("button", { name: "Cancel order" })).toHaveCount(0);
+
+  const other = await browser.newContext();
+  const bo = await other.newPage();
+  await logIn(bo, "bo", "flamingo-wrangler", "/");
+  const response = await bo.goto(url);
+  expect(response?.status()).toBe(404);
+  expect((await bo.goto("/orders/not-a-uuid"))?.status()).toBe(404);
+  await other.close();
+});
+
+test("orders: staff move an order along and the customer's page updates live", async ({ page, browser }) => {
+  await placeOrder(page);
+  await expect(page.locator(".steps .current")).toHaveText("Pending");
+  const number = (await page.locator(".receipt h1").textContent())!.replace("Order ", "");
+  await markPage(page);
+
+  const staff = await browser.newContext();
+  const admin = await staff.newPage();
+  await ada(admin, "/admin/orders");
+  await admin.locator("#admin-orders tr", { hasText: number }).getByRole("button", { name: "Mark packed" }).click();
+  await expect(admin.locator("#admin-orders tr", { hasText: number }).locator(".status")).toHaveText("Packed");
+
+  // Published on the orders channel; the customer's page refreshes its Regions over SSE.
+  await expect(page.locator(".steps .current")).toHaveText("Packed");
+  await expect(page.getByRole("button", { name: "Cancel order" })).toHaveCount(0);
+  await stillSamePage(page);
+  await staff.close();
+});
+
+test("returns: photos staged with dropTo, a non-image refused, staff approve live", async ({ page, browser }) => {
+  await placeOrder(page);
+  const number = (await page.locator(".receipt h1").textContent())!.replace("Order ", "");
+  await expect(page.locator("#order-return")).toContainText("once the order has shipped");
+
+  const staff = await browser.newContext();
+  const admin = await staff.newPage();
+  await ada(admin, "/admin/orders");
+  const row = admin.locator("#admin-orders tr", { hasText: number });
+  await row.getByRole("button", { name: "Mark packed" }).click();
+  await row.getByRole("button", { name: "Mark shipped" }).click();
+  await expect(row.locator(".status")).toHaveText("Shipped");
+
+  // Shipped: the return form appears on the customer's page by itself (live refresh).
+  await expect(page.locator("#order-return h2")).toHaveText("Request a return");
+  await page.getByLabel("Note").fill("It winked at me. Twice.");
+
+  // A text file sneaks past the input's accept (setInputFiles ignores it): the server refuses it next to the field.
+  await page.locator("#return-photos").setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("not a photo") });
+  await page.getByRole("button", { name: "Request the return" }).click();
+  await expect(page.locator('[data-yx-error="photos"]')).not.toBeEmpty();
+  await page.locator("#return-photos").setInputFiles([]);
+
+  const zone = page.locator("#order-return .dropzone");
+  await zone.dispatchEvent("drop", { dataTransfer: await svgFiles(page, ["front.svg", "back.svg"]) });
+  await expect(zone).toHaveAttribute("data-yx-files", "2");
+  await page.getByRole("button", { name: "Request the return" }).click();
+  await expect(page.locator("#order-return .status")).toHaveText("Return requested");
+  await expect(page.locator("#order-return .thumb")).toHaveCount(2);
+  const src = await page.locator("#order-return .slide").first().getAttribute("src");
+  expect((await page.request.get(src!)).headers()["content-type"]).toBe("image/svg+xml");
+  // Staff can see them; a signed-out visitor can't.
+  expect((await admin.context().request.get(src!)).status()).toBe(200);
+  const stranger = await browser.newContext();
+  expect((await stranger.request.get(src!)).status()).toBe(401);
+  await stranger.close();
+
+  await admin.reload();
+  await expect(row.locator("+ tr.return-row img")).toHaveCount(2);
+  await admin.locator("tr.return-row", { hasText: "It winked at me" }).getByRole("button", { name: "Approve return" }).click();
+  await expect(page.locator("#order-return .status")).toHaveText("Return approved");
+  await staff.close();
+});
+
+test("a saved cart: the guest's items merge into it on sign-in and it survives signing out", async ({ page, browser }) => {
+  // As a guest: two things in the cart.
+  await page.goto("/");
+  const add = page.locator(".add-form button:enabled");
+  await add.nth(0).click();
+  await expect(page.locator("#cart-badge .badge")).toHaveText("1");
+  await add.nth(1).click();
+  await expect(page.locator("#cart-badge .badge")).toHaveText("2");
+  const guestItems = await page.locator(".product").filter({ has: page.locator(".add-form button:enabled") }).locator(".product-name").evaluateAll((els) => els.slice(0, 2).map((e) => e.textContent!));
+
+  // di has a saved cart from last time: signing in merges the two, and the header shows it at once.
+  await logIn(page, "di", "saved-my-cart", "/cart");
+  await expect(page).toHaveURL(/\/cart$/);
+  await expect(page.locator(".notice")).toContainText("Welcome back, we kept 2 items from last time");
+  const names = await page.locator(".cart-name").allTextContents();
+  for (const item of guestItems) expect(names).toContain(item);
+  expect(names).toContain("Rock That Was Here First");
+  const quantities = await page.locator(".cart-line .qty").evaluateAll((els) => els.map((e) => Number((e as HTMLInputElement).value)));
+  const total = String(quantities.reduce((a, b) => a + b, 0));
+  expect(Number(total)).toBeGreaterThan(2);
+  await expect(page.locator("#cart-badge .badge")).toHaveText(total);
+  // Shown once.
+  await page.reload();
+  await expect(page.locator(".notice")).toHaveCount(0);
+  await page.goto("/orders");
+  await expect(page.locator(".saved-cart")).toContainText("Rock That Was Here First");
+
+  // Sign out (saved), then sign in somewhere else: the cart is still there.
+  await page.getByRole("button", { name: "Log out" }).click();
+  await expect(page.locator("#cart-badge .badge")).toHaveText("0");
+  const elsewhere = await browser.newContext();
+  const other = await elsewhere.newPage();
+  await logIn(other, "di", "saved-my-cart", "/cart");
+  await expect(other.locator("#cart-badge .badge")).toHaveText(total);
+  expect((await other.locator(".cart-name").allTextContents()).sort()).toEqual([...names].sort());
+  await elsewhere.close();
+});
+
+test("the back office: guests go to login, customers get a 403, staff get in", async ({ page }) => {
+  await page.goto("/admin");
+  await expect(page).toHaveURL(/\/login\?next=%2Fadmin$/);
+
+  await cy(page, "/admin");
+  await expect(page.locator(".error-code")).toHaveText("403");
+  await expect(page.locator("h1")).toHaveText("Staff only");
+
+  // The error page has no shop chrome (no log-out button): start over as someone else.
+  await page.context().clearCookies();
+  await ada(page);
+  await expect(page).toHaveURL(/\/admin$/);
+  await expect(page.locator("h1.page-title")).toHaveText("Dashboard");
+  // trigger="load": the panel fills itself right after the page arrives.
+  await expect(page.locator("#low-stock .skeleton")).toHaveCount(0);
+  await expect(page.locator("#pulse .stat-value")).toBeVisible();
+});
+
+test("kanban: drag a card to another column, then into the bin", async ({ page }) => {
+  await ada(page, "/admin/board");
+  const title = `Polish the googly eyes ${Date.now().toString(36)}`;
+  await page.getByPlaceholder("What needs doing around the shop?").fill(title);
+  await page.getByRole("button", { name: "Add card" }).click();
+  const card = page.locator(".card", { hasText: title });
+  await expect(page.locator('.column[data-status="todo"] .card', { hasText: title })).toBeVisible();
+
+  // Onto the column's heading, not onto another card.
+  await card.dragTo(page.locator('.column[data-status="done"] h2'));
+  await expect(page.locator('.column[data-status="done"] .card', { hasText: title })).toBeVisible();
+  await expect(page.locator('.column[data-status="todo"] .card', { hasText: title })).toHaveCount(0);
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator(".card", { hasText: title }).dragTo(page.locator(".bin"));
+  await expect(page.locator(".card", { hasText: title })).toHaveCount(0);
+});
+
+test("file drops: a photo zone uploads at once, a dropTo zone stages for the form", async ({ page }) => {
+  await ada(page, "/admin/products");
+  const row = page.locator(".admin-row").first();
+  await row.locator(".photo-drop").dispatchEvent("drop", { dataTransfer: await svgFiles(page, ["gnome.svg"]) });
+  await expect(page.locator(".admin-row").first().locator(".photo-drop")).toContainText("1 photo");
+
+  const name = `Gnome Lawyer ${Date.now().toString(36)}`;
+  // Every row has its own (visually hidden) "Name" label too, so the new-product fields go by id.
+  await page.locator("#new-name").fill(name);
+  await page.locator("#new-price").fill("42");
+  const zone = page.locator(".dropzone");
+  await zone.dispatchEvent("drop", { dataTransfer: await svgFiles(page, ["a.svg", "b.svg"]) });
+  await expect(zone).toHaveAttribute("data-yx-files", "2");
+  await page.getByRole("button", { name: "Add product" }).click();
+  const added = page.locator(".admin-row").first();
+  await expect(added.locator('input[name="name"]')).toHaveValue(name);
+  await expect(added.locator(".photo-drop")).toContainText("2 photos");
+  // data-yx-reset cleared the form, and the zone's count with it.
+  await expect(zone).not.toHaveAttribute("data-yx-files", /.*/);
+});
+
+test("chat: Enter sends, the message lands on top", async ({ page }) => {
+  await cy(page, "/chat");
+  await expect(page).toHaveURL(/\/chat$/);
+  const text = `Is the warm rock warm today? ${Date.now().toString(36)}`;
+  const box = page.getByLabel("Message");
+  await box.fill(text);
+  await box.press("Enter");
+  await expect(page.locator(".message").first()).toContainText(text);
+  await expect(box).toHaveValue("");
+});
+
+test("the product slider: next and previous wrap, thumbnails jump, arrow keys work", async ({ browser }) => {
+  // Headless Chrome counts as a bot (isBot), which gets the script-free variant: be a person.
+  const context = await browser.newContext({ userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36" });
+  const page = await context.newPage();
+  await page.goto("/products/disco-gnome");
+  const slides = page.locator(".slide");
+  const thumbs = page.locator(".thumb");
+  await expect(slides).toHaveCount(3);
+  await expect(slides.nth(0)).toBeVisible();
+  await expect(slides.nth(1)).toBeHidden();
+
+  await page.getByRole("button", { name: "Next photo" }).click();
+  await expect(slides.nth(1)).toBeVisible();
+  await expect(slides.nth(0)).toBeHidden();
+  await expect(thumbs.nth(1)).toHaveClass(/active/);
+  await expect(thumbs.nth(0)).not.toHaveClass(/active/);
+
+  await page.getByRole("button", { name: "Previous photo" }).click();
+  await page.getByRole("button", { name: "Previous photo" }).click();
+  await expect(slides.nth(2)).toBeVisible();
+
+  await thumbs.nth(0).click();
+  await expect(slides.nth(0)).toBeVisible();
+  await expect(page).toHaveURL(/\/products\/disco-gnome$/);
+
+  await page.locator(".slider").focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(slides.nth(1)).toBeVisible();
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowLeft");
+  await expect(slides.nth(2)).toBeVisible();
+  await context.close();
+});
+
+test("field-level errors: each message goes into its field's box", async ({ page }) => {
+  await page.goto("/signup");
+  await page.getByLabel("Username").fill("x");
+  await page.getByLabel(/^Password/).fill("short");
+  await page.getByRole("button", { name: "Sign up" }).click();
+  await expect(page.locator('[data-yx-error="name"]')).not.toBeEmpty();
+  await expect(page.locator('[data-yx-error="password"]')).not.toBeEmpty();
+  await expect(page.getByLabel("Username")).toHaveAttribute("aria-invalid", "true");
+  await expect(page).toHaveURL(/\/signup$/);
+});
+
+test("returns: is.email, is.date, is.url and a branded Uuid pipeline", async ({ page }) => {
+  await page.goto("/returns");
+  await page.getByLabel(/^Order id/).fill("not-an-order");
+  await page.getByLabel("Email").fill("not an email");
+  await page.getByLabel("Received on").fill("2026-01-02");
+  await page.getByLabel(/Photo link/).fill("javascript:alert(1)");
+  await page.getByLabel("What happened?").fill("It looked at me.");
+  await page.getByRole("button", { name: "Send the return request" }).click();
+  await expect(page.locator('[data-yx-error="order"]')).toHaveText("There's no order with that number.");
+  await expect(page.locator('[data-yx-error="email"]')).not.toBeEmpty();
+  await expect(page.locator('[data-yx-error="evidence"]')).not.toBeEmpty();
+
+  await page.getByLabel(/^Order id/).fill("  123E4567-E89B-42D3-A456-426614174000 ");
+  await page.getByLabel("Email").fill("cy@example.com");
+  await page.getByLabel(/Photo link/).fill("https://example.com/gnome.jpg");
+  await page.getByRole("button", { name: "Send the return request" }).click();
+  await expect(page.locator("#return-form .notice")).toContainText("received");
+});
+
+test("the feature tour: every link leads somewhere real", async ({ page }) => {
+  await ada(page, "/features");
+  await expect(page.locator("h1")).toHaveText("Feature tour");
+  const links = [...new Set(await page.locator(".features-list dt a").evaluateAll((as) => as.map((a) => a.getAttribute("href")!)))];
+  expect(links.length).toBeGreaterThan(25);
+  // The error demos answer with their status on purpose.
+  const expected: Record<string, number> = { "/oops": 500, "/no-such-aisle": 404, "/products/no-such-thing": 404, "/api/products/p999": 404 };
+  for (const link of links) {
+    const response = await page.request.get(link, { headers: { accept: "text/html" } });
+    expect(response.status(), link).toBe(expected[link] ?? 200);
+  }
+});
+
+test("the error page shows a crash's stack in development only", async ({ request }, info) => {
+  const response = await request.get("/oops", { headers: { accept: "text/html" } });
+  expect(response.status()).toBe(500);
+  const html = await response.text();
+  expect(html).toContain("Internal Server Error");
+  expect(html.includes("Stack trace")).toBe(info.project.name === "kitchen-dev");
+});
+
+test("assets: the stylesheet and hero resolve (hashed in production), public files are served", async ({ page, request }, info) => {
+  await page.goto("/");
+  const css = await page.locator('link[rel="stylesheet"]').getAttribute("href");
+  const hero = await page.locator(".hero-img").getAttribute("src");
+  expect(css).toMatch(info.project.name === "kitchen-prod" ? /^\/assets\/styles-[\w-]+\.css$/ : /^\/src\/styles\.css$/);
+  expect(hero).toMatch(info.project.name === "kitchen-prod" ? /^\/assets\/hero-[\w-]+\.svg$/ : /^\/src\/hero\.svg$/);
+  // The page is styled: the stylesheet's custom properties apply.
+  expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).not.toBe("rgba(0, 0, 0, 0)");
+  for (const url of [css!, hero!, "/humans.txt"]) expect((await request.get(url)).status(), url).toBe(200);
+});
+
+test("about is prerendered with Dynamic parts filled in", async ({ page }) => {
+  await page.goto("/about");
+  await expect(page.locator("h1")).toContainText("one framework");
+  await expect(page.locator("#online-now")).toContainText("browsing right now");
+  await expect(page.locator("#about-account")).toContainText("Log in");
+});
+
+test("REST API: create, patch, delete, with the API key", async ({ request }) => {
+  const denied = await request.post("/api/products", { data: { name: "Nope", category: "rocks", priceCents: 100 } });
+  expect(denied.status()).toBe(401);
+
+  const headers = { "x-api-key": "let-me-in" };
+  const created = await request.post("/api/products", { headers, data: { name: "  Gnome Lawyer  ", category: "gnomes", priceCents: 4200, tags: ["Legal"] } });
+  expect(created.status()).toBe(201);
+  const product = (await created.json()) as { id: string; name: string; stock: number; tags: string[] };
+  expect(product).toMatchObject({ name: "Gnome Lawyer", stock: 10, tags: ["legal"] });
+  expect(created.headers()["location"]).toBe(`/api/products/${product.id}`);
+
+  const bad = await request.post("/api/products", { headers, data: { name: "x", category: "moons", priceCents: -1 } });
+  expect(bad.status()).toBe(400);
+  expect(((await bad.json()) as { issues: unknown[] }).issues).toHaveLength(3);
+
+  const patched = await request.patch(`/api/products/${product.id}`, { headers, data: { stock: 0 } });
+  expect(await patched.json()).toMatchObject({ name: "Gnome Lawyer", stock: 0, priceCents: 4200 });
+
+  expect((await request.delete(`/api/products/${product.id}`, { headers })).status()).toBe(204);
+  const gone = await request.get(`/api/products/${product.id}`);
+  expect(gone.status()).toBe(404);
+  expect(await gone.json()).toEqual({ error: `No product with id ${product.id}`, id: product.id });
+});
+
+test("crawlers get the script-free variant, people the interactive one", async ({ request }) => {
+  const bot = await request.get("/products/disco-gnome", { headers: { "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1)", accept: "text/html" } });
+  const botHtml = await bot.text();
+  expect(bot.headers()["vary"]).toContain("user-agent");
+  expect(botHtml).toContain('"@type":"Product"');
+  expect(botHtml).not.toContain("/_yerd/runtime.js");
+  expect(botHtml).not.toContain("Add to cart");
+
+  const person = await request.get("/products/disco-gnome", { headers: { accept: "text/html" } });
+  const html = await person.text();
+  expect(html).toContain("/_yerd/runtime.js");
+  expect(html).toContain("Add to cart");
+});

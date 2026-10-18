@@ -2,6 +2,8 @@ import { defineConfig } from "@playwright/test";
 
 const devPort = 3200;
 const prodPort = 3201;
+const kitchenDevPort = 3202;
+const kitchenProdPort = 3203;
 
 export default defineConfig({
   testDir: "test/e2e",
@@ -13,10 +15,12 @@ export default defineConfig({
     channel: "chrome",
     headless: true,
   },
-  // The same suite, against the Vite dev server and against a production build.
+  // Each example's suite, against the Vite dev server and against a production build.
   projects: [
-    { name: "dev", use: { baseURL: `http://localhost:${devPort}` } },
-    { name: "prod", use: { baseURL: `http://localhost:${prodPort}` } },
+    { name: "dev", testMatch: "todo.spec.ts", use: { baseURL: `http://localhost:${devPort}` } },
+    { name: "prod", testMatch: "todo.spec.ts", use: { baseURL: `http://localhost:${prodPort}` } },
+    { name: "kitchen-dev", testMatch: "kitchen.spec.ts", use: { baseURL: `http://localhost:${kitchenDevPort}` } },
+    { name: "kitchen-prod", testMatch: "kitchen.spec.ts", use: { baseURL: `http://localhost:${kitchenProdPort}` } },
   ],
   webServer: [
     {
@@ -30,6 +34,20 @@ export default defineConfig({
       command: "npx vite build --config examples/todo/vite.config.ts && node examples/todo/dist/server/server.js",
       env: { TODO_FILE: ":memory:", PORT: String(prodPort) },
       url: `http://localhost:${prodPort}/about`,
+      reuseExistingServer: false,
+      timeout: 60_000,
+    },
+    {
+      command: "npx vite --config examples/kitchen-sink/vite.config.ts",
+      env: { PORT: String(kitchenDevPort) },
+      url: `http://localhost:${kitchenDevPort}/about`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+    {
+      command: "npx vite build --config examples/kitchen-sink/vite.config.ts && node examples/kitchen-sink/dist/server/server.js",
+      env: { PORT: String(kitchenProdPort) },
+      url: `http://localhost:${kitchenProdPort}/about`,
       reuseExistingServer: false,
       timeout: 60_000,
     },

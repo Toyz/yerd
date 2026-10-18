@@ -1,0 +1,8 @@
+/* TEAM */
+Head of gnomes: ada
+Flamingo wrangler: bo
+Rock enthusiast: cy
+
+/* SITE */
+Built with: yerd (zero runtime dependencies)
+Served from: public/, as is

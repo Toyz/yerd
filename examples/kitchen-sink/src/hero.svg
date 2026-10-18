@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd9a8"/>
+      <stop offset="1" stop-color="#ffb08a"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="360" fill="url(#sky)"/>
+  <circle cx="980" cy="90" r="54" fill="#fff4d6"/>
+  <path d="M0 270q300-60 600 0t600 0v90H0Z" fill="#6fae5a"/>
+  <path d="M0 300q300-40 600 0t600 0v60H0Z" fill="#5a9a48"/>
+  <g transform="translate(180 150)">
+    <path d="M40 0 80 90H0Z" fill="#d6452b"/>
+    <circle cx="40" cy="100" r="24" fill="#f2c9a5"/>
+    <path d="M14 108q26 56 52 0q-4 30-26 30t-26-30Z" fill="#fff"/>
+  </g>
+  <g transform="translate(820 150)" fill="none" stroke-linecap="round">
+    <ellipse cx="60" cy="70" rx="44" ry="26" fill="#f06bb0"/>
+    <path d="M28 62q-24-32 0-56q16-16 8-32" stroke="#f06bb0" stroke-width="10"/>
+    <path d="M52 94v56M68 94l-8 56" stroke="#9b3a6c" stroke-width="4"/>
+  </g>
+  <g transform="translate(500 210)">
+    <path d="M0 80q-8-56 40-80q48-24 88 8q40 32 16 72Z" fill="#a89a8a"/>
+    <circle cx="56" cy="34" r="12" fill="#fff"/><circle cx="96" cy="34" r="12" fill="#fff"/>
+    <circle cx="59" cy="37" r="5" fill="#222"/><circle cx="93" cy="31" r="5" fill="#222"/>
+  </g>
+</svg>
