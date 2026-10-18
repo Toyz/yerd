@@ -18,7 +18,8 @@
  */
 
 import { HttpError } from "../respond/response.js";
-import { createKey } from "./keys.js";
+import { createKey, metadataOf } from "./keys.js";
+import { assertPublicInstance } from "./util.js";
 import type { FieldOutput, IsValidPipe, Pipe, PipeError, Transform, Validator } from "./request.js";
 import { email, uuid } from "./request.js";
 
@@ -199,9 +200,7 @@ function issue(issues: Issue[], path: string, message: string): typeof INVALID {
 
 function makeDecorator<T>(spec: Spec<T>): IsDecorator<T> {
   const decorator = function (_value: undefined, context: ClassFieldDecoratorContext): void {
-    if (context.static || context.private) {
-      throw new TypeError(`DTO decorators must be on public instance fields (got ${String(context.name)})`);
-    }
+    assertPublicInstance(context, "DTO decorators");
     const fields = DTO_FIELDS.ownArray<DtoField>(context.metadata);
     const field: DtoField = { key: String(context.name), spec: spec as Spec<unknown> };
     // A subclass redeclaring a field replaces the parent's spec rather than adding a second one.
@@ -547,7 +546,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function parseDto<T>(dto: DtoClass<T>, raw: unknown, path: string, issues: Issue[]): T | typeof INVALID {
   if (!isPlainObject(raw)) return issue(issues, path, "Expected an object");
-  const fields = DTO_FIELDS.from((dto as unknown as Record<symbol, DecoratorMetadataObject>)[Symbol.metadata!] ?? {});
+  const fields = DTO_FIELDS.from(metadataOf(dto));
   if (!fields || fields.length === 0) {
     throw new TypeError(`${dto.name} has no is.* field decorators, so it can't validate anything`);
   }

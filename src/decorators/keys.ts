@@ -121,6 +121,24 @@ export class YerdKey<T = unknown> {
     return own;
   }
 
+  /**
+   * Set value guaranteed to be own to `target`; copy-on-inherit, like ownArray.
+   *
+   * ```ts
+   * const FLAGGED = createKey<Set<string | symbol>>("app:flagged");
+   * const flagged = (_method: Function, context: ClassMethodDecoratorContext) => {
+   *   FLAGGED.ownSet<string | symbol>(context.metadata).add(context.name);
+   * };
+   * ```
+   */
+  ownSet<E>(target: object): Set<E> {
+    if (this.hasOwn(target)) return this.from(target) as Set<E>;
+    const inherited = this.from(target) as Set<E> | undefined;
+    const own = new Set<E>(inherited);
+    this.set(target, own as T);
+    return own;
+  }
+
   /** The symbol's description, `yerd:<name>`. */
   get description(): string | undefined {
     return this.key.description;

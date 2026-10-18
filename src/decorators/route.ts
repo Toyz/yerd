@@ -1,8 +1,9 @@
 import type { Component } from "../jsx/jsx-runtime.js";
-import type { GuardRef, GuardSpec } from "./guards.js";
+import { CLASS_GUARDS, type GuardRef, type GuardSpec } from "./guards.js";
 import type { YerdContext } from "../server/context.js";
-import type { MediaType } from "../respond/negotiate.js";
-import { createKey } from "./keys.js";
+import { isMediaType, type MediaType } from "../respond/negotiate.js";
+import { createKey, metadataOf } from "./keys.js";
+import { assertPublicInstance, isDecoratorContext } from "./util.js";
 
 /**
  * An HTTP method a handler can answer. "ALL" answers any method the route has
@@ -107,9 +108,6 @@ export interface VerbDecorator {
   (method: Function, context: ClassMethodDecoratorContext): void;
 }
 
-function isDecoratorContext(value: unknown): value is ClassMethodDecoratorContext {
-  return typeof value === "object" && value !== null && "kind" in value && "metadata" in value;
-}
 
 /**
  * Page metadata, handed to every layout as `meta`. Merged root to leaf: group
@@ -164,8 +162,6 @@ export interface LayoutProps {
  * ```
  */
 export interface RouteOptions {
-  /** Reserved for building URLs by route name; nothing reads it yet. */
-  name?: string;
   /**
    * Instance lifetime. Default "scoped": a fresh instance per request.
    * Request accessors (@param, @query, ...) are correct under any lifetime,
@@ -215,9 +211,6 @@ export interface GroupOptions {
   guards?: GuardSpec[];
 }
 
-// guards.ts's class-guard key, by name (createKey returns the same key), to
-// read @guards written on a group class without importing guards.ts here.
-const GROUP_CLASS_GUARDS = createKey<GuardSpec[]>("guards:class");
 
 export interface GroupDef {
   className: string;
@@ -335,8 +328,8 @@ export function prerender(a?: unknown, b?: unknown): unknown {
   const apply = (options: PrerenderOptions) => (_value: Function, context: ClassDecoratorContext) => {
     PRERENDER.set(context.metadata, options);
   };
-  if (typeof a === "function" && typeof b === "object" && b !== null && (b as { kind?: unknown }).kind === "class") {
-    apply({})(a, b as ClassDecoratorContext);
+  if (typeof a === "function" && isDecoratorContext(b, "class")) {
+    apply({})(a, b);
     return undefined;
   }
   return apply((a ?? {}) as PrerenderOptions);
@@ -394,13 +387,11 @@ export function route(pattern: string, options: RouteOptions = {}) {
 function verb(name: Verb): VerbDecorator {
   const label = name === "DELETE" ? "del" : name.toLowerCase();
   const attach = (context: ClassMethodDecoratorContext, when?: VerbEntry["when"]): void => {
-    if (context.static || context.private) {
-      throw new TypeError(`@${label} must decorate a public instance method (got ${String(context.name)})`);
-    }
+    assertPublicInstance(context, `@${label}`);
     VERBS.ownArray<VerbEntry>(context.metadata).push({ verb: name, method: context.name, ...(when ? { when } : {}) });
   };
   return function (first: unknown, second?: unknown) {
-    if (isDecoratorContext(second)) return attach(second);
+    if (isDecoratorContext(second)) return attach(second as ClassMethodDecoratorContext);
     if (typeof first !== "function") {
       throw new TypeError(`@${label}(...) takes a request test (a function or a guard), not a path: one route class serves one path`);
     }
@@ -632,14 +623,11 @@ export function layout(...args: Component<LayoutProps>[] | [...Component<LayoutP
 export function accepts(...types: [MediaType, ...MediaType[]]) {
   if (types.length === 0) throw new TypeError("@accepts needs at least one type");
   for (const type of types) {
-    if (!/^[\w.+-]+(\/[\w.+-]+)?$/.test(type) || (!type.includes("/") && !["html", "json", "ndjson", "text", "sse", "xml", "csv"].includes(type))) {
-      throw new TypeError(`@accepts("${type}"): not a media type (use a shorthand like "json" or a type/subtype)`);
-    }
+    if (!isMediaType(type)) throw new TypeError(`@accepts("${type}"): not a media type (use a shorthand like "json" or a type/subtype)`);
   }
   return (_method: Function, context: ClassMethodDecoratorContext): void => {
-    const map = ACCEPTS.hasOwn(context.metadata) ? ACCEPTS.from(context.metadata)! : new Map(ACCEPTS.from(context.metadata));
-    map.set(context.name, types);
-    ACCEPTS.set(context.metadata, map);
+    assertPublicInstance(context, "@accepts");
+    ACCEPTS.ownMap<string | symbol, string[]>(context.metadata).set(context.name, types);
   };
 }
 
@@ -660,9 +648,8 @@ export function accepts(...types: [MediaType, ...MediaType[]]) {
  * ```
  */
 export function noLayout(_method: Function, context: ClassMethodDecoratorContext): void {
-  const set = NO_LAYOUT.hasOwn(context.metadata) ? NO_LAYOUT.from(context.metadata)! : new Set(NO_LAYOUT.from(context.metadata));
-  set.add(context.name);
-  NO_LAYOUT.set(context.metadata, set);
+  assertPublicInstance(context, "@noLayout");
+  NO_LAYOUT.ownSet<string | symbol>(context.metadata).add(context.name);
 }
 
 /**
@@ -686,9 +673,6 @@ export function group(prefix: string, options: GroupOptions = {}) {
   };
 }
 
-function metadataOf(cls: Function): DecoratorMetadataObject {
-  return ((cls as unknown as Record<symbol, unknown>)[Symbol.metadata!] as DecoratorMetadataObject | undefined) ?? {};
-}
 
 function joinPaths(prefix: string, path: string): string {
   if (path === "/") return prefix === "" ? "/" : prefix;
@@ -738,7 +722,7 @@ export function resolveRoute(def: RouteDef): ResolvedRoute {
     const fromOptions = g.options.layout === undefined ? [] : Array.isArray(g.options.layout) ? g.options.layout : [g.options.layout];
     layouts = joinLayouts(joinLayouts(layouts, fromOptions), declared?.layouts ?? []);
     meta = { ...meta, ...g.options.meta };
-    guards.push(...(g.options.guards ?? []), ...(GROUP_CLASS_GUARDS.from(metadata) ?? []));
+    guards.push(...(g.options.guards ?? []), ...(CLASS_GUARDS.from(metadata) ?? []));
   }
   const own = LAYOUT.from(def.metadata);
   if (own?.isolated) isolated = true;

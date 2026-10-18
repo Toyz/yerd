@@ -8,6 +8,7 @@ import { applyLayouts, type LayoutProps, type PageMeta } from "../decorators/rou
 import { renderToStream } from "../render/render.js";
 import { isBare, YerdResponse, type HeaderInit } from "./response.js";
 import { choose, expandType, isNegotiated, type Negotiated } from "./negotiate.js";
+import { isAsyncIterable } from "../decorators/util.js";
 
 export type Body = null | string | Uint8Array | AsyncIterable<string | Uint8Array>;
 
@@ -48,9 +49,6 @@ const TEXT = "text/plain; charset=utf-8";
 const JSON_TYPE = "application/json; charset=utf-8";
 const BYTES = "application/octet-stream";
 
-function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
-  return typeof value === "object" && value !== null && typeof (value as AsyncIterable<unknown>)[Symbol.asyncIterator] === "function";
-}
 
 function isPlainData(value: unknown): boolean {
   if (typeof value === "boolean" || Array.isArray(value)) return true;

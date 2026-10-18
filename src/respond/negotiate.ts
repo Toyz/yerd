@@ -42,9 +42,19 @@ const SHORTHAND: Record<MediaShorthand, string> = {
   csv: "text/csv",
 };
 
+// Own properties only: `"constructor" in SHORTHAND` is true too.
+function isShorthand(type: string): type is MediaShorthand {
+  return Object.hasOwn(SHORTHAND, type);
+}
+
+/** Whether `type` is a shorthand ("json") or a `type/subtype`, as @accepts and negotiate() take. */
+export function isMediaType(type: string): boolean {
+  return isShorthand(type) || /^[\w.+-]+\/[\w.+-]+$/.test(type);
+}
+
 /** "json" -> "application/json"; full types pass through, lowercased. */
 export function expandType(type: string): string {
-  return (SHORTHAND[type as MediaShorthand] ?? type).toLowerCase();
+  return (isShorthand(type) ? SHORTHAND[type] : type).toLowerCase();
 }
 
 interface Range {
@@ -194,7 +204,7 @@ export interface Negotiated {
 export function negotiate(variants: Variants): Negotiated {
   if (Object.keys(variants).length === 0) throw new TypeError("negotiate() needs at least one variant");
   for (const key of Object.keys(variants)) {
-    if (!(key in SHORTHAND) && !/^[\w.+-]+\/[\w.+-]+$/.test(key)) throw new TypeError(`negotiate(): "${key}" isn't a media type (use a shorthand like "json" or a type/subtype)`);
+    if (!isMediaType(key)) throw new TypeError(`negotiate(): "${key}" isn't a media type (use a shorthand like "json" or a type/subtype)`);
   }
   return { [NEGOTIATED]: true, variants };
 }

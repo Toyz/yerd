@@ -18,6 +18,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createKey } from "../decorators/keys.js";
+import { assertPublicInstance } from "../decorators/util.js";
 import { resolveRoute, routeRegistry, type RouteDef } from "../decorators/route.js";
 import { HttpError } from "../respond/response.js";
 import { Logger } from "../log/logger.js";
@@ -457,9 +458,7 @@ const capturing = new AsyncLocalStorage<{ fn?: Function; args?: unknown; calls: 
  * ```
  */
 export function action<M extends Action<any>>(method: M, context: ClassMethodDecoratorContext): M {
-  if (context.static || context.private || typeof context.name !== "string") {
-    throw new TypeError(`@action must decorate a public, string-named instance method (got ${String(context.name)})`);
-  }
+  assertPublicInstance(context, "@action", { stringNamed: true });
   const set = ACTIONS.hasOwn(context.metadata) ? ACTIONS.from(context.metadata)! : new Set(ACTIONS.from(context.metadata));
   set.add(context.name);
   ACTIONS.set(context.metadata, set);

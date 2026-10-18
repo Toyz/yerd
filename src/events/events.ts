@@ -49,6 +49,7 @@
 
 import { randomUUID } from "node:crypto";
 import { createKey } from "../decorators/keys.js";
+import { assertPublicInstance } from "../decorators/util.js";
 import { parseDuration } from "../di/decorators.js";
 import { Scope, runWithServices, token, type Container } from "../di/container.js";
 import { Logger } from "../log/logger.js";
@@ -217,7 +218,7 @@ export function on<E extends object>(type: EventClass<E>, options: OnOptions = {
   }
   if (options.backoff !== undefined) parseDuration(options.backoff);
   return (_method: (this: any, event: E) => unknown, context: ClassMethodDecoratorContext): void => {
-    if (context.static || context.private) throw new TypeError("@on must decorate a public instance method");
+    assertPublicInstance(context, "@on");
     ON_EVENT.ownArray<OnEntry>(context.metadata).push({ method: context.name, type, options });
   };
 }
@@ -239,7 +240,7 @@ export function on<E extends object>(type: EventClass<E>, options: OnOptions = {
  */
 export function handles<C extends Call<any>>(type: EventClass<C>) {
   return (_method: (this: any, call: C) => ResultOf<C> | Promise<ResultOf<C>>, context: ClassMethodDecoratorContext): void => {
-    if (context.static || context.private) throw new TypeError("@handles must decorate a public instance method");
+    assertPublicInstance(context, "@handles");
     HANDLES.ownArray<HandlesEntry>(context.metadata).push({ method: context.name, type });
   };
 }

@@ -16,6 +16,7 @@
 import { HttpError, YerdResponse } from "./response.js";
 import { Logger } from "../log/logger.js";
 import { maybeContext } from "../server/context.js";
+import { isAsyncIterable, isDecoratorContext } from "../decorators/util.js";
 
 const streamLog = new Logger("yerd::stream");
 
@@ -335,13 +336,6 @@ function sseResponse(source: AsyncIterable<unknown>, options: SseOptions = {}): 
 type StreamMethod = (this: any, ...args: any[]) => AsyncIterable<unknown>;
 type StreamDecorator = <M extends StreamMethod>(method: M, context: ClassMethodDecoratorContext) => M;
 
-function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
-  return typeof value === "object" && value !== null && typeof (value as AsyncIterable<unknown>)[Symbol.asyncIterator] === "function";
-}
-
-function isMethodContext(value: unknown): value is ClassMethodDecoratorContext {
-  return typeof value === "object" && value !== null && (value as { kind?: unknown }).kind === "method";
-}
 
 function wrapMethod(method: StreamMethod, respond: (source: AsyncIterable<unknown>) => YerdResponse): StreamMethod {
   return function (this: unknown, ...args: unknown[]) {
@@ -363,7 +357,7 @@ export function ndjson<M extends StreamMethod>(method: M, context: ClassMethodDe
 export function ndjson(options?: NdjsonOptions): StreamDecorator;
 export function ndjson(a?: unknown, b?: unknown): unknown {
   if (isAsyncIterable(a)) return ndjsonResponse(a, b as NdjsonOptions | undefined);
-  if (typeof a === "function" && isMethodContext(b)) return wrapMethod(a as StreamMethod, (s) => ndjsonResponse(s));
+  if (typeof a === "function" && isDecoratorContext(b, "method")) return wrapMethod(a as StreamMethod, (s) => ndjsonResponse(s));
   return (method: StreamMethod) => wrapMethod(method, (s) => ndjsonResponse(s, a as NdjsonOptions | undefined));
 }
 
@@ -392,6 +386,6 @@ export function sse<M extends StreamMethod>(method: M, context: ClassMethodDecor
 export function sse(options?: SseOptions): StreamDecorator;
 export function sse(a?: unknown, b?: unknown): unknown {
   if (isAsyncIterable(a)) return sseResponse(a, b as SseOptions | undefined);
-  if (typeof a === "function" && isMethodContext(b)) return wrapMethod(a as StreamMethod, (s) => sseResponse(s));
+  if (typeof a === "function" && isDecoratorContext(b, "method")) return wrapMethod(a as StreamMethod, (s) => sseResponse(s));
   return (method: StreamMethod) => wrapMethod(method, (s) => sseResponse(s, a as SseOptions | undefined));
 }

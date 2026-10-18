@@ -23,6 +23,7 @@
 import type { Level } from "./ilogger.js";
 import { activeBinding, currentSpan, emit, enabledHere, withSpan } from "./span.js";
 import { className } from "./instrument.js";
+import { assertPublicInstance } from "../decorators/util.js";
 
 /**
  * A logger for one target (category). Get one with @logger, inject the
@@ -204,7 +205,7 @@ function loggerAccessor(explicit: string | undefined) {
     _target: ClassAccessorDecoratorTarget<This, Logger>,
     context: ClassAccessorDecoratorContext<This, Logger>,
   ): ClassAccessorDecoratorResult<This, Logger> {
-    if (context.static || context.private) throw new TypeError("@logger goes on a public instance accessor");
+    assertPublicInstance(context, "@logger");
     // One cache per accessor: a class may have several loggers under different names.
     const cached = Symbol("yerd.logger");
     return {

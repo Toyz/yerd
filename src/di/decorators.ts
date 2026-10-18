@@ -1,4 +1,5 @@
 import { createKey, localKey } from "../decorators/keys.js";
+import { assertPublicInstance, isDecoratorContext } from "../decorators/util.js";
 import {
   OWNER, currentServices, keyName,
   type Container, type Lifetime, type Registration, type ServiceKey,
@@ -82,7 +83,7 @@ export interface ServiceOptions {
 }
 
 function isClassContext(value: unknown): value is ClassDecoratorContext {
-  return typeof value === "object" && value !== null && (value as { kind?: unknown }).kind === "class";
+  return isDecoratorContext(value, "class");
 }
 
 function addService(cls: Function, context: ClassDecoratorContext, options: ServiceOptions, hosted: boolean): void {
@@ -274,7 +275,7 @@ export const EVERY = createKey<EveryEntry[]>("every");
 
 function hook(key: typeof ON_BOOT, label: string) {
   return (_method: Function, context: ClassMethodDecoratorContext): void => {
-    if (context.static || context.private) throw new TypeError(`@${label} must decorate a public instance method`);
+    assertPublicInstance(context, `@${label}`);
     key.ownArray<string | symbol>(context.metadata).push(context.name);
   };
 }
@@ -362,7 +363,7 @@ export function every(interval: string | number, options: EveryOptions = {}) {
   const ms = parseDuration(interval);
   if (ms <= 0) throw new TypeError(`@every interval must be positive`);
   return (_method: (this: any, signal: AbortSignal) => unknown, context: ClassMethodDecoratorContext): void => {
-    if (context.static || context.private) throw new TypeError("@every must decorate a public instance method");
+    assertPublicInstance(context, "@every");
     EVERY.ownArray<EveryEntry>(context.metadata).push({ method: context.name, ms, immediate: options.immediate ?? false });
   };
 }

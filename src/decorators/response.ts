@@ -14,6 +14,7 @@
  */
 
 import { createKey } from "./keys.js";
+import { assertPublicInstance } from "./util.js";
 import { checkHeader } from "../respond/response.js";
 
 export interface ResponseDefaults {
@@ -130,7 +131,7 @@ export function setHeader(name: string, value: string) {
  */
 export function catches(...types: Function[]) {
   return (_method: Function, context: ClassMethodDecoratorContext): void => {
-    if (context.static || context.private) throw new TypeError("@catches goes on a public instance method");
+    assertPublicInstance(context, "@catches");
     CATCHES.ownArray<CatchEntry>(context.metadata).push({ method: context.name, types });
   };
 }

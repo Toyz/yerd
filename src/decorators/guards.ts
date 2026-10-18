@@ -22,6 +22,7 @@
 
 import type { YerdContext } from "../server/context.js";
 import { createKey } from "./keys.js";
+import { assertPublicInstance } from "./util.js";
 
 export type GuardResult = boolean | string | void | undefined | unknown;
 /**
@@ -112,12 +113,12 @@ function insert(metadata: DecoratorMetadataObject, slot: string | symbol, list: 
   return [...list.slice(0, at), ...specs, ...list.slice(at)];
 }
 
-function attach(specs: readonly GuardSpec[], context: ClassDecoratorContext | ClassMethodDecoratorContext): void {
+function attach(specs: readonly GuardSpec[], context: ClassDecoratorContext | ClassMethodDecoratorContext, label: string): void {
   if (context.kind === "class") {
     const own = CLASS_GUARDS.ownArray<GuardSpec>(context.metadata);
     own.splice(0, own.length, ...insert(context.metadata, CLASS_SLOT, own, specs));
   } else {
-    if (context.static || context.private) throw new TypeError(`Guards must be on public instance methods (got ${String(context.name)})`);
+    assertPublicInstance(context, label);
     const map = METHOD_GUARDS.ownMap<string | symbol, GuardSpec[]>(context.metadata);
     map.set(context.name, insert(context.metadata, context.name, map.get(context.name) ?? [], specs));
   }
@@ -140,7 +141,7 @@ function attach(specs: readonly GuardSpec[], context: ClassDecoratorContext | Cl
  */
 export function createGuard(label: string, run: GuardFn): GuardRef {
   const ref = function (this: unknown, _value: Function, context: ClassDecoratorContext | ClassMethodDecoratorContext) {
-    attach([ref as GuardRef], context);
+    attach([ref as GuardRef], context, `@${label}`);
   } as GuardRef;
   Object.defineProperties(ref, {
     [GUARD]: { value: true },
@@ -166,7 +167,7 @@ export function createGuard(label: string, run: GuardFn): GuardRef {
  * ```
  */
 export function guards(...specs: GuardSpec[]) {
-  return (_value: Function, context: ClassDecoratorContext | ClassMethodDecoratorContext): void => attach(specs, context);
+  return (_value: Function, context: ClassDecoratorContext | ClassMethodDecoratorContext): void => attach(specs, context, "@guards");
 }
 
 export interface NamedGuard {
@@ -225,7 +226,7 @@ export function resetGuardRegistry(): void {
  */
 export function guard(name?: string) {
   return (_method: (ctx: YerdContext) => unknown, context: ClassMethodDecoratorContext): void => {
-    if (context.static || context.private) throw new TypeError("@guard must decorate a public instance method");
+    assertPublicInstance(context, "@guard");
     guardRegistry.push({ name: name ?? String(context.name), method: context.name, metadata: context.metadata });
   };
 }

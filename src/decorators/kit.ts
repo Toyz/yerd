@@ -5,7 +5,8 @@
  */
 
 import { currentContext, type RouteInfo, type YerdContext } from "../server/context.js";
-import { createKey, localKey } from "./keys.js";
+import { createKey } from "./keys.js";
+import { assertPublicInstance, isDecoratorContext } from "./util.js";
 
 /**
  * What a request decorator knows how to resolve. Attached to every decorator
@@ -121,10 +122,6 @@ export interface AccessorOptions<A extends unknown[]> {
 
 type AccessorFactory<T, A extends unknown[]> = A extends [] ? AccessorDecorator<T> : (...args: A) => AccessorDecorator<T>;
 
-function isAccessorContext(value: unknown): value is ClassAccessorDecoratorContext {
-  return typeof value === "object" && value !== null && (value as { kind?: unknown }).kind === "accessor";
-}
-
 const objectIds = new WeakMap<object, number>();
 let nextObjectId = 0;
 
@@ -164,8 +161,8 @@ export function createAccessor<T, A extends unknown[] = []>(
   options: AccessorOptions<A> = {},
 ): AccessorFactory<T, A> {
   const name = options.name ?? (resolve.name || "accessor");
-  // Per-request memo slot for this accessor; local so two accessors with the same name never share it.
-  const memo = localKey<Map<string, unknown>>(`memo:${name}`);
+  // Per-request memo slot for this accessor: a fresh symbol, so two accessors with the same name never share it.
+  const memo = Symbol(`yerd:memo:${name}`);
 
   const resolverFor = (args: A): Resolver => {
     const memoKey = argsKey(args);
@@ -173,8 +170,8 @@ export function createAccessor<T, A extends unknown[] = []>(
       name,
       args,
       resolve(ctx) {
-        let perAccessor = ctx.memo.get(memo.key) as Map<string, unknown> | undefined;
-        if (!perAccessor) ctx.memo.set(memo.key, (perAccessor = new Map()));
+        let perAccessor = ctx.memo.get(memo) as Map<string, unknown> | undefined;
+        if (!perAccessor) ctx.memo.set(memo, (perAccessor = new Map()));
         if (perAccessor.has(memoKey)) return perAccessor.get(memoKey);
         const value = resolve(ctx, ...args);
         perAccessor.set(memoKey, value);
@@ -191,9 +188,7 @@ export function createAccessor<T, A extends unknown[] = []>(
       target: ClassAccessorDecoratorTarget<This, V>,
       context: ClassAccessorDecoratorContext<This, V>,
     ): ClassAccessorDecoratorResult<This, V> {
-      if (context.static || context.private) {
-        throw new TypeError(`@${name} must decorate a public instance accessor (got ${String(context.name)})`);
-      }
+      assertPublicInstance(context, `@${name}`);
       const field = String(context.name);
       ACCESSORS.ownArray<AccessorEntry>(context.metadata).push(Object.assign(Object.create(resolver), { field }));
 
@@ -214,7 +209,7 @@ export function createAccessor<T, A extends unknown[] = []>(
   const bare = make([] as unknown as A);
   const factory = (...input: unknown[]) => {
     // Bare use (@params): called directly as a decorator with (target, context).
-    if (input.length === 2 && isAccessorContext(input[1])) {
+    if (input.length === 2 && isDecoratorContext(input[1], "accessor")) {
       return bare(input[0] as ClassAccessorDecoratorTarget<unknown, unknown>, input[1] as ClassAccessorDecoratorContext<unknown, unknown>);
     }
     return make(input as A);
@@ -254,9 +249,7 @@ export function args<const R extends readonly Resolves<unknown>[]>(...resolvers:
     _method: (this: This, ...args: ArgTypes<R>) => unknown,
     context: ClassMethodDecoratorContext<This>,
   ): void {
-    if (context.static || context.private) {
-      throw new TypeError(`@args must decorate a public instance method (got ${String(context.name)})`);
-    }
+    assertPublicInstance(context, "@args");
     ARGS.ownMap<string | symbol, readonly Resolver[]>(context.metadata).set(
       context.name,
       resolvers.map((r) => r[RESOLVER]),
