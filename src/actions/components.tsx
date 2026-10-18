@@ -15,6 +15,16 @@ import { raw } from "../render/escape.js";
  */
 export const RUNTIME_PATH = "/_yerd/runtime.js";
 
+/** @internal The runtime's chunks are served beside it: this, the chunk's name, ".js". */
+export const RUNTIME_CHUNK_PREFIX = `${RUNTIME_PATH.slice(0, -".js".length)}-`;
+
+/** @internal modulepreload hints for runtime chunks, which the renderer puts after <Scripts />. */
+export function chunkHints(names: readonly string[]): string {
+  let out = "";
+  for (const name of names) out += `<link rel="modulepreload" href="${RUNTIME_CHUNK_PREFIX}${name}.js">`;
+  return out;
+}
+
 /** Props for <Region>. */
 export interface RegionProps {
   /** Unique on the page; how responses find the part of the page to replace. */
@@ -92,6 +102,13 @@ export function Region({ id, as = "div", append, prepend, ...rest }: RegionProps
  * the runtime with no data-yx-* attributes, and links are prefetched from
  * where the pointer is heading (see src/client/runtime.ts). Without it,
  * forms and links still work as plain HTML, with full page loads.
+ *
+ * Rendered in a page, it's followed by `<link rel="modulepreload">` hints
+ * for the runtime chunks the page's elements need (<Local>, drop targets,
+ * `sync` and cues), so they download alongside the runtime instead of after
+ * it. Only elements rendered before the head goes out count (it goes out
+ * early when an async component makes the page wait); the runtime loads
+ * any other chunk it finds a use for itself.
  *
  * ```tsx
  * function RootLayout({ children, meta }: LayoutProps) {

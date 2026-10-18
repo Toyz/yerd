@@ -28,8 +28,8 @@ import { ACTIONS, ActionForm, CSRF_FIELD, checkActionToken, fillHoles, resolveSe
 import { CLASS_GUARDS, METHOD_GUARDS, guardRegistry, isGuardRef, resetGuardRegistry, type GuardSpec } from "../decorators/guards.js";
 import { SessionManager, checkSessionOptions } from "../session/manager.js";
 import type { SessionOptions } from "../session/session.js";
-import { RUNTIME_PATH } from "../actions/components.js";
-import { runtimeSource } from "../client/runtime.js";
+import { RUNTIME_CHUNK_PREFIX, RUNTIME_PATH } from "../actions/components.js";
+import { chunkSource, runtimeSource } from "../client/runtime.js";
 import { attributesSource, resetAttributeRegistry } from "../attributes/attribute.js";
 import { isYerdNode } from "../jsx/jsx-runtime.js";
 import { YerdResponse, isBare, redirect } from "../respond/response.js";
@@ -1449,6 +1449,10 @@ export class YerdApp {
     const reading = method === "GET" || method === "HEAD";
 
     if (path === RUNTIME_PATH && reading) return send(res, runtimeResponse(req), method === "HEAD", undefined);
+    // Its chunks, beside it (/_yerd/runtime-<name>.js). A name that isn't one is a 404 here, not a route's.
+    if (reading && path.startsWith(RUNTIME_CHUNK_PREFIX) && path.endsWith(".js")) {
+      return send(res, chunkResponse(req, path.slice(RUNTIME_CHUNK_PREFIX.length, -3)), method === "HEAD", undefined);
+    }
     // The server's clock, for pages lining up `sync` animations and cues.
     if (path === CLOCK_PATH && reading) {
       const body = JSON.stringify({ now: Date.now() });
@@ -1975,25 +1979,35 @@ function errorResponse(error: unknown): Outgoing {
   return { status, headers: { "content-type": "text/plain; charset=utf-8" }, body: message };
 }
 
-// The runtime script (plus custom attributes' client halves), compressed once
-// per distinct source (brotli and gzip, kept in memory) rather than per
-// request. `no-cache` with an ETag, so browsers revalidate (a 304) instead
-// of downloading it on every page.
-let runtimeAsset: { source: string; etag: string; br: Uint8Array; gzip: Uint8Array; raw: Uint8Array } | undefined;
+// The runtime's core (plus custom attributes' client halves) and its chunks,
+// each compressed once per distinct source (brotli and gzip, kept in memory)
+// rather than per request. `no-cache` with an ETag, so browsers revalidate
+// (a 304) instead of downloading them on every page.
+const scriptAssets = new Map<string, { source: string; etag: string; br: Uint8Array; gzip: Uint8Array; raw: Uint8Array }>();
 
 function runtimeResponse(req: IncomingMessage): Outgoing {
-  const source = runtimeSource() + attributesSource();
-  if (runtimeAsset?.source !== source) {
+  return scriptResponse(req, "", runtimeSource({ chunks: "split" }) + attributesSource());
+}
+
+function chunkResponse(req: IncomingMessage, name: string): Outgoing {
+  const source = chunkSource(name);
+  return source === undefined ? errorResponse(404) : scriptResponse(req, name, source);
+}
+
+/** A runtime script (`key`: "" for the core, else the chunk's name), from its compressed copies. */
+function scriptResponse(req: IncomingMessage, key: string, source: string): Outgoing {
+  let asset = scriptAssets.get(key);
+  if (asset?.source !== source) {
     const raw = Buffer.from(source);
-    runtimeAsset = {
+    asset = {
       source,
       etag: `"${createHash("sha256").update(raw).digest("base64url").slice(0, 16)}"`,
       br: brotliCompressSync(raw),
       gzip: gzipSync(raw),
       raw,
     };
+    scriptAssets.set(key, asset);
   }
-  const asset = runtimeAsset;
   const headers: Record<string, string> = {
     "content-type": "text/javascript; charset=utf-8",
     "cache-control": "no-cache",
@@ -2002,7 +2016,8 @@ function runtimeResponse(req: IncomingMessage): Outgoing {
   };
   const inm = req.headers["if-none-match"];
   // `*` matches any current representation (RFC 9110 13.1.2), and there always is one.
-  if (inm && inm.split(",").some((tag) => tag.trim() === "*" || tag.trim() === asset.etag || tag.trim() === `W/${asset.etag}`)) {
+  const etag = asset.etag;
+  if (inm && inm.split(",").some((tag) => tag.trim() === "*" || tag.trim() === etag || tag.trim() === `W/${etag}`)) {
     return { status: 304, headers, body: null };
   }
   const accept = req.headers["accept-encoding"] ?? "";

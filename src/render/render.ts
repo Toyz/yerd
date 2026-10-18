@@ -23,6 +23,7 @@ import { formAction, isBoundAction } from "../actions/action.js";
 import { DYNAMIC_ID, Dynamic, type DynamicProps } from "./dynamic.js";
 import { Styles, stylesFor } from "./css.js";
 import { Local, bindingSpec, isBinding, localState, stateName, type Binding, type LocalProps } from "./local.js";
+import { Scripts, chunkHints } from "../actions/components.js";
 
 const VOID_ELEMENTS = new Set([
   "area", "base", "br", "col", "embed", "hr", "img", "input",
@@ -44,6 +45,13 @@ const OWN_CSS = 4;
 const RAW_TEXT = 8;
 
 const VALID_TAG = /^[a-zA-Z][a-zA-Z0-9-]*$/;
+
+// The client runtime's chunks, as bits of State.needs: what the page's
+// elements need, preloaded after <Scripts /> (see placeHints).
+const CHUNK_NAMES = ["cues", "dnd", "local"] as const;
+const CUES = 1;
+const DND = 2;
+const LOCAL = 4;
 
 // Tags repeat constantly: each is checked and classified the first time it's
 // seen, then it's one Map lookup per element (capped).
@@ -109,6 +117,14 @@ interface State {
   cssAnchor: number | undefined;
   /** Rules on their way to cssAnchor: spliced in once, when the buffer is flushed or the render ends. */
   cssHead: string;
+  /** The runtime chunks the elements rendered so far need (CUES | DND | LOCAL). */
+  needs: number;
+  /**
+   * Just after <Scripts /> in the buffer, while the buffer still holds it:
+   * where the chunks' modulepreload hints go when the buffer is flushed or
+   * the render ends.
+   */
+  scriptsAnchor: number | undefined;
   /** Inside a <select>, where the parser drops <style>: rules wait here for it to close. */
   cssHeld: Set<string> | undefined;
   /** cssSent outside each open <template> / <noscript>, innermost last (see OWN_CSS_ELEMENTS). */
@@ -174,11 +190,28 @@ function placeHeadRules(state: State): void {
   if (!state.cssHead) return;
   const at = state.cssAnchor!;
   state.buffer = state.buffer.slice(0, at) + state.cssHead + state.buffer.slice(at);
+  if (state.scriptsAnchor !== undefined && state.scriptsAnchor > at) state.scriptsAnchor += state.cssHead.length;
   state.cssHead = "";
+}
+
+/**
+ * Put modulepreload hints for the runtime chunks the page needs after
+ * <Scripts />, in one splice. Once the head has gone out it's too late: the
+ * runtime loads what it finds a use for itself.
+ */
+function placeHints(state: State): void {
+  const at = state.scriptsAnchor;
+  if (at === undefined) return;
+  state.scriptsAnchor = undefined;
+  if (!state.needs) return;
+  const hints = chunkHints(CHUNK_NAMES.filter((_, i) => state.needs & (1 << i)));
+  state.buffer = state.buffer.slice(0, at) + hints + state.buffer.slice(at);
+  if (state.cssAnchor !== undefined && state.cssAnchor >= at) state.cssAnchor += hints.length;
 }
 
 /** Hand the buffer to the consumer as a chunk (we're about to wait). */
 function flush(state: State): void {
+  placeHints(state);
   placeHeadRules(state);
   if (!state.buffer) return;
   state.chunks.push(state.buffer);
@@ -308,6 +341,12 @@ function renderNode(node: YerdNode, state: State): Step {
       return undefined;
     }
     if (type === Local) return renderLocal(props as unknown as LocalProps<object>, state);
+    if (type === Scripts) {
+      write(state, (Scripts(props as { auto?: boolean }) as RawHtml).html);
+      // The first one gets the hints, while the head is still in the buffer.
+      if (emitting(state) && state.scriptsAnchor === undefined) state.scriptsAnchor = state.buffer.length;
+      return undefined;
+    }
     const early = state.early?.get(node);
     if (early) {
       // Called already, while the walk waited on an earlier sibling.
@@ -361,6 +400,7 @@ function openElement(type: string, flags: number, props: Record<string, unknown>
     // An action, dropTo or a Cues prop: rewritten into what the runtime reads.
     state.cssFound.clear();
     const rewritten = rewriteProps(type, props);
+    state.needs |= chunksFor(rewritten.attrs);
     attrs = renderAttributes(rewritten.attrs, type, true, local, state.cssFound);
     hidden = rewritten.hidden;
   }
@@ -462,6 +502,15 @@ function rewriteProps(type: string, props: Record<string, unknown>): { attrs: Re
   return { attrs, hidden };
 }
 
+/** The runtime chunks rewritten attributes need: cues for sync and cues, dnd for a drop target. */
+function chunksFor(attrs: Record<string, unknown>): number {
+  let needs = 0;
+  if (attrs["data-yx-sync"] || attrs["data-yx-cue"]) needs |= CUES;
+  const trigger = attrs["data-yx-trigger"];
+  if (attrs["data-yx-drop-to"] != null || (typeof trigger === "string" && trigger.trim().startsWith("drop"))) needs |= DND;
+  return needs;
+}
+
 /** An @action, a lambda calling one, or bind(...) of one. */
 function isActionValue(value: unknown): boolean {
   return typeof value === "function" || isBoundAction(value);
@@ -555,6 +604,7 @@ function renderLocal(props: LocalProps<object>, state: State): Step {
   if (store && !store.key) throw new TypeError("<Local persist> needs a non-empty key");
   const persisted = store ? ` data-yx-persist="${escapeHtml(store.key)}"${store.storage === "session" ? ' data-yx-storage="session"' : ""}` : "";
   write(state, `<yerd-local data-yx-local="${escapeHtml(json)}" data-yx-as="${name}"${persisted} style="display:contents">`);
+  state.needs |= LOCAL;
   return scoped(state, "insideLocal", () => {
     const step = renderChild(children(localState(initial)), state);
     if (step) return step.then(() => write(state, "</yerd-local>"));
@@ -628,6 +678,8 @@ export async function* renderToStream(child: Child, options: RenderOptions = {})
     cssFound: new Set(),
     cssAnchor: undefined,
     cssHead: "",
+    needs: 0,
+    scriptsAnchor: undefined,
     cssHeld: undefined,
     cssOuter: undefined,
     early: undefined,
@@ -642,6 +694,7 @@ export async function* renderToStream(child: Child, options: RenderOptions = {})
   }
   if (!step) {
     // Synchronous all the way: one chunk.
+    placeHints(state);
     placeHeadRules(state);
     if (state.buffer) yield state.buffer;
     return;
@@ -665,6 +718,7 @@ export async function* renderToStream(child: Child, options: RenderOptions = {})
     await new Promise<void>((resolve) => (state.notify = resolve));
     state.notify = undefined;
   }
+  placeHints(state);
   placeHeadRules(state);
   if (state.buffer) yield state.buffer;
 }
