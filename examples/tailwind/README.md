@@ -11,6 +11,12 @@ Tailwind CSS v4 in a yerd app. `npm run tailwind` from the repo root.
   (`/assets/app-AbC123xy.css`, cached for a year) and the same tag links that.
 - Tailwind scans the TSX as text, so `class="..."` (not `className`), arrays
   and objects all work, as long as full class names appear in the source.
+- Four counters, one action. Each `Counter` renders its own
+  `<Region id="counter-{id}">` and a form bound to itself with
+  `bind(bump, { id })`, so the action knows which counter to bump (signed:
+  the browser can't change it) and returns just that counter; the runtime
+  morphs the Region with the matching id. The component takes the action as
+  a typed prop, `bump: Action<{ id: string }>`.
 - Regions morphed in by actions are styled too, and `data-[yx-new]:animate-bounce`
   animates only what the runtime just inserted.
 
