@@ -50,7 +50,7 @@ npx tsc --noEmit && npx vite build
 node dist/server/server.js
 ```
 
-Vite doesn't type-check, so run `tsc --noEmit` first. The build writes:
+Vite doesn't type-check, so run `tsc --noEmit` first. The built server runs with `NODE_ENV=production` unless you set it to something else, so production behavior (JSON logs, no stack traces, the missing-secret warning) is the default. The build writes:
 
 ```text
 dist/

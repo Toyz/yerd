@@ -37,7 +37,12 @@ function serverEntrySource(entry: string): string {
   return [
     `import { existsSync } from "node:fs";`,
     `import { fileURLToPath } from "node:url";`,
-    `import app from ${JSON.stringify(entry)};`,
+    ``,
+    // A built server is production unless the environment says otherwise. Set
+    // before the app loads (hence the dynamic import: static ones run first),
+    // in bracket form because Vite's define rewrites process.env.NODE_ENV.
+    `process.env["NODE_ENV"] ??= "production";`,
+    `const { default: app } = await import(${JSON.stringify(entry)});`,
     ``,
     `const client = fileURLToPath(new URL("../client/", import.meta.url));`,
     `const manifest = new URL("../client/.vite/manifest.json", import.meta.url);`,
