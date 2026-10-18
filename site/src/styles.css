@@ -21,8 +21,8 @@
   --text-dim: light-dark(#53483c, #c4b8a5);
   --text-faint: light-dark(#6f6355, #968b79);
 
-  /* terracotta: --hat is the gnome's hat (fills, marks); --accent is for text */
-  --hat: light-dark(#d6452b, #e0573b);
+  /* terracotta: --brand for fills and marks; --accent is for text */
+  --brand: light-dark(#d6452b, #e0573b);
   --accent: light-dark(#a8381f, #f08263);
   --accent-dim: light-dark(#d9957f, #8a4434);
   --accent-bg: light-dark(rgba(214, 69, 43, 0.09), rgba(224, 87, 59, 0.13));
@@ -90,7 +90,7 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid var(--hat);
+  outline: 2px solid var(--brand);
   outline-offset: 2px;
 }
 

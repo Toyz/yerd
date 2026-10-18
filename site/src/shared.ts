@@ -76,7 +76,7 @@ export const pageStyles = css`
     :host { padding: 28px 16px 72px; }
   }
 
-  :focus-visible { outline: 2px solid var(--hat); outline-offset: 2px; border-radius: 2px; }
+  :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 2px; }
   a { color: var(--accent); text-decoration: underline; text-decoration-color: var(--accent-dim); text-decoration-thickness: 1px; text-underline-offset: 3px; }
   a:hover { text-decoration-color: currentColor; }
   a.external::after { content: "↗"; margin-left: 2px; font-size: 0.75em; color: var(--text-faint); }
@@ -187,7 +187,7 @@ export const pageStyles = css`
   .callout.tip .callout-title { color: var(--moss); }
   .callout.warning, .callout.caution { border-left-color: var(--warn); }
   .callout.warning .callout-title, .callout.caution .callout-title { color: var(--warn); }
-  .callout.important { border-left-color: var(--hat); }
+  .callout.important { border-left-color: var(--brand); }
   .callout.important .callout-title { color: var(--accent); }
 
   .muted { color: var(--text-faint); }

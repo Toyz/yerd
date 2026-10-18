@@ -39,7 +39,7 @@ const sheet = css`
   }
   .filter .clear:hover { color: var(--text); background: var(--bg-hover); }
   .filter .clear svg { position: static; margin: 0; }
-  .filter input:focus { outline: 2px solid var(--hat); outline-offset: 0; border-color: transparent; }
+  .filter input:focus { outline: 2px solid var(--brand); outline-offset: 0; border-color: transparent; }
   .kinds { display: flex; gap: 4px; flex-wrap: wrap; }
   .kinds button {
     font: inherit; font-size: 0.86rem; cursor: pointer;

@@ -25,13 +25,12 @@ export function KindBadge({ kind }: { kind: string }) {
   return <span class={`tag ${kind}`}>{kind}</span>;
 }
 
-/** The gnome: a terracotta hat, a face, a beard. The same mark the example app wears. */
-export function GnomeMark({ size = 28 }: { size?: number }) {
+/** yerd's mark: a lowercase y in the display face, on a terracotta tile. */
+export function Mark({ size = 28 }: { size?: number }) {
   return (
-    <svg class="gnome" viewBox="0 0 32 32" width={size} height={size} aria-hidden="true">
-      <path d="M16 1 27 22H5Z" fill="var(--hat)" />
-      <circle cx={16} cy={25} r={6} fill="#f2c9a5" />
-      <path d="M9 25q7 10 14 0q-2 6-7 6t-7-6Z" fill="#fff" />
+    <svg class="mark" viewBox="0 0 32 32" width={size} height={size} aria-hidden="true">
+      <rect width={32} height={32} rx={7} fill="var(--brand)" />
+      <text x={16} y={22.5} text-anchor="middle" font-family="'Young Serif', Georgia, serif" font-size={22} fill="#fff8ee">y</text>
     </svg>
   );
 }

@@ -229,8 +229,8 @@ const sheet = css`
   @keyframes fade { from { opacity: 0; } }
   @keyframes pop { from { opacity: 0; transform: scale(0.98) translateY(-6px); } }
   .bar { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
-  .bar svg { flex: none; color: var(--hat); }
-  .input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--text); font: inherit; font-size: 1.05rem; caret-color: var(--hat); }
+  .bar svg { flex: none; color: var(--brand); }
+  .input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--text); font: inherit; font-size: 1.05rem; caret-color: var(--brand); }
   .input::placeholder { color: var(--text-faint); }
   kbd {
     display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 20px; padding: 0 5px;
@@ -239,7 +239,7 @@ const sheet = css`
   .results { overflow-y: auto; padding: 6px 8px 8px; flex: 1; scrollbar-width: thin; }
   .label { font: 400 0.95rem var(--display); color: var(--text-dim); padding: 12px 10px 4px; }
   .item { --hole: var(--bg-raised); display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 6px; cursor: pointer; border-left: 3px solid transparent; }
-  .item.active { --hole: var(--bg-hover); background: var(--bg-hover); border-left-color: var(--hat); }
+  .item.active { --hole: var(--bg-hover); background: var(--bg-hover); border-left-color: var(--brand); }
   .item .icon { flex: none; width: 24px; height: 24px; border-radius: 5px; display: grid; place-items: center; font: 600 0.72rem var(--mono); color: var(--text-faint); background: var(--bg-sunken); }
   .item.active .icon { color: var(--accent); }
   .info { flex: 1; min-width: 0; }

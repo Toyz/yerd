@@ -10,7 +10,7 @@ import { RouteChanged } from "@toyz/loom/router";
 import { loadApi, loadGuides, moduleShort, sectionId, type Api, type GuideInfo } from "./data";
 import { OpenPalette, PALETTE_HOTKEY } from "./palette";
 import { pageStyles } from "./shared";
-import { GnomeMark } from "./ui";
+import { Mark } from "./ui";
 
 type Theme = "system" | "light" | "dark";
 const THEME_NEXT: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
@@ -24,7 +24,7 @@ const sheet = css`
   }
   .skip:focus { top: 10px; }
   main:focus { outline: none; }
-  :focus-visible { outline: 2px solid var(--hat); outline-offset: 2px; }
+  :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
   /* ── top bar ── */
   header {
@@ -37,10 +37,10 @@ const sheet = css`
     border-bottom: 1px solid var(--border);
   }
   .brand { display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; flex: none; }
-  .brand .gnome { margin-top: -3px; }
+  .brand .mark { flex: none; }
   .brand span { font: 400 1.45rem/1 var(--display); letter-spacing: -0.01em; }
-  .brand:hover .gnome { transform: rotate(-6deg); }
-  .gnome { transition: transform 0.2s ease; }
+  .brand:hover .mark { transform: rotate(-6deg); }
+  .mark { transition: transform 0.2s ease; }
 
   nav.primary { display: flex; gap: 4px; }
   nav.primary a {
@@ -52,7 +52,7 @@ const sheet = css`
   nav.primary a.on { color: var(--text); font-weight: 700; }
   nav.primary a.on::after {
     content: ""; position: absolute; left: 10px; right: 10px; bottom: -13px; height: 3px;
-    background: var(--hat); border-radius: 2px 2px 0 0;
+    background: var(--brand); border-radius: 2px 2px 0 0;
   }
 
   .tools { margin-left: auto; display: flex; align-items: center; gap: 6px; }
@@ -111,11 +111,11 @@ const sheet = css`
     color: var(--text-dim); text-decoration: none; font-size: 0.92rem; line-height: 1.4;
   }
   .items a:hover { color: var(--text); background: var(--bg-hover); }
-  /* You are here: the gnome's hat. */
+  /* You are here: a short terracotta bar. */
   .items a.on { color: var(--text); font-weight: 700; }
   .items a.on::before {
-    content: ""; position: absolute; left: 9px; top: 50%; margin-top: -6px;
-    border-left: 4.5px solid transparent; border-right: 4.5px solid transparent; border-bottom: 10px solid var(--hat);
+    content: ""; position: absolute; left: 10px; top: 50%; margin-top: -7px;
+    width: 3px; height: 14px; border-radius: 2px; background: var(--brand);
   }
   .side-head { font: 400 1.05rem var(--display); color: var(--text); padding: 0 8px 10px; }
   .side-head a { color: inherit; text-decoration: none; }
@@ -325,7 +325,7 @@ export class YerdDocs extends LoomElement {
         </a>
         <header>
           <a class="brand" href="#/" aria-label="yerd home">
-            <GnomeMark size={30} />
+            <Mark size={30} />
             <span>yerd</span>
           </a>
           <nav class="primary" aria-label="Main">{this.#primaryLinks()}</nav>
@@ -357,7 +357,7 @@ export class YerdDocs extends LoomElement {
             <loom-outlet styles={[pageStyles]}></loom-outlet>
             <footer>
               <span class="grow">
-                <GnomeMark size={18} />
+                <Mark size={18} />
                 <span>
                   yerd is MIT licensed. {api ? <>These docs were built from main at <code>{api.commit}</code>.</> : null}
                 </span>
@@ -371,7 +371,7 @@ export class YerdDocs extends LoomElement {
         <dialog class="drawer" aria-label="Menu" onClick={(e: Event) => e.target === e.currentTarget && (this.menuOpen = false)}>
           <div class="drawer-head">
             <a class="brand" href="#/">
-              <GnomeMark size={26} />
+              <Mark size={26} />
               <span>yerd</span>
             </a>
             <button class="icon-btn" onClick={() => (this.menuOpen = false)} aria-label="Close menu">

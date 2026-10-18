@@ -47,7 +47,7 @@ const sheet = css`
   .m-doc { font-size: 0.84rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 
   .member { padding: 18px 0 8px; border-top: 1px solid var(--border); scroll-margin-top: calc(var(--top) + 16px); }
-  .member.target { border-top: 2px solid var(--hat); }
+  .member.target { border-top: 2px solid var(--brand); }
   .member-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .member-head h3 { font-family: var(--mono); font-size: 1.02rem; font-weight: 600; margin: 0; }
   .member-head h3 a { color: inherit; text-decoration: none; }
@@ -59,7 +59,7 @@ const sheet = css`
   .member .prose p:first-child { margin-top: 4px; }
 
   .part { margin: 18px 0; padding: 4px 22px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-raised); scroll-margin-top: calc(var(--top) + 16px); }
-  .part.target { border-color: var(--hat); }
+  .part.target { border-color: var(--brand); }
   .part-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
   .part-head h3 { font-family: var(--mono); font-size: 1.12rem; font-weight: 600; margin: 0; }
   .part-head h3 a { color: inherit; text-decoration: none; }

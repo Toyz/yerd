@@ -31,7 +31,7 @@ export const benchStyles = css`
   .fw small { font-weight: 400; color: var(--text-faint); font-size: 0.78rem; margin-left: 5px; }
   .track { height: 14px; display: block; }
   .fill { display: block; height: 100%; background: var(--bar); border-radius: 0 4px 4px 0; min-width: 2px; }
-  .bar-row.mine { --bar: var(--hat); }
+  .bar-row.mine { --bar: var(--brand); }
   .bar-row.mine .fw { color: var(--accent); }
   .bar-row.baseline .fill {
     background: repeating-linear-gradient(135deg, var(--bar) 0 2px, transparent 2px 6px);

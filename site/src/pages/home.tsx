@@ -9,7 +9,7 @@ import { route } from "@toyz/loom/router";
 import { BASELINE, BenchBars, benchStyles, fastestFramework, formatNumber } from "../bench-chart";
 import { loadApi, loadBenchmarks, type Api, type BenchState } from "../data";
 import { highlight } from "../highlight";
-import { GnomeMark, onCopyClick } from "../ui";
+import { Mark, onCopyClick } from "../ui";
 
 const sheet = css`
   ${benchStyles}
@@ -63,7 +63,7 @@ const sheet = css`
   }
   .demo pre code { display: inline-block; min-width: 100%; }
   .demo pre .line { display: block; padding: 0 18px; border-left: 3px solid transparent; min-height: 1.65em; }
-  .demo pre .line.changed { background: var(--accent-bg); border-left-color: var(--hat); }
+  .demo pre .line.changed { background: var(--accent-bg); border-left-color: var(--brand); }
   .file { font: 0.76rem var(--mono); color: var(--text-faint); padding: 8px 18px 0; background: var(--code-bg); }
   .response { padding: 14px 18px 18px; border-top: 1px dashed var(--border-strong); min-height: 168px; }
   .req { font: 0.8rem var(--mono); color: var(--text-faint); margin-bottom: 8px; }
@@ -80,7 +80,7 @@ const sheet = css`
     padding: 12px 14px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border);
     font-family: var(--font);
   }
-  .card .gnome { flex: none; }
+  .card .thumb { flex: none; width: 40px; height: 40px; border-radius: 8px; display: grid; place-items: center; background: var(--accent-bg); color: var(--accent); font: 700 0.8rem var(--mono); }
   .card b { display: block; font: 400 1.15rem var(--display); color: var(--text); }
   .card span { display: block; font-size: 0.85rem; color: var(--text-dim); }
   .card .price { margin-left: auto; text-align: right; font-weight: 700; color: var(--text); }
@@ -94,10 +94,7 @@ const sheet = css`
   .features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 32px; }
   a.feature { display: block; padding: 14px 0 16px; color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border); }
   a.feature b { display: flex; align-items: center; gap: 9px; font-size: 1.06rem; margin-bottom: 4px; }
-  a.feature b::before {
-    content: ""; flex: none; width: 0; height: 0;
-    border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 11px solid var(--hat);
-  }
+  a.feature b::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 2px; background: var(--brand); }
   a.feature span { display: block; color: var(--text-dim); font-size: 0.95rem; line-height: 1.55; }
   a.feature code { display: block; margin-top: 8px; background: none; padding: 0; font-size: 0.8rem; color: var(--text-faint); }
   a.feature:hover b { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
@@ -139,13 +136,13 @@ const sheet = css`
   }
 `;
 
-const ROUTE_TOP = `@route("/gnomes/:id")
-class GnomePage {
+const ROUTE_TOP = `@route("/products/:id")
+class ProductPage {
   @param("id", { transform: toInt }) accessor id!: number;
-  @inject(Bazaar) accessor bazaar!: Bazaar;
+  @inject(Shop) accessor shop!: Shop;
 
   @get show() {
-    const gnome = this.bazaar.find(this.id);`;
+    const product = this.shop.find(this.id);`;
 const ROUTE_BOTTOM = `  }
 }`;
 
@@ -160,24 +157,24 @@ type Answer = {
 const ANSWERS: Record<string, Answer> = {
   jsx: {
     label: "JSX",
-    line: "return <GnomeCard gnome={gnome} />;",
+    line: "return <ProductCard product={product} />;",
     status: "200 OK",
     headers: ["content-type: text/html", "(inside your layouts, streamed)"],
     body: "card",
   },
   object: {
     label: "an object",
-    line: "return gnome;",
+    line: "return product;",
     status: "200 OK",
     headers: ["content-type: application/json"],
-    body: `{"id":7,"name":"Fennel","kind":"fishing","price":24,"stock":3}`,
+    body: `{"id":7,"name":"Field notebook","price":24,"stock":3}`,
   },
   string: {
     label: "a string",
-    line: "return `${gnome.name} is out in the yard`;",
+    line: "return `${product.name}: ${product.stock} in stock`;",
     status: "200 OK",
     headers: ["content-type: text/plain"],
-    body: "Fennel is out in the yard",
+    body: "Field notebook: 3 in stock",
   },
   number: {
     label: "a number",
@@ -188,10 +185,10 @@ const ANSWERS: Record<string, Answer> = {
   },
   stream: {
     label: "a stream",
-    line: "return this.bazaar.restocks(gnome); // async iterable",
+    line: "return this.shop.stockUpdates(product); // async iterable",
     status: "200 OK",
     headers: ["content-type: text/plain", "transfer-encoding: chunked"],
-    body: ["Fennel: 3 left\n", "Fennel: 2 left\n", "Fennel: 2 left (one on hold)\n", "Fennel: sold out\n"],
+    body: ["Field notebook: 3 left\n", "Field notebook: 2 left\n", "Field notebook: 2 left (one on hold)\n", "Field notebook: sold out\n"],
   },
 };
 
@@ -268,10 +265,10 @@ export class PageHome extends LoomElement {
     if (a.body === "card") {
       body = (
         <div class="card">
-          <GnomeMark size={40} />
+          <div class="thumb" aria-hidden="true">FN</div>
           <div>
-            <b>Fennel</b>
-            <span>Fishing gnome, 30 cm, hand painted</span>
+            <b>Field notebook</b>
+            <span>Dot grid, 120 pages, lay-flat binding</span>
           </div>
           <div class="price">
             $24
@@ -296,7 +293,7 @@ export class PageHome extends LoomElement {
     }
     return (
       <div class="response" aria-live="polite">
-        <div class="req">GET /gnomes/7</div>
+        <div class="req">GET /products/7</div>
         <div class={`status ${a.status.startsWith("2") ? "" : "bad"}`}>HTTP/1.1 {a.status}</div>
         {a.headers.map((h) => (
           <div class="header-line">{h}</div>
@@ -392,7 +389,7 @@ export class PageHome extends LoomElement {
                 ))}
               </div>
             </div>
-            <div class="file">src/routes/gnome.tsx</div>
+            <div class="file">src/routes/product.tsx</div>
             {this.#code()}
             {this.#response()}
           </div>
@@ -420,7 +417,7 @@ export class PageHome extends LoomElement {
           <div class="deps">
             <pre class="tree" aria-label="npm ls output for an app using yerd">
               <span class="dim">$ npm ls --omit=dev</span>
-              {"\n"}gnome-bazaar@1.0.0{"\n"}└── <span class="pkg">@toyz/yerd@{this.api?.latest ?? this.api?.version ?? "0.x"}</span>
+              {"\n"}my-shop@1.0.0{"\n"}└── <span class="pkg">@toyz/yerd@{this.api?.latest ?? this.api?.version ?? "0.x"}</span>
               {"\n"}
               <span class="dim">{"\n"}(that's the whole tree)</span>
             </pre>

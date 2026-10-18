@@ -23,7 +23,7 @@ const sheet = css`
   .rail a { display: block; margin-left: -1px; padding: 4px 0 4px 14px; color: var(--text-faint); border-left: 2px solid transparent; line-height: 1.4; text-decoration: none; }
   .rail a.sub { padding-left: 26px; font-size: 0.82rem; }
   .rail a:hover { color: var(--text); }
-  .rail a.on { color: var(--text); border-left-color: var(--hat); font-weight: 700; }
+  .rail a.on { color: var(--text); border-left-color: var(--brand); font-weight: 700; }
   .rail .edit { display: block; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); color: var(--text-faint); text-decoration: none; }
   .rail .edit:hover { color: var(--accent); }
 

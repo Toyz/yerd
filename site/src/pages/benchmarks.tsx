@@ -8,7 +8,7 @@ import { LoomElement, component, css, mount, reactive, styles } from "@toyz/loom
 import { route } from "@toyz/loom/router";
 import { BenchBars, benchStyles, fastestFramework, formatNumber } from "../bench-chart";
 import { loadBenchmarks, type BenchState, type Benchmarks } from "../data";
-import { GnomeMark } from "../ui";
+import { Mark } from "../ui";
 
 const HARNESS = "https://github.com/Toyz/yerd/tree/main/bench/compare";
 
@@ -41,7 +41,7 @@ const sheet = css`
   .legend { display: flex; gap: 18px; font-size: 0.82rem; color: var(--text-faint); margin: 10px 0 0; flex-wrap: wrap; }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
   .key { width: 16px; height: 10px; border-radius: 0 3px 3px 0; display: inline-block; background: light-dark(#a4937a, #6f6352); }
-  .key.mine { background: var(--hat); }
+  .key.mine { background: var(--brand); }
   .key.baseline { background: repeating-linear-gradient(135deg, light-dark(#a4937a, #75695a) 0 2px, transparent 2px 5px); box-shadow: inset 0 0 0 1px light-dark(#a4937a, #75695a); }
 
   h2.all { margin-top: 56px; }
@@ -90,7 +90,7 @@ export class PageBenchmarks extends LoomElement {
         <h1>Benchmarks</h1>
         <p class="lede">How yerd compares with other Node frameworks serving the same small apps on the same machine.</p>
         <div class="empty">
-          <GnomeMark size={34} />
+          <Mark size={34} />
           <h2>Not run yet</h2>
           <p>
             The comparison hasn't been run for this build of the docs. The harness lives in{" "}
