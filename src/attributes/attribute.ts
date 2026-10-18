@@ -29,31 +29,138 @@
  * ```
  */
 
-/** What a client half returns: nothing, a cleanup function, or hooks. */
+/**
+ * What a client half returns: nothing, a cleanup function (run when the
+ * element goes away), or hooks: `update` when the attribute's value changes
+ * in a morph, `disconnect` when the element goes away.
+ *
+ * ```ts
+ * export const autosize = attribute("autosize", {
+ *   client(el) {
+ *     const fit = () => {
+ *       el.style.height = "auto";
+ *       el.style.height = `${el.scrollHeight}px`;
+ *     };
+ *     el.addEventListener("input", fit);
+ *     fit();
+ *     return () => el.removeEventListener("input", fit);
+ *   },
+ * });
+ * ```
+ */
 export type AttributeHandle = void | (() => void) | { update?(value: string): void; disconnect?(): void };
 
-/** The runtime API a client half receives as its third argument (window.yerd). */
+/**
+ * The runtime API a client half receives as its third argument (window.yerd).
+ *
+ * ```ts
+ * export const poll = attribute("poll", {
+ *   client(_el, value, yerd) {
+ *     const timer = setInterval(() => yerd.refresh(), Number(value) * 1000);
+ *     return () => clearInterval(timer);
+ *   },
+ * });
+ *
+ * // <div poll={30} hidden />: refresh the page's Regions every 30 seconds
+ * ```
+ */
 export interface YerdClient {
-  /** Morph `to` into `from` in place. */
+  /**
+   * Morph `to` into `from`: patch `from` in place until it matches `to`, the
+   * way a Region update does (elements matched by id or key keep their focus,
+   * scroll and input state).
+   */
   morph(from: Node, to: Node): void;
-  /** Apply the Regions in an HTML string to the page; returns how many matched. */
+  /**
+   * Apply the Regions in an HTML string to the page; returns how many matched.
+   *
+   * ```ts
+   * client(_el, url, yerd) {
+   *   const source = new EventSource(url);
+   *   source.addEventListener("message", (e) => yerd.apply(e.data));
+   *   return () => source.close();
+   * }
+   * ```
+   */
   apply(html: string): number;
-  /** Re-fetch the current page and morph its Regions. */
+  /**
+   * Re-fetch the current page and morph its Regions.
+   *
+   * ```ts
+   * client(el, _value, yerd) {
+   *   el.addEventListener("click", () => yerd.refresh());
+   * }
+   * ```
+   */
   refresh(): Promise<void>;
-  /** Boosted navigation to a same-origin URL. */
+  /**
+   * Boosted navigation to a same-origin URL; `push` adds a history entry.
+   *
+   * ```ts
+   * client(el, url, yerd) {
+   *   el.addEventListener("click", () => yerd.load(url, true));
+   * }
+   * ```
+   */
   load(url: string, push: boolean): Promise<void>;
-  /** Warm the runtime's short-lived cache with a page (for boosted navigation) or a JSON response. */
+  /**
+   * Warm the runtime's short-lived cache with a page (for boosted navigation) or a JSON response.
+   *
+   * ```ts
+   * client(el, url, yerd) {
+   *   el.addEventListener("pointerenter", () => yerd.prefetch(url));
+   * }
+   * ```
+   */
   prefetch(url: string, as?: "page" | "json"): void;
-  /** fetch(), answered from the prefetch cache when a fresh JSON prefetch of the same URL exists. */
+  /**
+   * fetch(), answered from the prefetch cache when a fresh JSON prefetch of the same URL exists.
+   *
+   * ```ts
+   * client(el, url, yerd) {
+   *   yerd.fetch(url).then(async (res) => {
+   *     el.textContent = String(((await res.json()) as { visits: number }).visits);
+   *   });
+   * }
+   * ```
+   */
   fetch(url: string, init?: RequestInit): Promise<Response>;
   /** Register a client attribute at runtime. */
   attribute(name: string, setup: ClientSetup): void;
 }
 
-/** The client half: called once per element that has the attribute. */
+/**
+ * The client half: called once per element that has the attribute, with the
+ * element, the attribute's value, and the runtime API. Usually written inline
+ * in attribute(); the type is for writing one on its own. It's sent to the
+ * browser as source, so keep it self-contained.
+ *
+ * ```ts
+ * const copy: ClientSetup = (el, value) => {
+ *   const onClick = () => navigator.clipboard.writeText(value);
+ *   el.addEventListener("click", onClick);
+ *   return () => el.removeEventListener("click", onClick);
+ * };
+ *
+ * export const copyText = attribute("copy-text", { client: copy });
+ * ```
+ */
 export type ClientSetup = (el: HTMLElement, value: string, yerd: YerdClient) => AttributeHandle;
 
-/** The server half: turns the prop's value into the attributes actually written. */
+/**
+ * The server half: turns the prop's value into the attributes actually
+ * written. It also gets the element's tag and props, so it can act per
+ * element. Return null or undefined to write nothing.
+ *
+ * ```ts
+ * const external: RenderAttribute<boolean> = (on, { tag }) =>
+ *   on && tag === "a" ? { target: "_blank", rel: "noopener noreferrer" } : null;
+ *
+ * export const externalLink = attribute("external", { render: external });
+ *
+ * // <a href="https://example.com" external>: target="_blank" rel="noopener noreferrer"
+ * ```
+ */
 export type RenderAttribute<V> = (value: V, element: { tag: string; props: Readonly<Record<string, unknown>> }) => Record<string, unknown> | null | undefined;
 
 /** The two halves of a custom attribute, for attribute(). Both are optional. */
@@ -93,7 +200,30 @@ export function customAttribute(name: string): AttributeDef<any> | undefined {
 /**
  * Define a custom attribute. Call it at module level in a file both the
  * server imports (so the renderer knows the prop) and nothing else needs:
- * the client half travels as text inside the runtime script.
+ * the client half travels as text inside the runtime script. Names are
+ * lowercase words joined by dashes. Declare the prop on `CustomAttributes`
+ * so JSX accepts it.
+ *
+ * ```tsx
+ * export const tooltip = attribute("tooltip", {
+ *   render: (text: string) => ({ tooltip: text, "aria-label": text }),
+ *   client(el, value) {
+ *     el.title = value;
+ *     return {
+ *       update(next) { el.title = next; },
+ *       disconnect() { el.title = ""; },
+ *     };
+ *   },
+ * });
+ *
+ * declare module "@toyz/yerd" {
+ *   interface CustomAttributes {
+ *     tooltip?: string;
+ *   }
+ * }
+ *
+ * <button tooltip="Delete this todo">x</button>
+ * ```
  */
 export function attribute<V = string>(name: string, options: AttributeOptions<V>): AttributeDef<V> {
   if (!VALID_NAME.test(name)) throw new TypeError(`Custom attribute names are lowercase words joined by dashes; got ${JSON.stringify(name)}`);
@@ -110,7 +240,18 @@ export function attributeVersion(): number {
   return version;
 }
 
-/** Forget every user-defined custom attribute (built-ins stay). Used by dev servers before re-importing the app. */
+/**
+ * Forget every user-defined custom attribute (built-ins stay). Used by dev
+ * servers before re-importing the app. Defining the same name twice throws,
+ * so tests that define attributes call it between runs.
+ *
+ * ```ts
+ * import { afterEach } from "vitest";
+ * import { resetAttributeRegistry } from "@toyz/yerd";
+ *
+ * afterEach(() => resetAttributeRegistry());
+ * ```
+ */
 export function resetAttributeRegistry(): void {
   registry.clear();
   version++;
@@ -122,7 +263,17 @@ function builtin<V>(name: string, render: RenderAttribute<V>): void {
 
 // ── prefetch ──
 
-/** When `prefetch` fires: on hover or focus ("intent"), on scrolling into view ("visible"), or at page load ("load"). */
+/**
+ * When `prefetch` fires: on hover or focus ("intent"), on scrolling into view ("visible"), or at page load ("load").
+ *
+ * ```tsx
+ * function NavLink({ href, label, when = "intent" }: { href: string; label: string; when?: PrefetchMode }) {
+ *   return <a href={href} prefetch={when}>{label}</a>;
+ * }
+ *
+ * <NavLink href="/reports" label="Reports" when="visible" />
+ * ```
+ */
 export type PrefetchMode = "intent" | "visible" | "load";
 
 /**

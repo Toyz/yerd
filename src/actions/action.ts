@@ -25,49 +25,159 @@ import { currentContext, type YerdContext } from "../server/context.js";
 import { withFiles, type FormFields, type FormFiles } from "../server/body.js";
 import { parse, type DtoClass } from "../decorators/dto.js";
 
-/** The submitted form fields, with typed getters. */
+/**
+ * The submitted form fields, with typed getters. An @action method gets it as
+ * its second parameter, after the bound arguments. `parse()` into a DTO is
+ * usually what you want; the getters are for a field or two.
+ *
+ * ```tsx
+ * @route("/notes")
+ * export class Notes {
+ *   @inject(Db) accessor db!: Db;
+ *
+ *   @get page() {
+ *     return (
+ *       <form action={this.add}>
+ *         <input name="title" required />
+ *         <label><input type="checkbox" name="pinned" /> Pinned</label>
+ *         <button>Add</button>
+ *       </form>
+ *     );
+ *   }
+ *
+ *   @action add(_: {}, form: ActionForm) {
+ *     this.db.notes.add({ title: form.string("title"), pinned: form.has("pinned") });
+ *   }
+ * }
+ * ```
+ */
 export class ActionForm {
-  /** `uploads` holds files from a multipart form (the runtime sends file forms as multipart). */
+  /**
+   * `uploads` holds files from a multipart form (the runtime sends file forms
+   * as multipart). yerd builds this for each action; build one yourself to
+   * call an action method directly in a unit test.
+   *
+   * ```ts
+   * const form = new ActionForm({ title: "Milk", tag: ["food", "weekly"] });
+   * form.string("title"); // "Milk"
+   * form.all("tag");      // ["food", "weekly"]
+   *
+   * const photo = new File(["..."], "cat.jpg", { type: "image/jpeg" });
+   * new ActionForm({}, { photo: [photo] }).file("photo"); // photo
+   * ```
+   */
   constructor(
     readonly fields: FormFields,
     readonly uploads: FormFiles = Object.create(null) as FormFiles,
   ) {}
 
-  /** The first file uploaded under `name` (an empty file input counts as none), or undefined. */
+  /**
+   * The first file uploaded under `name` (an empty file input counts as none), or undefined.
+   *
+   * ```ts
+   * @action async avatar(_: {}, form: ActionForm) {
+   *   const photo = form.file("photo");
+   *   if (photo) await this.store.save(photo.name, await photo.arrayBuffer());
+   * }
+   * ```
+   */
   file(name: string): File | undefined {
     return this.files(name)[0];
   }
 
-  /** Every file uploaded under `name`. */
+  /**
+   * Every file uploaded under `name`: a `multiple` file input, a `dropTo`
+   * zone, or `"files"` for a `trigger="drop:files"` target. Empty when none.
+   *
+   * ```ts
+   * @action async upload(_: {}, form: ActionForm) {
+   *   for (const file of form.files("photos")) await this.store.save(file.name, await file.arrayBuffer());
+   * }
+   * ```
+   */
   files(name: string): File[] {
     return (this.uploads[name] ?? []).filter((f) => f.size > 0 || f.name !== "");
   }
 
-  /** Whether the form sent a field called `name` (even an empty one). Doesn't look at uploads. */
+  /**
+   * Whether the form sent a field called `name` (even an empty one). Doesn't
+   * look at uploads. An unchecked checkbox isn't sent at all, so this is how
+   * you read one.
+   *
+   * ```ts
+   * @action toggle({ id }: { id: number }, form: ActionForm) {
+   *   this.db.todos.setDone(id, form.has("done"));
+   * }
+   * ```
+   */
   has(name: string): boolean {
     return this.fields[name] !== undefined;
   }
 
-  /** First value of a field, or undefined. */
+  /**
+   * First value of a field, or undefined. For optional fields; use `string()`
+   * when the field must be there.
+   *
+   * ```tsx
+   * @action search(_: {}, form: ActionForm) {
+   *   const q = form.get("q") ?? "";
+   *   return <Region id="results">{q}</Region>;
+   * }
+   * ```
+   */
   get(name: string): string | undefined {
     const value = this.fields[name];
     return Array.isArray(value) ? value[0] : value;
   }
 
-  /** First value of a field; a 400 if it's missing. */
+  /**
+   * First value of a field; a 400 if it's missing. An empty string counts as
+   * sent, so check its length (or `parse()` with a validator) if that matters.
+   *
+   * ```ts
+   * @action rename({ id }: { id: number }, form: ActionForm) {
+   *   this.db.notes.rename(id, form.string("title"));
+   * }
+   * ```
+   */
   string(name: string): string {
     const value = this.get(name);
     if (value === undefined) throw new HttpError(400, `Missing form field: ${name}`);
     return value;
   }
 
-  /** Every value of a repeated field. */
+  /**
+   * Every value of a repeated field (checkboxes sharing a name, a
+   * `<select multiple>`), in the order sent. Empty when none.
+   *
+   * ```ts
+   * @action tag({ id }: { id: number }, form: ActionForm) {
+   *   this.db.notes.setTags(id, form.all("tag"));
+   * }
+   * ```
+   */
   all(name: string): string[] {
     const value = this.fields[name];
     return value === undefined ? [] : Array.isArray(value) ? value : [value];
   }
 
-  /** Validate the form into a DTO class (400 with every issue on failure). */
+  /**
+   * Validate the form into a DTO class (400 with every issue on failure,
+   * which the runtime shows next to the fields). Uploads join the fields, so
+   * the DTO can use `is.file()`; yerd's own `_yx` fields are left out.
+   *
+   * ```ts
+   * class Profile {
+   *   @is.string({ transform: trim, validate: length(1, 60) }) name!: string;
+   *   @is.file({ types: ["image/*"], maxSize: 2_000_000, optional: true }) avatar?: File;
+   * }
+   *
+   * @action async save(_: {}, form: ActionForm) {
+   *   const { name, avatar } = form.parse(Profile);
+   *   if (avatar) await this.store.save(`${name}-${avatar.name}`, await avatar.arrayBuffer());
+   * }
+   * ```
+   */
   parse<T>(dto: DtoClass<T>): T {
     // No prototype: a field named "__proto__" is plain data, not a prototype swap.
     // Uploads join the fields, for is.file() / is.files().
@@ -80,7 +190,23 @@ export class ActionForm {
 /**
  * The shape of an action method: bound args first, then the form. The form
  * is optional here so a component can call one in an action lambda
- * (`() => bump({ id })`) without inventing one.
+ * (`() => bump({ id })`) without inventing one. Type a component's prop with
+ * it to pass an action down, and call it there like the method itself:
+ *
+ * ```tsx
+ * function Item({ item, remove }: { item: { id: number; title: string }; remove: Action<{ id: number }> }) {
+ *   return (
+ *     <li>
+ *       {item.title}
+ *       <form action={() => remove({ id: item.id })}>
+ *         <button>Delete</button>
+ *       </form>
+ *     </li>
+ *   );
+ * }
+ *
+ * // in the route: <Item item={item} remove={this.remove} />
+ * ```
  */
 // Method syntax, so an action declared with a required form still fits.
 export type Action<A = {}> = { bivarianceHack(args: A, form?: ActionForm): unknown }["bivarianceHack"];
@@ -90,49 +216,148 @@ export type Action<A = {}> = { bivarianceHack(args: A, form?: ActionForm): unkno
  * the input holds when the action fires. Values are filled in by the browser,
  * so pass them straight into the action's arguments (`{ q: el.value }`);
  * computing with them while the page renders (`el.value.trim()`) throws.
+ * They arrive typed: booleans for `checked`, `open` and `disabled`, numbers
+ * for the numeric fields, strings for the rest.
+ *
+ * ```tsx
+ * <input type="search" action={({ el }) => this.find({ q: el.value })} trigger="input 250ms" />
+ * <input type="checkbox" action={({ el }) => this.done({ id, done: el.checked })} trigger="change" />
+ * <ul action={({ drag }) => this.move({ id: drag.data("id"), to: "done" })} trigger="drop" />
+ * ```
  */
 export interface ActionElement {
-  /** An input's, select's or textarea's value. */
+  /**
+   * An input's, select's or textarea's value.
+   *
+   * ```tsx
+   * <input type="search" action={({ el }) => this.find({ q: el.value })} trigger="input 250ms" />
+   * ```
+   */
   readonly value: string;
-  /** `value` as a number (NaN when empty): number, range and date inputs. */
+  /**
+   * `value` as a number (NaN when empty): number, range and date inputs.
+   *
+   * ```tsx
+   * <input type="range" action={({ el }) => this.volume({ level: el.valueAsNumber })} trigger="change" />
+   * ```
+   */
   readonly valueAsNumber: number;
-  /** A checkbox or radio's state. */
+  /**
+   * A checkbox or radio's state.
+   *
+   * ```tsx
+   * <input type="checkbox" action={({ el }) => this.done({ id, done: el.checked })} trigger="change" />
+   * ```
+   */
   readonly checked: boolean;
-  /** A select's selected option index (-1 when none). */
+  /**
+   * A select's selected option index (-1 when none).
+   *
+   * ```tsx
+   * <select action={({ el }) => this.pick({ index: el.selectedIndex })} trigger="change">{options}</select>
+   * ```
+   */
   readonly selectedIndex: number;
-  /** A `<details>` or `<dialog>` is open. */
+  /**
+   * A `<details>` or `<dialog>` is open.
+   *
+   * ```tsx
+   * <details action={({ el }) => this.remember({ open: el.open })} trigger="toggle">{body}</details>
+   * ```
+   */
   readonly open: boolean;
   readonly disabled: boolean;
   readonly textContent: string;
   readonly id: string;
   readonly name: string;
-  /** How far the element is scrolled. */
+  /**
+   * How far the element is scrolled.
+   *
+   * ```tsx
+   * <div action={({ el }) => this.scrolled({ top: el.scrollTop })} trigger="scrollend">{log}</div>
+   * ```
+   */
   readonly scrollTop: number;
   readonly scrollLeft: number;
-  /** `data-*` attributes ("" when missing). */
+  /**
+   * `data-*` attributes ("" when missing). Under `noUncheckedIndexedAccess`
+   * each one is typed `string | undefined`; `data(name)` avoids that.
+   *
+   * ```tsx
+   * <ul action={({ drag }) => this.move({ id: drag.dataset.id ?? "", to: "done" })} trigger="drop" />
+   * ```
+   */
   readonly dataset: Readonly<Record<string, string>>;
   /**
    * One `data-*` attribute by its dataset name ("" when missing): the same as
    * `dataset[name]`, but always a string, even under `noUncheckedIndexedAccess`.
    * `drag.data("id")` reads `data-id`.
+   *
+   * ```tsx
+   * <li key={card.id} data-id={card.id} draggable="true">{card.title}</li>
+   * <ul action={({ drag }) => this.move({ id: drag.data("id"), to: "done" })} trigger="drop" />
+   * ```
    */
   data(name: string): string;
 }
 
-/** What an action lambda gets. Use what you need: `({ el }) => ...`, `({ ctx }) => ...`. */
+/**
+ * What an action lambda gets. Use what you need: `({ el }) => ...`, `({ ctx }) => ...`.
+ * `el`, `ref()` and `drag` are read in the browser when the action fires;
+ * `ctx` is read now, on the server, while the page renders.
+ *
+ * ```tsx
+ * <input action={({ el }) => this.search({ q: el.value })} trigger="input 250ms" />
+ * <button action={({ ref }) => this.search({ q: ref("#q").value })}>Search</button>
+ * <div action={({ ctx }) => this.more({ page: Number(ctx.query.get("page") ?? 1) + 1 })} trigger="visible" />
+ * <form action={({ form }) => this.rename({ id }, form)}><input name="title" /></form>
+ * ```
+ */
 export interface ActionScope {
-  /** The element the action is on (the form, for a form's action), as it is when the action fires. */
+  /**
+   * The element the action is on (the form, for a form's action), as it is when the action fires.
+   *
+   * ```tsx
+   * <input type="checkbox" action={({ el }) => this.done({ id, done: el.checked })} trigger="change" />
+   * ```
+   */
   readonly el: ActionElement;
-  /** Another element on the page, by CSS selector, as it is when the action fires: `ref("#sort").value`. */
+  /**
+   * Another element on the page, by CSS selector, as it is when the action fires: `ref("#sort").value`.
+   *
+   * ```tsx
+   * <input id="q" type="search" />
+   * <button action={({ ref }) => this.search({ q: ref("#q").value })}>Search</button>
+   * ```
+   */
   ref(selector: string): ActionElement;
   /**
    * For `trigger="drop"`: the element that was dropped (the `draggable`
    * element being dragged), as it is when it lands: `drag.dataset.id`.
+   *
+   * ```tsx
+   * <ul action={({ drag }) => this.move({ id: drag.data("id"), to: "done" })} trigger="drop" />
+   * ```
    */
   readonly drag: ActionElement;
-  /** The request rendering this page (params, query, session...). Read now, not when the action fires. */
+  /**
+   * The request rendering this page (params, query, session...). Read now, not when the action fires.
+   *
+   * ```tsx
+   * <div action={({ ctx }) => this.more({ page: Number(ctx.query.get("page") ?? 1) + 1 })} trigger="visible" />
+   * ```
+   */
   readonly ctx: YerdContext;
-  /** A stand-in form for actions that take one: `({ form }) => this.rename({ id }, form)`. */
+  /**
+   * A stand-in form for actions that take one: `({ form }) => this.rename({ id }, form)`.
+   * The action gets the real submitted form when it runs.
+   *
+   * ```tsx
+   * <form action={({ form }) => this.rename({ id }, form)}>
+   *   <input name="title" />
+   * </form>
+   * ```
+   */
   readonly form: ActionForm;
 }
 
@@ -143,6 +368,21 @@ export interface ActionScope {
  * signs that into the element, with `el` / `ref()` values left for the
  * browser to fill in when it fires. An action that takes no arguments can be
  * passed as is: `action={this.add}`.
+ *
+ * You write these inline; the type is for a component that takes one ready
+ * made from its caller:
+ *
+ * ```tsx
+ * function Confirm({ label, run }: { label: string; run: ActionLambda }) {
+ *   return (
+ *     <form action={run} data-yx-confirm={`${label}?`}>
+ *       <button>{label}</button>
+ *     </form>
+ *   );
+ * }
+ *
+ * // in the route: <Confirm label="Delete" run={() => this.remove({ id })} />
+ * ```
  */
 export type ActionLambda = (scope: ActionScope, form: ActionForm) => unknown;
 
@@ -156,7 +396,19 @@ const actionFunctions = new WeakMap<Function, ActionInfo>();
 
 const BOUND: unique symbol = Symbol.for("yerd.bound-action");
 
-/** An action with its arguments attached, from bind(). Pass it as a form's `action`. */
+/**
+ * An action with its arguments attached, from bind(). Pass it as a form's
+ * `action`, a button's `formaction`, or any element's `action`. Type a prop
+ * with it when a component should get the action already bound:
+ *
+ * ```tsx
+ * function ArchiveButton({ archive }: { archive: BoundAction<{ id: number }> }) {
+ *   return <form action={archive}><button>Archive</button></form>;
+ * }
+ *
+ * // in the route: <ArchiveButton archive={bind(this.archive, { id: message.id })} />
+ * ```
+ */
 export interface BoundAction<A = unknown> {
   /** Brand that marks a bind() result. */
   readonly [BOUND]: true;
@@ -180,9 +432,28 @@ const capturing = new AsyncLocalStorage<{ fn?: Function; args?: unknown; calls: 
  * page passed (`action={() => this.remove({ id })}`), the second the
  * submitted form.
  *
- * ```ts
- * @action add(_: {}, form: ActionForm) { ... }
- * @action remove({ id }: { id: string }) { ... }
+ * ```tsx
+ * @route("/todos")
+ * export class Todos {
+ *   @inject(TodoList) accessor todos!: TodoList;
+ *
+ *   @get page() {
+ *     return (
+ *       <Region id="todos">
+ *         <form action={this.add}><input name="title" /><button>Add</button></form>
+ *         {this.todos.all().map((t) => <button action={() => this.remove({ id: t.id })}>{t.title}</button>)}
+ *       </Region>
+ *     );
+ *   }
+ *
+ *   @action add(_: {}, form: ActionForm) {
+ *     this.todos.add(form.string("title"));
+ *   }
+ *
+ *   @action remove({ id }: { id: string }) {
+ *     this.todos.remove(id);
+ *   }
+ * }
  * ```
  */
 export function action<M extends Action<any>>(method: M, context: ClassMethodDecoratorContext): M {
@@ -336,7 +607,27 @@ export function captureAction(lambda: Function, holes: HoleSource[] = []): Bound
   return holes.length ? { ...bound, holes } : bound;
 }
 
-/** Attach arguments to an action for one form. They're signed, so the client can't change them. */
+/**
+ * Attach arguments to an action for one form. They're signed, so the client
+ * can't change them. The same as the lambda `() => this.archive({ id })`, as
+ * a value you can build outside JSX:
+ *
+ * ```tsx
+ * @route("/inbox")
+ * export class Inbox {
+ *   @inject(Db) accessor db!: Db;
+ *
+ *   @get page() {
+ *     const rows = this.db.messages.all().map((m) => ({ ...m, archive: bind(this.archive, { id: m.id }) }));
+ *     return <ul>{rows.map((m) => <li>{m.subject} <form action={m.archive}><button>Archive</button></form></li>)}</ul>;
+ *   }
+ *
+ *   @action archive({ id }: { id: number }) {
+ *     this.db.messages.archive(id);
+ *   }
+ * }
+ * ```
+ */
 export function bind<A>(fn: Action<A>, args: A): BoundAction<A> {
   return { [BOUND]: true, fn, args };
 }
