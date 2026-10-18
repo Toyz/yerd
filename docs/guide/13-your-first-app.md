@@ -2,7 +2,7 @@
 
 The shop's spine, from an empty folder: a catalog, a page per product and a cart.
 
-We're building Paperyard, a small stationery shop. The finished version is [`examples/shop`](../../examples/shop); every step here is a piece of it. Data lives in memory, so there's no database to set up.
+We're building Paperyard, a small stationery shop. The finished version is [`examples/shop`](https://github.com/Toyz/yerd/tree/main/examples/shop); every step here is a piece of it. Data lives in memory, so there's no database to set up.
 
 ## 1. Set up the project
 
@@ -203,7 +203,7 @@ import { createApp } from "./app.js";
 export default createApp().discover(import.meta.glob("./routes/**/*.{ts,tsx}", { eager: true }));
 ```
 
-Copy [`styles.css`](../../examples/shop/src/styles.css) into `src/` and reload:
+Copy [`styles.css`](https://github.com/Toyz/yerd/blob/main/examples/shop/src/styles.css) into `src/` and reload:
 
 ```answer
 GET /
