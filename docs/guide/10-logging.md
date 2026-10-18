@@ -1,53 +1,35 @@
 # Logging
 
-The logger: structured events, spans, `@instrument`, filtering with `YERD_LOG`, request ids, and custom sinks.
-
-## Log something
-
-Import [log](api:yerd.log) and call a level; the second argument is structured fields.
-
-```ts
-import { log } from "@toyz/yerd";
-
-log.info("server starting", { port: 3000 });
-log.warn("cache cold");
-log.error("charge failed", { orderId: 42, error: new Error("card declined") });
-```
-
-```text
-12:04:01.239  INFO server starting port=3000 (app)
-12:04:01.240  WARN cache cold (app)
-12:04:01.241 ERROR charge failed orderId=42 (app)
-                Error: card declined
-                    at ...
-```
-
-- Levels: `trace`, `debug`, `info`, `warn`, `error`.
-- `(app)` is the target; `log` logs as `app`.
-- An `Error` under `error` (or passed straight to `log.error(err)`) is logged with its stack.
-- A call below the active level builds nothing.
+The shop logs every request and every receipt. Here we read those lines, time the checkout, and keep the customer's address out.
 
 ## A logger per class
 
-`@logger` gives a class its own [Logger](api:yerd.Logger), targeted by the class name, which filters match on.
+`Receipts` mails a receipt by logging it. [@logger](api:yerd.logger) gives a class its own [Logger](api:yerd.Logger), targeted by the class name:
 
 ```ts
-import { logger, service, type Logger } from "@toyz/yerd";
+// src/receipts.ts
+import { logger, on, service, type Logger } from "@toyz/yerd";
 
 @service
-export class Billing {
-  @logger accessor log!: Logger; // target "Billing"
+export class Receipts {
+  @logger accessor log!: Logger; // target "Receipts"
 
-  async charge(order: { id: string; total: number }) {
-    const orderLog = this.log.child({ orderId: order.id });
-    orderLog.info("charging", { total: order.total });
-
-    await this.log.span("stripe", { amount: order.total }, async () => {
-      orderLog.debug("calling the payment API");
-    });
+  @on(OrderPlaced) send(event: OrderPlaced) {
+    this.log.info("receipt sent", { order: event.orderId, to: event.email, total: formatPrice(event.total) });
   }
 }
 ```
+
+After a checkout, in the terminal running `npm run shop`:
+
+```text
+14:44:48.666  INFO receipt sent order=1001 to=ada@example.com total=$24.00 (Receipts)
+```
+
+- Levels: `trace`, `debug`, `info`, `warn`, `error`. A call below the active level builds nothing.
+- The second argument is fields. An `Error` under `error` (or `log.error(err)`) is logged with its stack.
+- Outside a class, import [log](api:yerd.log): `log.info("server starting", { port: 3000 })` logs as target `app`.
+- `@logger("mail")` sets your own target. A singleton's logger still logs into whichever request is running.
 
 | Method | Does |
 | --- | --- |
@@ -57,73 +39,80 @@ export class Billing {
 | `span(name, fields, fn, level = "info")` | run `fn` inside a span: enter and exit records, duration, nesting across `await` |
 | `enabled(level)` | whether `level` would be written, to skip building expensive fields |
 
-`@logger("billing")` sets your own target. A singleton's logger still logs into whichever request is running.
-
 ## Requests are spans
 
-Every request gets a root span with an id that every event logged during it carries, ending with one access line:
+Every request is a span, and ends with one access line. A product page, adding it to the cart, a wrong id, a checkout:
 
 ```text
-12:04:01.239  INFO request{method=GET path=/todos/7} status=200 5.1ms
+14:44:48.632  INFO request{method=GET path=/products/7} status=200 4.69ms
+14:44:48.637  INFO request{method=POST path=/products/7} status=200 3.01ms
+14:44:48.638  WARN request{method=GET path=/products/99} status=404 1.25ms
+14:44:48.667  INFO request{method=POST path=/checkout} status=200 2.07ms
+```
+
+The span's id goes back to the client, and a well-formed one sent in is reused:
+
+```answer
+GET /api/products/7
+200 OK
+content-type: application/json; charset=utf-8
+x-request-id: 34346f8637642f41
+
+{"id":7,"name":"Field notebook","category":"notebooks","price":2400,"stock":12,"description":"Waterproof paper for notes in the rain."}
 ```
 
 - The access line is `info` for 2xx and 3xx, `warn` for 4xx, `error` for 5xx, at target `yerd::request`.
-- The id is sent back as `x-request-id`; a well-formed incoming `x-request-id` is reused.
+- Every event logged during the request carries its id; handlers read it as `currentContext().requestId`.
 - An incoming W3C `traceparent` is continued: every record gets its trace id.
-- Handlers read the id as `currentContext().requestId`.
 - Crashes are logged with their stack; the client only sees "Internal Server Error".
 
 > [!NOTE]
-> The request span only exists while `yerd::request` is enabled at `info`. With `YERD_LOG=warn` there's no access line and no `x-request-id` header (`requestId` still works).
+> The request span exists only while `yerd::request` is on at `info`. With `YERD_LOG=warn` there's no access line and no `x-request-id` (`requestId` still works).
 
 ## @instrument
 
-[instrument](api:yerd.instrument) wraps a method in a span: arguments as fields, return value and duration on exit, throws logged at `error` and rethrown.
+Placing an order is the step worth timing. [@instrument](api:yerd.instrument) wraps a method in a span: arguments as fields, the return value and duration on exit, a throw logged at `error` and rethrown.
 
 ```ts
-import { instrument, service } from "@toyz/yerd";
+// src/orders.ts
+import { instrument /* , ... */ } from "@toyz/yerd";
 
 @service
-export class UserRepo {
-  @instrument() async find(id: number) {
-    return { id, name: "ada" };
+export class Orders {
+  @instrument({ level: "info" })
+  async place(user: User, details: CheckoutForm, cart: CartLine[]): Promise<Order> {
+    // ...unchanged
   }
-
-  @instrument({ skip: ["password"], level: "info" })
-  async create(email: string, password: string) {
-    return { email };
-  }
-
-  @instrument({ skipAll: true, ret: false, fields: (_self, [order]) => ({ orderId: order.id }) })
-  ship(order: { id: string }) {}
 }
 ```
 
 ```text
-12:04:01.239 DEBUG   UserRepo::find{id=7}
-12:04:01.244 DEBUG   UserRepo::find ret={"id":7,"name":"ada"} 5.1ms
+14:44:48.666  INFO   Orders::place{user={"id":"u1","name":"ada","passwordHash":"[redacted]"} details={"CheckoutForm":{"name":"Ada Lovelace","email":"ada@example.com","address":"12 St James's Square, London"}} cart=[{"id":7,"qty":1}]}
+14:44:48.666  INFO   Orders::place ret={"id":1001,"userId":"u1",...,"total":2400,"placedAt":"2026-10-18T20:44:48.666Z"} 0.34ms
+14:44:48.666  INFO receipt sent order=1001 to=ada@example.com total=$24.00 (Receipts)
+14:44:48.667  INFO request{method=POST path=/checkout} status=200 2.07ms
 ```
+
+- `passwordHash` was redacted on its own; the email and address weren't ([redaction](#redaction-and-limits) fixes that).
+- The receipt has no request id: event handlers run after the response.
+- When the level is off, the method is called directly, and sync methods stay sync.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `name` | `"Class::method"` | span name |
 | `level` | `"debug"` | level of the span's records |
 | `target` | the class name | target, for filtering |
-| `skip` | `[]` | arguments or nested fields to leave out (see below) |
+| `skip` | `[]` | arguments or nested fields to leave out (below) |
 | `skipAll` | `false` | record no arguments |
 | `fields` | none | `(self, args) => ({ ... })`, extra or derived fields |
 | `ret` | `true` | record the return value on exit |
 | `err` | `true` | log a throw at `error` (it's always rethrown) |
 
-When the level is off the method is called directly, and sync methods stay sync.
-
 ### Skipping, checked by the compiler
 
-`skip` takes parameter names, positions, and dotted paths into nested objects and arrays. Only the logged copy loses those fields.
+`skip` takes parameter names, positions and dotted paths into nested objects and arrays. Only the logged copy loses them.
 
 ```ts
-import { instrument } from "@toyz/yerd";
-
 interface Signup {
   email: string;
   password: string;
@@ -131,79 +120,114 @@ interface Signup {
 }
 
 export class Accounts {
-  @instrument({ skip: ["input.password", "input.billing.cvc", "1.headers.authorization"] })
-  create(input: Signup, request: { headers: { authorization: string } }) {
+  @instrument({ skip: ["input.billing.cvc", "1.headers.authorization", "items.*.secret", "**.ssn"] })
+  create(input: Signup, request: { headers: { authorization: string } }, items: Array<{ secret: string }>) {
     return input.email;
   }
 }
 ```
 
-- Paths are type-checked: `"input.billing.pin"` is a compile error naming the missing field.
-- Parameter names themselves are checked when the class loads (a misspelling throws before any request); positional paths (`"0.password"`) are checked fully at compile time.
-
-### Wildcards
-
-A segment can be `*` (any one key or index) or `**` (any number of keys):
-
-```ts
-@instrument({ level: "info", skip: ["card.*", "**.cvc", "*.password", "items.*.secret"] })
-charge(card: Card, user: User, items: LineItem[]) { ... }
-```
-
 | Path | Leaves out |
 | --- | --- |
+| `input.billing.cvc` | one nested field. `"input.billing.pin"` is a compile error naming the missing field |
+| `1.headers.authorization` | by position: the second argument's field |
 | `card.*` | every field of `card` (it's logged as `{}`) |
-| `*.password` | `password` one level inside any argument |
-| `**.cvc` | `cvc` anywhere, at any depth |
 | `items.*.secret` | `secret` in every item |
-| `0.*` | every field of the first argument |
+| `*.password` | `password` one level inside any argument |
+| `**.ssn` | `ssn` anywhere, at any depth |
 
-- What comes before the first wildcard is still checked (`"card.nope.*"` errors).
-- A wildcard must be a whole segment (`"card.num*"` is refused).
-
-> [!TIP]
-> Argument names come from the compiled source, so keep server code unminified (the Vite plugin does). Positional paths don't depend on names.
+- A misspelled parameter name throws when the class loads; positional paths are checked fully at compile time.
+- What comes before the first wildcard is still checked (`"card.nope.*"` errors). A wildcard is a whole segment (`"card.num*"` is refused).
+- Names come from the compiled source, so keep server code unminified (the Vite plugin does).
 
 ## Filtering with YERD_LOG
 
-`YERD_LOG` works like Rust's `RUST_LOG`: a default level, then overrides per target or span.
+To see only receipts, quiet the rest. `YERD_LOG`, or `filter` in code, works like Rust's `RUST_LOG`: a default level, then overrides per target or span.
 
-```sh
-YERD_LOG=info                          # everything at info and above
-YERD_LOG=warn,UserRepo=debug           # quiet, except one class
-YERD_LOG=info,yerd=warn                # hush yerd's own logs (targets start with yerd::)
-YERD_LOG=info,[stripe]=trace           # everything inside a span named stripe
-YERD_LOG=off                           # nothing at all
+```ts
+// src/app.ts
+return yerd(options)
+  .logging({ filter: "warn,Receipts=info" })
+  // ...layout, errorPage, sessions, auth
 ```
 
-- A target directive covers the target and its children (`yerd` matches `yerd::request`). The most specific match wins; a later directive for the same target replaces an earlier one.
-- `[name]=level` sets the level inside spans with that name, whatever the target, louder or quieter. The innermost matching span decides.
-- Default: `info`, or `warn` when `NODE_ENV=test`.
-- A typo (`UserRepo=chatty`) is a boot error.
+The same session now writes one line:
+
+```text
+14:45:28.159  INFO receipt sent order=1001 to=ada@example.com total=$24.00 (Receipts)
+```
+
+```sh
+YERD_LOG=info                    # everything at info and above
+YERD_LOG=warn,Orders=info        # quiet, except one class
+YERD_LOG=info,yerd=warn          # hush yerd's own logs (targets start with yerd::)
+YERD_LOG=info,[stripe]=trace     # everything inside a span named stripe
+YERD_LOG=off                     # nothing at all
+```
+
+- A target covers its children (`yerd` matches `yerd::request`). The most specific match wins; a later directive for the same target replaces an earlier one.
+- `[name]=level` sets the level inside spans with that name, whatever the target. The innermost matching span decides.
+- Default: `info`, or `warn` when `NODE_ENV=test`. A typo (`Orders=chatty`) is a boot error.
 - yerd's targets include `yerd::request`, `yerd::lifecycle`, `yerd::boot` and `yerd::stream`.
 
 ## app.logging()
 
-`app.logging()` sets the filter, format and redactions in code.
+`app.logging()` sets the filter, format and redactions. In production the console writes JSON, a record per line; the `Orders::place` enter record, spread out:
 
-```ts
-import { yerd } from "@toyz/yerd";
-
-export const app = yerd().logging({
-  filter: "info,UserRepo=debug",
-  format: "json",
-});
+```json
+{
+  "t": "2026-10-18T20:44:48.666Z", "level": "info", "target": "Orders", "msg": "Orders::place", "kind": "span-enter",
+  "spans": [
+    { "name": "request", "id": "350a7ce21ab0c5db", "fields": { "method": "POST", "path": "/checkout" } },
+    { "name": "Orders::place", "id": "d6df599cabc1be23", "fields": {
+      "user": { "id": "u1", "name": "ada", "passwordHash": "[redacted]" },
+      "details": { "CheckoutForm": { "name": "Ada Lovelace", "email": "ada@example.com", "address": "12 St James's Square, London" } },
+      "cart": [{ "id": 7, "qty": 1 }]
+    } }
+  ],
+  "trace": "4da42990240c961483e5e709d1a87457"
+}
 ```
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `filter` | `YERD_LOG`, else `info` (`warn` under tests) | directives, as above |
 | `format` | `YERD_LOG_FORMAT`, else `pretty` on a terminal outside production, `json` otherwise | console output format |
-| `redact` | `[]` | field paths to mask as `"[redacted]"` in every record ([your own redactions](#your-own-redactions)) |
+| `redact` | `[]` | field paths to mask as `"[redacted]"` in every record ([below](#your-own-redactions)) |
 
 - `YERD_LOG` and `YERD_LOG_FORMAT` win over these, so a deploy can change them without a rebuild.
-- JSON output is one object per line (`t`, `level`, `target`, `msg`, plus `kind`, `fields`, `spans`, `ms`, `error`, `trace` when present).
-- Info and below go to stdout in batches; warnings and errors to stderr immediately.
+- JSON keys: `t`, `level`, `target`, `msg`, plus `kind`, `fields`, `spans`, `ms`, `error` and `trace` when present.
+- Info and below go to stdout in batches; warnings and errors to stderr at once.
+
+## Redaction and limits
+
+Every field is sanitized before any sink sees it: that's why `passwordHash` came out as `[redacted]`.
+
+- A key is redacted at any depth when one of its words is `password`, `pass`, `secret`, `token`, `auth`, `authorization`, `cookie`, `session`, `credential`, `signature`, `otp`, or `api key` / `private key`.
+- Words split on camelCase, `_`, `-` and `.`; a trailing number is ignored (`password2`). Whole words only: `csrfToken` and `sessionId` are redacted, `passengers` and `tokenizer` aren't.
+- Values are bounded: depth 4, strings 256 characters, arrays 20 items, objects 30 keys. Circular references, binary data and class instances are summarized.
+
+> [!TAKE]
+> Secret-looking keys are masked by default, everywhere, with no opt-in. A log line is copied to more places than any database row. You give up seeing a harmless field named `token`; rename it.
+
+### Your own redactions
+
+The word list can't guess that an email or a street address is personal. List paths in `logging({ redact })`, with the same wildcards as `skip`:
+
+```ts
+// src/app.ts
+.logging({ redact: ["**.email", "**.address", "to"] })
+```
+
+```text
+14:45:27.510  INFO   Orders::place{user={"id":"u1","name":"ada","passwordHash":"[redacted]"} details={"CheckoutForm":{"name":"Ada Lovelace","email":"[redacted]","address":"[redacted]"}} cart=[{"id":7,"qty":1}]}
+14:45:27.511  INFO receipt sent order=1001 to=[redacted] total=$24.00 (Receipts)
+```
+
+- Paths start at the record's fields: a span's arguments by name, its `ret` on exit (masked here too). `**.` matches a key anywhere.
+- Paths match keys, not values: `to` holds an email too, so it's listed by name.
+- Fields are masked, not removed. A malformed path stops the boot.
+- `skip` decides what one method records; `redact` is the app-wide net, library logs included.
 
 ## Custom sinks
 
@@ -228,47 +252,5 @@ export class HttpLogger implements ILogger {
 ```
 
 - `write(record)` is synchronous and must not throw; a failing sink is reported to `console.error` and never breaks a request.
-- `flush()` is optional and runs when the app stops.
-- The sink must be a singleton.
-
-Keep the console too with [teeLogger](api:yerd.teeLogger):
-
-```ts
-import { ConsoleLogger, ILogger, teeLogger, yerd } from "@toyz/yerd";
-
-export const app = yerd().services((s) =>
-  s.value(ILogger, teeLogger(new ConsoleLogger({ format: "pretty" }), new HttpLogger())),
-);
-```
-
-`ConsoleLogger` takes `format` and `color` (on for a terminal unless `NO_COLOR` is set).
-
-## Redaction and limits
-
-Every field is sanitized before any sink sees it.
-
-```ts
-log.info("login", { user: "ada", password: "hunter2", headers: { authorization: "Bearer x" } });
-// fields: { user: "ada", password: "[redacted]", headers: { authorization: "[redacted]" } }
-```
-
-- A key is redacted at any depth (`@instrument` arguments included) when one of its words is `password`, `pass`, `secret`, `token`, `auth`, `authorization`, `cookie`, `session`, `credential`, `signature`, `otp`, or `api key` / `private key`. Words split on camelCase, `_`, `-` and `.`; a trailing number is ignored (`password2`).
-- Whole words only: `csrfToken`, `x-api-key` and `sessionId` are redacted, `passengers` and `tokenizer` aren't.
-- Values are bounded: depth 4, strings 256 characters, arrays 20 items, objects 30 keys. Circular references, binary data and class instances are summarized.
-
-### Your own redactions
-
-List paths for secrets the word list can't guess (card numbers, emails, national ids) in `logging({ redact })`, with the same wildcards as `skip`. They're masked in every record, including span fields, `@instrument` arguments and library logs.
-
-```ts
-export const app = yerd().logging({
-  redact: ["**.ssn", "**.email", "card.number", "headers.x-forwarded-for"],
-});
-
-log.info("signup", { user: { email: "ada@example.com", name: "ada" }, card: { number: "4242", brand: "visa" } });
-// fields: { user: { email: "[redacted]", name: "ada" }, card: { number: "[redacted]", brand: "visa" } }
-```
-
-- Paths start at the record's fields (a span's fields are its method's arguments by name); `**.` matches a key anywhere.
-- Fields are masked, not removed.
-- `skip` decides what one method records; `redact` is the app-wide net. A malformed path stops the boot.
+- `flush()` is optional and runs when the app stops. The sink must be a singleton.
+- Keep the console too with [teeLogger](api:yerd.teeLogger): `s.value(ILogger, teeLogger(new ConsoleLogger({ format: "pretty" }), new HttpLogger()))`. `ConsoleLogger` takes `format` and `color` (on for a terminal unless `NO_COLOR` is set).
