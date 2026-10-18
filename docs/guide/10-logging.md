@@ -106,7 +106,7 @@ export class UserRepo {
 | `name` | `"Class::method"` | span name |
 | `level` | `"debug"` | level of the span's records |
 | `target` | the class name | target, for filtering |
-| `skip` | `[]` | parameter names to leave out |
+| `skip` | `[]` | arguments or nested fields to leave out (see below) |
 | `skipAll` | `false` | record no arguments |
 | `fields` | none | `(self, args) => ({ ... })`, extra or derived fields |
 | `ret` | `true` | record the return value on exit |
@@ -114,8 +114,31 @@ export class UserRepo {
 
 When the span's level is off, the method is called directly: no argument capture, no timing. Sync methods stay sync.
 
+### Skipping, checked by the compiler
+
+`skip` takes parameter names, positions, and dotted paths into either, down through nested objects and arrays. The logged copy loses those fields; the real argument is untouched.
+
+```ts
+import { instrument } from "@toyz/yerd";
+
+interface Signup {
+  email: string;
+  password: string;
+  billing: { card: string; cvc: string };
+}
+
+export class Accounts {
+  @instrument({ skip: ["input.password", "input.billing.cvc", "1.headers.authorization"] })
+  create(input: Signup, request: { headers: { authorization: string } }) {
+    return input.email;
+  }
+}
+```
+
+The paths are type-checked: `"input.billing.pin"` or `"1.headers.cookie"` is a compile error naming the field that doesn't exist. TypeScript can't see parameter *names*, only positions and types, so the part after a name is checked by the compiler and the name itself when the class loads (a misspelled name throws right there, before any request). Positional paths (`"0.password"`) are checked end to end.
+
 > [!TIP]
-> Argument names are read from the compiled function source, so keep server code unminified. The Vite plugin already does.
+> Argument names are read from the compiled function source, so keep server code unminified (the Vite plugin does). If a name ever trips you up (a bundler renamed it), positional paths don't depend on names at all.
 
 ## Filtering with YERD_LOG
 

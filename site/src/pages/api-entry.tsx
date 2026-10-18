@@ -2,7 +2,7 @@
 
 import { LoomElement, component, css, mount, prop, reactive, styles, watch } from "@toyz/loom";
 import { route } from "@toyz/loom/router";
-import { entryId, linkContext, loadApi, loadGuides, sectionId, sourceUrl, type Api, type Entry, type GuideInfo, type Member } from "../data";
+import { entryId, linkContext, loadApi, loadGuides, resolveApi, sectionId, sourceUrl, type Api, type Entry, type GuideInfo, type Member } from "../data";
 import { Code, KindBadge, Markdown, SinceBadge } from "../ui";
 
 const sheet = css`
@@ -13,6 +13,8 @@ const sheet = css`
   .deprecated-note { border-left: 3px solid var(--danger); background: rgba(240, 139, 139, 0.08); padding: 8px 14px; border-radius: 0 var(--radius) var(--radius) 0; margin: 12px 0; }
   .empty { color: var(--text-faint); font-style: italic; }
   .member { border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 16px 6px; margin: 12px 0; background: var(--bg-raised); scroll-margin-top: 20px; }
+  .member.target { border-color: var(--accent-dim); box-shadow: 0 0 0 3px var(--accent-bg); }
+  .member-head h3 a { color: inherit; }
   .member-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 0; }
   .member-head h3 { font-family: var(--mono); font-size: 0.98rem; margin: 0; }
   .member-head .src { margin-left: auto; font-size: 0.75rem; }
@@ -31,25 +33,46 @@ export class PageApiEntry extends LoomElement {
   @reactive accessor api: Api | undefined = undefined;
   @reactive accessor guides: GuideInfo[] = [];
 
+  /** A member to scroll to (the member route sets it). */
+  get focusMember(): string {
+    return "";
+  }
+
   @mount async load() {
     window.scrollTo(0, 0);
     const [api, guides] = await Promise.all([loadApi(), loadGuides()]);
     this.api = api;
     this.guides = guides;
+    this.scrollToFocus();
   }
 
   @watch("id") onId() {
-    if (this.isConnected) window.scrollTo(0, 0);
+    if (this.isConnected) {
+      window.scrollTo(0, 0);
+      this.scrollToFocus();
+    }
+  }
+
+  scrollToFocus() {
+    if (!this.focusMember) return;
+    requestAnimationFrame(() => this.shadow.getElementById(`m-${this.focusMember}`)?.scrollIntoView({ block: "start" }));
   }
 
   #member(m: Member, entry: Entry, api: Api) {
-    const ctx = linkContext(api, this.guides);
+    const self = entryId(entry);
+    const ctx = linkContext(api, this.guides, undefined, `${self}/${m.name}`);
+    const link = (name: string) => {
+      const id = resolveApi(api, name);
+      return id && id !== self ? id : undefined;
+    };
     return (
-      <div class="member" id={`m-${m.name}`} loom-key={`${m.static ? "static " : ""}${m.name}`}>
+      <div class={`member ${m.name === this.focusMember ? "target" : ""}`} id={`m-${m.name}`} loom-key={`${m.static ? "static " : ""}${m.name}`}>
         <div class="member-head">
           <h3>
-            {m.static ? "static " : ""}
-            {m.name}
+            <a href={`#/api/${self}/${m.name}`}>
+              {m.static ? "static " : ""}
+              {m.name}
+            </a>
           </h3>
           <span class="badge kind">{m.kind}</span>
           <SinceBadge since={m.since} />
@@ -58,7 +81,7 @@ export class PageApiEntry extends LoomElement {
             <a class="src" href={sourceUrl(api, entry.source.file, m.line)} target="_blank" rel="noopener">source</a>
           ) : null}
         </div>
-        <Code class="signature" code={m.signature} />
+        <Code class="signature" code={m.signature} link={link} />
         {m.deprecated ? <div class="deprecated-note">{m.deprecated}</div> : null}
         {m.doc ? <Markdown text={m.doc} ctx={ctx} /> : null}
         {(m.examples ?? []).map((ex) => (
@@ -82,7 +105,12 @@ export class PageApiEntry extends LoomElement {
         </div>
       );
     }
-    const ctx = linkContext(api, this.guides);
+    const self = entryId(entry);
+    const ctx = linkContext(api, this.guides, undefined, self);
+    const link = (name: string) => {
+      const id = resolveApi(api, name);
+      return id && id !== self ? id : undefined;
+    };
     const members = [...(entry.members ?? [])].sort((a, b) => MEMBER_ORDER[a.kind] - MEMBER_ORDER[b.kind]);
     const typeOnly = entry.kind === "interface" || entry.kind === "type";
     const importLine = `import { ${typeOnly ? `type ${entry.name}` : entry.name} } from "${entry.module}";`;
@@ -104,7 +132,7 @@ export class PageApiEntry extends LoomElement {
           </a>
         </div>
         <Code code={importLine} />
-        <Code class="signature" code={entry.signature} />
+        <Code class="signature" code={entry.signature} link={link} />
         {entry.deprecated ? <div class="deprecated-note">{entry.deprecated}</div> : null}
         {entry.doc ? <Markdown text={entry.doc} ctx={ctx} /> : <p class="empty">No description yet; the signature and source are above.</p>}
         {entry.examples?.length ? (
@@ -125,5 +153,22 @@ export class PageApiEntry extends LoomElement {
         ) : null}
       </article>
     );
+  }
+}
+
+@route("/api/:id/:member")
+@component("page-api-member")
+export class PageApiMember extends PageApiEntry {
+  @prop({ param: "member" }) accessor member = "";
+
+  override get focusMember(): string {
+    return this.member;
+  }
+
+  @watch("member") onMember() {
+    if (this.isConnected) {
+      this.scheduleUpdate();
+      this.scrollToFocus();
+    }
   }
 }

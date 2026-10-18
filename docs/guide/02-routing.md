@@ -293,3 +293,51 @@ export class TodoOne {
 ```
 
 A bare `*/*` in the Accept header never beats the default (the handler without `@accepts`, or the first `negotiate()` key), so browsers get HTML. If every handler has `@accepts` and none fits, the response is 406. Negotiated responses get `Vary: Accept`.
+
+## Variants per request: @get(when)
+
+A verb decorator can take a test. That handler serves the requests the test accepts, and a plain `@get` on the same route serves everyone else. The classic use is SEO: give crawlers a complete, script-free page and people the interactive one.
+
+```tsx
+import { get, isBot, route } from "@toyz/yerd";
+
+@route("/products/:id")
+export class Product {
+  @get page() {
+    return <ProductApp />; // people: the interactive page
+  }
+
+  @get(isBot) crawlable() {
+    return <ProductDetails />; // search engines and link previews: everything in the HTML
+  }
+}
+```
+
+- Variants are tried in the order they're declared; the first whose test passes wins, then the plain handler. With no plain handler and no match, the response is 404.
+- A test is any function of the request context (it may be async), or a guard from [`createGuard`](api:yerd.createGuard): `@get(beta)`.
+- Variants combine with `@accepts`: `@get(isBot) @accepts("json")` answers crawlers that ask for JSON.
+- Prerendering has no request to test, so the plain handler is what gets prerendered.
+- [`isBot`](api:yerd.isBot) also works on its own, inside any handler: `if (isBot(ctx)) ...`.
+
+### Caching: varies()
+
+A cache in front of your server (a CDN, the browser) keeps one copy per URL unless the response says otherwise, so it could serve the crawler page to people. When a test reads a request header, build it with [`varies`](api:yerd.varies) and every response from that route carries `Vary: <header>`, telling caches to keep one copy per value. `isBot` is built this way (`Vary: User-Agent`).
+
+```tsx
+import { get, route, varies } from "@toyz/yerd";
+
+// This test reads the x-client header, and says so.
+const fromApp = varies("x-client", (ctx) => ctx.headers["x-client"] === "app");
+
+@route("/feed")
+export class Feed {
+  @get(fromApp) forApp() {
+    return { items: [] }; // the mobile app gets JSON
+  }
+
+  @get page() {
+    return <h1>Feed</h1>; // browsers get the page
+  }
+}
+```
+

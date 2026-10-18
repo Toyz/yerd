@@ -3,6 +3,9 @@
  * repository's source (scripts/generate.mjs), so the site always matches main.
  */
 import "./styles.css";
+// Custom attributes register before any component connects, so loom watches
+// every component's shadow root for them.
+import "./api-tip";
 import { app } from "@toyz/loom";
 import { LoomRouter } from "@toyz/loom/router";
 

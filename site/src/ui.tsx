@@ -29,11 +29,32 @@ export function Markdown({ text, ctx, class: className = "prose" }: { text: stri
   return <div class={className} onClick={onCopyClick} rawHTML={renderMarkdown(text, ctx).html}></div>;
 }
 
-/** A highlighted code block; the highlighter escapes everything it outputs. */
-export function Code({ code, lang = "ts", class: className = "code" }: { code: string; lang?: string; class?: string }) {
+/**
+ * A highlighted code block; the highlighter escapes everything it outputs.
+ * With `link`, type names that are exports become links to their pages (a
+ * signature's `YerdResponse`, `ResponseInit`).
+ */
+export function Code({
+  code,
+  lang = "ts",
+  class: className = "code",
+  link,
+}: {
+  code: string;
+  lang?: string;
+  class?: string;
+  link?: (name: string) => string | undefined;
+}) {
+  let html = highlight(code, lang);
+  if (link) {
+    html = html.replace(/<span class="tok-type">([A-Za-z_$][\w$]*)<\/span>/g, (whole, name: string) => {
+      const id = link(name);
+      return id ? `<a class="api-ref" href="#/api/${id}" data-api="${id}"><span class="tok-type">${name}</span></a>` : whole;
+    });
+  }
   return (
     <pre class={className}>
-      <code rawHTML={highlight(code, lang)}></code>
+      <code rawHTML={html}></code>
     </pre>
   );
 }

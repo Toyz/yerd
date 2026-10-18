@@ -19,6 +19,12 @@ export const pageStyles = css`
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   a.external::after { content: " ↗"; font-size: 0.8em; color: var(--text-faint); }
+  /* Links to API pages: a dotted underline says "hover for a summary". */
+  a.api-ref { text-decoration: none; border-bottom: 1px dotted var(--accent-dim); }
+  a.api-ref:hover { text-decoration: none; border-bottom-style: solid; }
+  a.api-ref code { color: var(--accent); }
+  pre a.api-ref { border-bottom-color: transparent; }
+  pre a.api-ref:hover { border-bottom: 1px solid var(--tok-type); }
 
   h1 { font-size: 2rem; line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 12px; }
   h2 { font-size: 1.35rem; margin: 2.2em 0 0.6em; padding-top: 0.4em; border-top: 1px solid var(--border); letter-spacing: -0.01em; }

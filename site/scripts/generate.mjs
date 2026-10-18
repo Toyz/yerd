@@ -99,32 +99,62 @@ function programFor(root, entries) {
 const PRINT = ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope;
 
 function isHidden(symbol) {
-  return symbol.getJsDocTags().some((t) => t.name === "internal" || t.name === "hidden");
+  return (symbol.getDeclarations() ?? []).some((d) => nodeDoc(d).hidden);
 }
 
-function docOf(symbol, checker) {
-  const text = ts.displayPartsToString(symbol.getDocumentationComment(checker)).trim();
-  const tags = symbol.getJsDocTags(checker);
+// The JSDoc tags that mean something here. TypeScript's own parser treats any
+// "@word" as a tag, even mid-sentence, so prose like "Promises (like @body's)"
+// or a ```ts example full of decorators would cut the description short. We
+// read the comment's raw text instead and only split on these, at the start
+// of a line and outside code fences.
+const KNOWN_TAGS = new Set(["example", "deprecated", "since", "param", "returns", "return", "internal", "hidden", "see", "throws", "default", "remarks", "typeParam", "template"]);
+
+/** Parse one raw JSDoc comment: description, examples, and the tags we use. */
+function parseComment(raw) {
+  const lines = raw
+    .replace(/^\/\*\*\s?/, "")
+    .replace(/\s*\*\/$/, "")
+    .split("\n")
+    .map((l) => l.replace(/^\s*\* ?/, ""));
+  const description = [];
+  const tags = [];
+  let fence = false;
+  for (const line of lines) {
+    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
+    const tag = !fence && /^@(\w+)\s?(.*)$/.exec(line);
+    if (tag && KNOWN_TAGS.has(tag[1])) tags.push({ name: tag[1], lines: [tag[2]] });
+    else if (tags.length) tags[tags.length - 1].lines.push(line);
+    else description.push(line);
+  }
+  const text = description.join("\n").trim();
   const examples = [];
   let deprecated;
   let since;
-  const params = [];
+  let hidden = false;
   for (const tag of tags) {
-    const body = ts.displayPartsToString(tag.text ?? []).trim();
-    if (tag.name === "example") examples.push(body.replace(/^```\w*\n?|\n?```$/g, ""));
+    const body = tag.lines.join("\n").trim();
+    if (tag.name === "example") examples.push(body.replace(/^```\w*\n?|\n?```$/g, "").trim());
     else if (tag.name === "deprecated") deprecated = body || "Deprecated.";
     else if (tag.name === "since") since = body.replace(/^v/, "");
-    else if (tag.name === "param") params.push(body);
+    else if (tag.name === "internal" || tag.name === "hidden") hidden = true;
   }
-  return { text, examples, deprecated, since, params };
+  return { text, examples, deprecated, since, hidden, params: [] };
 }
 
-/** JSDoc read straight off a node, for members without a symbol (constructors, index signatures). */
+/** The doc comment on a declaration (for a variable, the one on its statement). */
 function nodeDoc(node) {
   const docs = ts.getJSDocCommentsAndTags(node).filter(ts.isJSDoc);
-  const text = docs.map((d) => (typeof d.comment === "string" ? d.comment : ts.getTextOfJSDocComment(d.comment) ?? "")).join("\n").trim();
-  const examples = docs.flatMap((d) => (d.tags ?? []).filter((t) => t.tagName.text === "example").map((t) => (typeof t.comment === "string" ? t.comment : ts.getTextOfJSDocComment(t.comment) ?? "").replace(/^```\w*\n?|\n?```$/g, "")));
-  return { text, examples, params: [] };
+  if (docs.length === 0) return { text: "", examples: [], params: [] };
+  return parseComment(docs[docs.length - 1].getText());
+}
+
+function docOf(symbol, checker) {
+  // The first declaration that has a comment (overloads often document only one).
+  for (const decl of symbol.getDeclarations() ?? []) {
+    const doc = nodeDoc(decl);
+    if (doc.text || doc.examples.length || doc.deprecated || doc.hidden) return doc;
+  }
+  return { text: ts.displayPartsToString(symbol.getDocumentationComment(checker)).trim(), examples: [], params: [] };
 }
 
 /** A declaration's text as the author wrote it, without its body. */

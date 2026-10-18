@@ -21,7 +21,7 @@ Routes are TC39 decorators and pages are TSX, so the compiler needs to know abou
     "target": "ES2022",
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "lib": ["ES2023", "esnext.decorators"],
+    "lib": ["ES2023", "esnext.decorators", "DOM"],
     "types": ["node"],
     "strict": true,
     "jsx": "react-jsx",

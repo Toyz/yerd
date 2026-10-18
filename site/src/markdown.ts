@@ -32,6 +32,30 @@ export interface LinkContext {
   /** docs/X.md -> guide slug */
   guideFor: (file: string) => string | undefined;
   repoUrl: string;
+  /** `res`, `ActionForm.parse` -> an API page ("yerd.res", "yerd.ActionForm/parse"), for cross-references. */
+  resolveApi?: (name: string) => string | undefined;
+  /** The API page being rendered, so it doesn't link to itself. */
+  self?: string;
+}
+
+/**
+ * The API page a code span names, if any: `res()`, `@layout`, `new YerdApp()`,
+ * `ActionForm.parse`, `Session.flash(key)`.
+ */
+function apiTarget(code: string, ctx: LinkContext): string | undefined {
+  if (!ctx.resolveApi) return undefined;
+  const name = code
+    .trim()
+    .replace(/^@|^new\s+/, "")
+    .replace(/\(.*\)$/, "")
+    .replace(/<.*>$/, "");
+  if (!/^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)?$/.test(name)) return undefined;
+  const id = ctx.resolveApi(name);
+  return id && id !== ctx.self && !id.startsWith(`${ctx.self}/`) ? id : undefined;
+}
+
+function apiLink(id: string, inner: string): string {
+  return `<a class="api-ref" href="#/api/${escapeHtml(id)}" data-api="${escapeHtml(id)}">${inner}</a>`;
 }
 
 export function escapeHtml(text: string): string {
@@ -51,7 +75,7 @@ export function slugify(text: string): string {
 function href(target: string, ctx: LinkContext): string | undefined {
   const url = target.trim();
   if (/^(https?:|mailto:)/i.test(url)) return url;
-  if (url.startsWith("api:")) return `#/api/${url.slice(4)}`;
+  if (url.startsWith("api:")) return `#/api/${url.slice(4).replace(".", "\u0001").replace(".", "/").replace("\u0001", ".")}`;
   if (url.startsWith("#")) return ctx.slug ? `#/guide/${ctx.slug}/${slugify(url.slice(1))}` : undefined;
   const [path, hash] = url.split("#");
   const file = path!.replace(/^\.\//, "");
@@ -73,9 +97,25 @@ function href(target: string, ctx: LinkContext): string | undefined {
 export function inline(text: string, ctx: LinkContext): string {
   const held: string[] = [];
   const hold = (html: string) => `\u0000${held.push(html) - 1}\u0000`;
+  // Markers can nest (a link label holding code), so restore until none are left.
+  const restore = (html: string) => {
+    while (html.includes("\u0000")) html = html.replace(/\u0000(\d+)\u0000/g, (_, i: string) => held[Number(i)]!);
+    return html;
+  };
+  // JSDoc cross-references: {@link name}, {@link name | text}, {@link name text}.
+  text = text.replace(/\{@link(?:code|plain)?\s+([^}\s|]+)\s*(?:\|\s*|\s+)?([^}]*)\}/g, (_, target: string, label: string) => {
+    const id = ctx.resolveApi?.(target.replace(/\(\)$/, ""));
+    const shown = label.trim() ? escapeHtml(label.trim()) : `<code>${escapeHtml(target)}</code>`;
+    if (id) return hold(apiLink(id, shown));
+    const url = href(target, ctx);
+    return url ? hold(`<a href="${escapeHtml(url)}">${shown}</a>`) : hold(shown);
+  });
   text = text.replace(/(`+)([\s\S]*?)\1/g, (_, _ticks: string, code: string) => {
     const body = /^ .* $/.test(code) ? code.slice(1, -1) : code;
-    return hold(`<code>${escapeHtml(body)}</code>`);
+    const html = `<code>${escapeHtml(body)}</code>`;
+    // A code span naming an export links to its page (a hover shows a summary).
+    const id = apiTarget(body, ctx);
+    return hold(id ? apiLink(id, html) : html);
   });
   text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt: string, src: string) =>
     hold(/^https:\/\//.test(src) ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" loading="lazy">` : escapeHtml(alt)),
@@ -85,12 +125,12 @@ export function inline(text: string, ctx: LinkContext): string {
     if (!url) return label;
     const web = /^https?:/.test(url);
     const external = web && !url.startsWith(ctx.repoUrl);
-    return hold(`<a href="${escapeHtml(url)}"${web ? ' target="_blank" rel="noopener"' : ""}${external ? ' class="external"' : ""}>${styled(label)}</a>`);
+    // A link label that's already an API link (a code span) keeps just one link.
+    const inner = restore(styled(label)).replace(/<a class="api-ref"[^>]*>|<\/a>/g, "");
+    const api = url.startsWith("#/api/") ? ` class="api-ref" data-api="${escapeHtml(url.slice(6))}"` : "";
+    return hold(`<a href="${escapeHtml(url)}"${web ? ' target="_blank" rel="noopener"' : ""}${external ? ' class="external"' : api}>${inner}</a>`);
   });
-  let out = styled(text);
-  // Markers can nest (a link label holding code), so restore until none are left.
-  while (out.includes("\u0000")) out = out.replace(/\u0000(\d+)\u0000/g, (_, i: string) => held[Number(i)]!);
-  return out;
+  return restore(styled(text));
 }
 
 function styled(text: string): string {

@@ -156,6 +156,36 @@ The `is.*` decorators:
 
 Every one takes `optional`, `transform` (same type in and out) and `validate`. Outside a request, [`parse(Dto, raw)`](api:yerd.parse) validates a value and [`dto(Dto)`](api:yerd.dto) gives you a transform for any `transform` option.
 
+### Partial updates: PATCH
+
+A DTO only holds the fields that were sent: an optional field the client left out isn't on the instance at all (not even as `undefined`). So an all-optional DTO is exactly a PATCH body, and merging it can't wipe the fields that weren't sent.
+
+```tsx
+import { body, is, param, patch, route, toInt } from "@toyz/yerd";
+
+class TodoChanges {
+  @is.string({ optional: true }) title?: string;
+  @is.boolean({ optional: true }) done?: boolean;
+}
+
+const todos = new Map([[1, { id: 1, title: "milk", done: false }]]);
+
+@route("/api/todos/:id")
+export class TodoItem {
+  @param("id", { transform: toInt }) accessor id!: number;
+  @body(TodoChanges) accessor changes!: Promise<TodoChanges>;
+
+  @patch async update() {
+    const todo = todos.get(this.id);
+    if (!todo) return 404;
+    Object.assign(todo, await this.changes); // `{ "done": true }` changes done, keeps title
+    return todo;
+  }
+}
+```
+
+A route can declare one `@body` per shape (say `TodoChanges` for PATCH and a full `TodoReplacement` for PUT): they're promises, so each handler awaits the one it needs and only that one is validated.
+
 ## The body is a promise
 
 Reading a body is async, so `@body`, `@field`, `@file` and `@files` fields hold promises. Nothing is read until something awaits the field, and every read in a request shares one parse.

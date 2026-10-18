@@ -97,10 +97,41 @@ export function sectionId(section: string): string {
   return section.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 }
 
-/** How markdown in guides and JSDoc resolves its links. */
-export function linkContext(api: Api, guideList: GuideInfo[], slug?: string): LinkContext {
+const indexes = new WeakMap<Api, Map<string, Entry>>();
+
+/**
+ * The API page for a name: `res` -> "yerd.res", `ActionForm.parse` ->
+ * "yerd.ActionForm/parse". The main entry point wins when a name exists in
+ * two modules.
+ */
+export function resolveApi(api: Api, name: string): string | undefined {
+  let index = indexes.get(api);
+  if (!index) {
+    index = new Map();
+    for (const entry of api.entries) if (!index.has(entry.name) || entry.module === "@toyz/yerd") index.set(entry.name, entry);
+    indexes.set(api, index);
+  }
+  const [owner, member] = name.split(".");
+  const entry = index.get(owner!);
+  if (!entry) return undefined;
+  if (!member) return entryId(entry);
+  return entry.members?.some((m) => m.name === member) ? `${entryId(entry)}/${member}` : entryId(entry);
+}
+
+/** The entry an API id ("yerd.ActionForm/parse") points at, and the member if any. */
+export function lookupApi(api: Api, id: string): { entry: Entry; member?: Member } | undefined {
+  const [entryPart, memberName] = id.split("/");
+  const entry = api.entries.find((e) => entryId(e) === entryPart);
+  if (!entry) return undefined;
+  return { entry, member: memberName ? entry.members?.find((m) => m.name === memberName) : undefined };
+}
+
+/** How markdown in guides and JSDoc resolves its links. `self`: the API page being rendered. */
+export function linkContext(api: Api, guideList: GuideInfo[], slug?: string, self?: string): LinkContext {
   return {
     slug,
+    self,
+    resolveApi: (name) => resolveApi(api, name),
     repoUrl: api.repo,
     // "02-routing.md", "docs/DYNAMICS.md", "DYNAMICS.md": by path, then by file name.
     guideFor: (file) => {
