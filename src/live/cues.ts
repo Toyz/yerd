@@ -36,8 +36,8 @@
  * element with `{ name, room, data, at, late }`; call preventDefault() on it
  * to play the cue your own way.
  *
- * Cues go out through Channels, so with a shared ChannelBackend every
- * instance's pages hear them.
+ * Cues go out through Channels, so with a shared ChannelBackend (or an
+ * EventTransport that channels ride on) every instance's pages hear them.
  *
  * Rooms work like channels: the built-in stream serves only the rooms you
  * make public (`yerd({ cues: { public: [...] } })`, default `["main"]`).
@@ -62,6 +62,7 @@
  */
 
 import { inject } from "../di/decorators.js";
+import { parseDuration } from "../util/duration.js";
 import { Channels } from "./channels.js";
 
 /** Where the runtime listens for cues. */
@@ -122,15 +123,16 @@ export interface CueOptions {
    */
   room?: string;
   /**
-   * How far ahead to schedule it, in ms, so the message reaches every page
-   * before it's due and they start together. Default 250. 0 plays it now,
-   * and pages start it late by however long the message took.
+   * How far ahead to schedule it, in ms or as a duration ("3s"), so the
+   * message reaches every page before it's due and they start together.
+   * Default 250 ms. 0 plays it now, and pages start it late by however long
+   * the message took.
    *
    * ```ts
-   * await this.cues.play("countdown", { in: 3000 }); // three seconds from now, everywhere
+   * await this.cues.play("countdown", { in: "3s" }); // three seconds from now, everywhere
    * ```
    */
-  in?: number;
+  in?: number | string;
   /**
    * Anything JSON can carry, handed to `yx:cue` listeners as `detail.data`.
    *
@@ -140,27 +142,29 @@ export interface CueOptions {
    */
   data?: unknown;
   /**
-   * How long the cue runs, in ms. A page that connects (or reconnects) while
-   * it's still running starts it partway; past that, it's skipped. Each
-   * element's `data-yx-cued` comes off when it ends. Without it, a cue is
-   * only played by pages that hear it before it's due, and `data-yx-cued`
-   * stays until the next cue.
+   * How long the cue runs, in ms or as a duration ("2s"). A page that
+   * connects (or reconnects) while it's still running starts it partway;
+   * past that, it's skipped. Each element's `data-yx-cued` comes off when it
+   * ends. Without it, a cue is only played by pages that hear it before it's
+   * due, and `data-yx-cued` stays until the next cue. Pages get it in ms
+   * (Cue.lasts).
    *
    * ```ts
-   * await this.cues.play("airhorn", { lasts: 2000 });
+   * await this.cues.play("airhorn", { lasts: "2s" }); // or 2000
    * ```
    */
-  lasts?: number;
+  lasts?: number | string;
   /**
    * Ignore plays of the same cue (same room and `key`) for this long after
-   * one goes out, in ms: a button everyone mashes plays once per window.
-   * play() returns undefined for an ignored one. Counted per process.
+   * one goes out, in ms or as a duration: a button everyone mashes plays
+   * once per window. play() returns undefined for an ignored one. Counted
+   * per process.
    *
    * ```ts
-   * await this.cues.play("airhorn", { cooldown: 1500 }); // at most one airhorn per 1.5s
+   * await this.cues.play("airhorn", { cooldown: "1.5s" }); // at most one airhorn per 1.5s
    * ```
    */
-  cooldown?: number;
+  cooldown?: number | string;
   /**
    * What `cooldown` counts by. Default: the cue's name.
    *
@@ -228,11 +232,31 @@ const NAME = /^[A-Za-z0-9_:.-]{1,64}$/;
 const ROOM_MAX = 128;
 /** Cues kept per room for pages that connect late. */
 const KEEP = 64;
+/** How far ahead a cue is scheduled when play() isn't given `in`, in ms. */
+const DEFAULT_LEAD_MS = 250;
+/** Past this many cooldown keys, the sweep also drops the expired ones. */
+const COOLING_SWEEP_AT = 1000;
+/** The sweep of finished cues and expired cooldowns runs at most this often, in ms. */
+const SWEEP_EVERY_MS = 1000;
 
-function checkMs(what: string, value: number | undefined): void {
-  if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
-    throw new TypeError(`cues.play: ${what} must be a number of ms (0 or more), got ${String(value)}`);
+/** A play() timing in ms: a number of ms or a duration ("2s"); undefined stays undefined. */
+function ms(what: string, value: number | string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  let parsed: number | undefined;
+  try {
+    parsed = parseDuration(value);
+  } catch {
+    // Reported below, with the cues.play wording.
   }
+  if (typeof parsed !== "number" || !Number.isFinite(parsed) || parsed < 0) {
+    throw new TypeError(`cues.play: ${what} must be a number of ms (0 or more) or a duration like "2s", got ${typeof value === "string" ? JSON.stringify(value) : String(value)}`);
+  }
+  return parsed;
+}
+
+/** Whether a page connecting at `now` should still play it: due later, or running. */
+function isLive(cue: Cue, now: number): boolean {
+  return cue.at + (cue.lasts ?? 0) > now;
 }
 
 /** A room name is fine if it's short and has no control characters. */
@@ -264,12 +288,18 @@ const PREFIX = Math.floor(Math.random() * 36 ** 6).toString(36);
  */
 export class Cues {
   @inject(Channels) accessor channels!: Channels;
-  /** room -> recent cues, oldest first. */
+  /** room -> recent cues still due or running, oldest first. */
   readonly #recent = new Map<string, Cue[]>();
   /** cooldown key -> when it may play again. */
   readonly #cooling = new Map<string, number>();
-  /** room -> open cue streams in this process. */
-  readonly #watching = new Map<string, number>();
+  /**
+   * room -> open cue streams in this process, and the one subscription that
+   * keeps cues played on other instances for this one's late arrivals,
+   * however many pages listen.
+   */
+  readonly #watching = new Map<string, { streams: number; stop: () => void }>();
+  /** When the next sweep of finished cues and expired cooldowns may run. */
+  #nextSweep = 0;
 
   /**
    * Send a cue to every page listening to the room, timed to play `in` ms
@@ -287,22 +317,21 @@ export class Cues {
     }
     const room = options.room ?? DEFAULT_ROOM;
     if (!validRoom(room)) throw new TypeError(`cues.play: room must be 1-${ROOM_MAX} characters with no control characters, got ${JSON.stringify(room)}`);
-    checkMs("in", options.in);
-    checkMs("lasts", options.lasts);
-    checkMs("cooldown", options.cooldown);
+    const lead = ms("in", options.in) ?? DEFAULT_LEAD_MS;
+    const lasts = ms("lasts", options.lasts);
+    const cooldown = ms("cooldown", options.cooldown);
     if (options.key !== undefined && typeof options.key !== "string") throw new TypeError("cues.play: key must be a string");
 
     const now = Date.now();
-    if (options.cooldown) {
+    if (cooldown) {
       const key = `${room}\n${options.key ?? name}`;
       const until = this.#cooling.get(key);
       if (until !== undefined && now < until) return undefined;
-      this.#cooling.set(key, now + options.cooldown);
-      if (this.#cooling.size > 1000) for (const [k, t] of this.#cooling) if (t <= now) this.#cooling.delete(k);
+      this.#cooling.set(key, now + cooldown);
     }
 
-    const cue: Cue = { id: `${PREFIX}-${(++seq).toString(36)}`, name, room, at: now + (options.in ?? 250) };
-    if (options.lasts !== undefined) cue.lasts = options.lasts;
+    const cue: Cue = { id: `${PREFIX}-${(++seq).toString(36)}`, name, room, at: now + lead };
+    if (lasts !== undefined) cue.lasts = lasts;
     if (options.data !== undefined) {
       // Pages get it as JSON: refuse what wouldn't survive the trip now, not in every browser.
       try {
@@ -311,7 +340,7 @@ export class Cues {
         throw new TypeError(`cues.play: data must be JSON-serializable (${(error as Error).message})`);
       }
     }
-    this.#remember(cue);
+    this.#remember(cue, now);
     await this.channels.publish(channelOf(room), cue);
     return cue;
   }
@@ -330,7 +359,7 @@ export class Cues {
     for (const room of new Set(rooms)) {
       const list = this.#recent.get(room);
       if (!list) continue;
-      const live = list.filter((cue) => cue.at + (cue.lasts ?? 0) > now);
+      const live = list.filter((cue) => isLive(cue, now));
       if (live.length) this.#recent.set(room, live);
       else this.#recent.delete(room);
       out.push(...live);
@@ -352,27 +381,25 @@ export class Cues {
     for (const room of unique) if (!validRoom(room)) throw new TypeError(`cues.listen: bad room ${JSON.stringify(room)}`);
     // Subscribe before reading what's pending, so a cue played in between isn't missed (pages drop repeats by id).
     const live = this.channels.subscribe(unique.map(channelOf), signal, { buffer: KEEP });
-    for (const room of unique) this.#watching.set(room, (this.#watching.get(room) ?? 0) + 1);
+    const watched: string[] = [];
     const sent = new Set<string>();
     try {
+      for (const room of unique) {
+        this.#watch(room);
+        watched.push(room);
+      }
       for (const cue of this.pending(unique)) {
         sent.add(cue.id);
         yield cue;
       }
       for await (const message of live) {
         const cue = message as Cue;
-        // Played on another instance: keep it for this instance's late arrivals too.
-        this.#remember(cue);
         if (sent.has(cue.id)) continue;
         yield cue;
       }
     } finally {
       await live.return(undefined);
-      for (const room of unique) {
-        const left = (this.#watching.get(room) ?? 1) - 1;
-        if (left > 0) this.#watching.set(room, left);
-        else this.#watching.delete(room);
-      }
+      for (const room of watched) this.#unwatch(room);
     }
   }
 
@@ -385,14 +412,58 @@ export class Cues {
    * ```
    */
   watching(room: string = DEFAULT_ROOM): number {
-    return this.#watching.get(room) ?? 0;
+    return this.#watching.get(room)?.streams ?? 0;
   }
 
-  #remember(cue: Cue): void {
-    const list = this.#recent.get(cue.room) ?? [];
+  /** One more stream for `room`; the first one also starts keeping the room's cues played elsewhere. */
+  #watch(room: string): void {
+    const watched = this.#watching.get(room);
+    if (watched) {
+      watched.streams++;
+      return;
+    }
+    // Once per room, not once per page: each cue is remembered once per instance.
+    const stop = this.channels.backend.subscribe(channelOf(room), (message) => this.#remember(message as Cue, Date.now()));
+    this.#watching.set(room, { streams: 1, stop });
+  }
+
+  #unwatch(room: string): void {
+    const watched = this.#watching.get(room);
+    if (!watched || --watched.streams > 0) return;
+    this.#watching.delete(room);
+    watched.stop();
+  }
+
+  /** Keep a cue for late arrivals: played here, or heard from another instance (a cue played here comes back that way too). */
+  #remember(cue: Cue, now: number): void {
+    this.#sweep(now);
+    if (!isLive(cue, now)) return;
+    const list = this.#recent.get(cue.room);
+    if (!list) {
+      this.#recent.set(cue.room, [cue]);
+      return;
+    }
     if (list.some((c) => c.id === cue.id)) return;
-    list.push(cue);
-    if (list.length > KEEP) list.splice(0, list.length - KEEP);
-    this.#recent.set(cue.room, list);
+    const kept = list.filter((c) => isLive(c, now));
+    kept.push(cue);
+    if (kept.length > KEEP) kept.splice(0, kept.length - KEEP);
+    this.#recent.set(cue.room, kept);
+  }
+
+  /**
+   * Drop finished cues from every room (rooms nobody asks about again would
+   * keep theirs for good otherwise) and, past COOLING_SWEEP_AT keys, expired
+   * cooldowns. At most once per SWEEP_EVERY_MS, so a busy room doesn't pay
+   * for the whole map on every play.
+   */
+  #sweep(now: number): void {
+    if (now < this.#nextSweep) return;
+    this.#nextSweep = now + SWEEP_EVERY_MS;
+    for (const [room, list] of this.#recent) {
+      const live = list.filter((cue) => isLive(cue, now));
+      if (live.length === 0) this.#recent.delete(room);
+      else if (live.length !== list.length) this.#recent.set(room, live);
+    }
+    if (this.#cooling.size > COOLING_SWEEP_AT) for (const [key, until] of this.#cooling) if (until <= now) this.#cooling.delete(key);
   }
 }

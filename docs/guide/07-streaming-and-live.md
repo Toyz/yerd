@@ -291,9 +291,9 @@ When a cue plays, each element that names it:
 | `play()` option | What it does |
 | --- | --- |
 | `room` | Which pages hear it. Pages listen to the rooms their `cueRoom` props name (`"main"` when there's none), or to what their `cueFrom` route serves. See [public and private rooms](#public-and-private-rooms). Default `"main"`. |
-| `in` | How far ahead to schedule it, in ms. The lead gives the message time to reach every page, so they start together. Default 250. |
-| `lasts` | How long it runs, in ms. A page that connects while it's running starts it partway. `data-yx-cued` comes off when it ends. |
-| `cooldown` | Ignore plays of the same cue for this long, in ms. A button the whole room mashes plays once per window. `play()` returns undefined for an ignored play. |
+| `in` | How far ahead to schedule it, in ms or as a duration (`"3s"`). The lead gives the message time to reach every page, so they start together. Default 250. |
+| `lasts` | How long it runs, in ms or as a duration (`"2s"`). A page that connects while it's running starts it partway. `data-yx-cued` comes off when it ends. |
+| `cooldown` | Ignore plays of the same cue for this long, in ms or as a duration (`"1.5s"`). A button the whole room mashes plays once per window. `play()` returns undefined for an ignored play. |
 | `key` | What `cooldown` counts by, instead of the name. For example `` `airhorn:${user.id}` `` gives each person their own cooldown. |
 | `data` | Anything JSON can carry. Listeners get it as `detail.data`. |
 

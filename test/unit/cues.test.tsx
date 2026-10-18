@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { ChannelBackend, Cues, HttpError, MemoryBackend, action, attribute, createGuard, get, inject, param, renderToString, route, signal, sse, yerd, type Cue, type CuesOptions } from "@toyz/yerd";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -49,6 +51,22 @@ describe("Cues.play", () => {
     expect(b).toMatchObject({ name: "wave", room: "stage", at: 1_003_000, lasts: 2000, data: { from: "ada" } });
     expect(b.id).not.toBe(a.id);
     expect((await cues.play("now", { in: 0 }))!.at).toBe(1_000_000);
+  });
+
+  it("takes durations as strings too, and sends them to pages in ms", async () => {
+    const { cues } = await hub();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const cue = (await cues.play("wave", { in: "3s", lasts: "1.5s", cooldown: "2s" }))!;
+    expect(cue).toMatchObject({ at: 1_003_000, lasts: 1500 });
+    now.mockReturnValue(1_001_999);
+    expect(await cues.play("wave", { cooldown: "2s" })).toBeUndefined();
+    now.mockReturnValue(1_002_000);
+    expect(await cues.play("wave", { cooldown: 2000 })).toBeDefined();
+    for (const bad of ["soon", "5", "-1s", ""]) {
+      await expect(cues.play("ok", { in: bad })).rejects.toThrow(/in must be a number of ms \(0 or more\) or a duration like "2s"/);
+      await expect(cues.play("ok", { lasts: bad })).rejects.toThrow(/lasts must be/);
+      await expect(cues.play("ok", { cooldown: bad })).rejects.toThrow(/cooldown must be/);
+    }
   });
 
   it("copies data the way pages will see it", async () => {
@@ -148,6 +166,21 @@ describe("Cues.pending", () => {
     expect(kept[0]!.name).toBe("c36");
     expect(kept.at(-1)!.name).toBe("c99");
   });
+
+  it("lets go of finished cues in rooms nobody asks about again", async () => {
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    const { cues } = await hub();
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10_000_000);
+    const start = Date.now();
+    const played = await (async () => new WeakRef((await cues.play("goal", { room: "team:1", lasts: 100, data: { big: "x".repeat(1000) } }))!))();
+    // Over, and a sweep is due: the next play anywhere drops it.
+    now.mockReturnValue(start + 5_000);
+    await cues.play("other", { room: "team:2" });
+    await sleep(0);
+    gc();
+    expect(played.deref()).toBeUndefined();
+  });
 });
 
 describe("Cues.listen", () => {
@@ -219,6 +252,29 @@ describe("Cues.listen", () => {
     expect((await next).value!.name).toBe("cross");
     expect(two.cues.pending(["main"]).map((c) => c.name)).toEqual(["cross"]);
     stop.abort();
+  });
+
+  it("keeps cues from another instance with one subscription per room, however many pages listen, until the last leaves", async () => {
+    const shared = new MemoryBackend();
+    const one = await hub(shared);
+    const two = await hub(shared);
+    const pages = [0, 1, 2].map(() => new AbortController());
+    const feeds = pages.map((page) => two.cues.listen(["main"], page.signal));
+    const nexts = feeds.map((feed) => feed.next());
+    await sleep(0);
+    // A subscription per page, plus the instance's own.
+    expect(shared.listeners("yerd:cues:main")).toBe(4);
+    await one.cues.play("cross", { lasts: 5000 });
+    for (const next of nexts) expect((await next).value!.name).toBe("cross");
+    expect(two.cues.pending(["main"]).map((c) => c.name)).toEqual(["cross"]);
+    pages[0]!.abort();
+    pages[1]!.abort();
+    await Promise.all([feeds[0]!.next(), feeds[1]!.next()]);
+    expect(shared.listeners("yerd:cues:main")).toBe(2);
+    pages[2]!.abort();
+    await feeds[2]!.next();
+    expect(shared.listeners("yerd:cues:main")).toBe(0);
+    expect(two.cues.watching()).toBe(0);
   });
 });
 
