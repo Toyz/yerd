@@ -167,6 +167,14 @@ same-origin, a real navigation otherwise). Uploaded files reach the action as
   connection that comes back triggers a refresh (messages may have been
   missed); one the browser gave up on is reopened with backoff (1s doubling to
   30s).
+- A page the browser restores from its back/forward cache (`pageshow` with
+  `persisted`) empties the prefetch cache and is fetched again, so it never
+  shows the state from before a sign-in or a change.
+- Drag and drop: text, links and images dragged in from elsewhere are left to
+  the browser. While the page has a file zone, a file dropped next to it is
+  swallowed instead of making the browser navigate to it. `data-yx-dragging`
+  and `data-yx-over` are cleared when the drag is cancelled, leaves the
+  window, or the dragged element is morphed away mid-drag.
 - The runtime runs once per page, guarded by `Symbol.for("yerd.runtime")` on
   `window` (an element with `id="yerd"` can't fake it).
 

@@ -1,10 +1,10 @@
 # Interactivity
 
-This page covers how yerd pages update in place, with no client code and no API to write: actions, Regions, boosted links, live refresh, prefetching and custom attributes.
+How pages update in place without client code: actions, Regions, boosted links, live refresh, prefetching, local state and custom attributes.
 
 ## The client runtime
 
-Put [Scripts](api:yerd.Scripts) once in your root layout's `<head>`. It loads yerd's runtime from `/_yerd/runtime.js` (about 8 KB compressed), which the server serves for you. [Local](api:yerd.Local), drag and drop, and `sync` / cues live in small extra files beside it that a page loads only when it uses them (`<Scripts />` preloads them for you).
+Put [Scripts](api:yerd.Scripts) once in the root layout's `<head>` to load the runtime (about 8 KB compressed).
 
 ```tsx
 import { Scripts, type LayoutProps } from "@toyz/yerd";
@@ -22,11 +22,11 @@ function RootLayout({ children }: LayoutProps) {
 }
 ```
 
-Everything on this page is progressive enhancement of plain HTML: forms are real forms and links are real links. With JavaScript off or blocked, the app still works, it just does full page loads.
+Everything here is progressive enhancement: with JavaScript off, forms and links still work with full page loads.
 
 ## Actions: forms that call methods
 
-Mark a route method with [@action](api:yerd.action) and pass it to a form's `action`. The method gets the bound arguments first and the submitted [ActionForm](api:yerd.ActionForm) second.
+Mark a route method with [@action](api:yerd.action) and pass it to a form's `action`; it gets the bound arguments first and the submitted [ActionForm](api:yerd.ActionForm) second.
 
 ```tsx
 import { ActionForm, Region, action, get, route } from "@toyz/yerd";
@@ -62,7 +62,7 @@ export class Todos {
 }
 ```
 
-The form renders as an ordinary POST to the route's own path, carrying a signed hidden `_yx` field that names the action:
+The form renders as a POST to the route's own path, with a signed `_yx` field naming the action:
 
 ```html
 <form action="/todos" method="post" data-yx>
@@ -71,14 +71,13 @@ The form renders as an ordinary POST to the route's own path, carrying a signed 
 </form>
 ```
 
-- **With JavaScript**, the runtime sends the form with `fetch`, the action's JSX comes back without layouts, and each `<Region>` in it replaces the one with the same `id` on the page.
-- **Without JavaScript**, the browser posts, the action runs, and the server redirects back to the page the form was on (303). The browser reloads it with the new data.
-
-Because the action posts to its route's path, `@param` and `@query` accessors work in actions exactly like they do in `@get`.
+- **With JavaScript**, the runtime posts it with `fetch`, and each `<Region>` in the action's JSX replaces the one with the same `id`.
+- **Without JavaScript**, the server runs the action and redirects back (303).
+- `@param` and `@query` accessors work in actions as in `@get`.
 
 ## Regions
 
-A [Region](api:yerd.Region) marks a part of the page that responses can replace. It renders a `div` (or the `as` element) with your `id` and attributes.
+A [Region](api:yerd.Region) marks a part of the page that responses can replace; it renders a `div` (or the `as` element) with your `id` and attributes.
 
 ```tsx
 import { Region } from "@toyz/yerd";
@@ -92,24 +91,24 @@ function Counter({ count }: { count: number }) {
 }
 ```
 
-`<Region append>` in a response adds its children to the Region on the page instead of replacing them, and `prepend` puts them first: see [infinite scroll](#infinite-scroll).
-
-Updates are morphed into the page rather than swapped: elements are matched by `id` or `key`, so focus, scroll position, an open `<details>` and whatever the user is typing all survive. Return several Regions (in a fragment) and they all update in one round trip.
+- Updates are morphed in by `id` or `key`, so focus, scroll, an open `<details>` and typed text survive.
+- Return several Regions in a fragment to update them in one round trip.
+- `<Region append>` / `prepend` adds instead of replacing: see [infinite scroll](#infinite-scroll).
 
 ## What an action returns
 
 | Return | With JavaScript | Without JavaScript |
 |---|---|---|
-| nothing | 204; the runtime re-fetches the page and morphs every Region | redirect back to the page |
-| JSX with `<Region>`s | those Regions are morphed in (if none match, the page's Regions are refreshed) | redirect back to the page |
-| [redirect](api:yerd.redirect)`("/x")` | the runtime navigates there | the browser follows the redirect |
-| anything else (`res()`, a number, an object) | sent as a normal response | sent as a normal response |
+| nothing | 204; every Region on the page is refreshed | redirect back |
+| JSX with `<Region>`s | those Regions morph in (none matching: all refresh) | redirect back |
+| [redirect](api:yerd.redirect)`("/x")` | the runtime navigates there | followed |
+| anything else (`res()`, a number, an object) | sent as is | sent as is |
 
-Returning nothing is the easy default: every Region on the page refreshes. Returning the Regions you changed saves a second request.
+Returning nothing is simplest; returning the changed Regions saves a request.
 
 ## Actions with arguments
 
-To pass data like an id, write the call: `action={() => this.remove({ id })}`. It's an ordinary method call, so TypeScript checks the arguments like any other.
+To bind data like an id, write the call: `action={() => this.remove({ id })}`, type-checked like any call.
 
 ```tsx
 import { Region, action, get, route, type Action } from "@toyz/yerd";
@@ -139,23 +138,20 @@ export class List {
 }
 ```
 
-The lambda runs while the page renders, but the action doesn't. yerd records which action it called and with what, and signs that into the form's token, so a visitor can't change the id. The signature proves the request came from a page you rendered. It doesn't prove the user may touch that id, so still check ownership in the action.
-
-- An action that takes no arguments can be passed as is: `action={this.add}`. One that takes arguments must be called; `action={this.remove}` doesn't compile.
-- Pass actions down to components typed as [Action](api:yerd.Action)`<Args>` and call them the same way.
-- An action that reads the form takes it from the lambda: `action={({ form }) => this.rename({ id }, form)}`.
-- [bind](api:yerd.bind)`(this.remove, { id })` is the same thing as a value, if you'd rather build it outside JSX.
+- The lambda runs at render; the call's arguments are signed into the token, so a visitor can't change them. Still check the user owns the id ([action tokens](15-security.md#action-tokens)).
+- An action without arguments is passed as is (`action={this.add}`); one with arguments must be called.
+- Pass actions to components typed as [Action](api:yerd.Action)`<Args>`.
+- To pass the form on: `action={({ form }) => this.rename({ id }, form)}`.
+- [bind](api:yerd.bind)`(this.remove, { id })` does the same outside JSX.
 
 ### What the lambda gets
 
-The lambda's one parameter has five things; take the ones you need.
-
 | | Is | Read |
 |---|---|---|
-| `el` | the element the action is on (the form, for a form) | when the action fires, in the browser |
-| `ref(selector)` | another element on the page, by CSS selector | when the action fires, in the browser |
-| `drag` | for `trigger="drop"`: the element that was dropped | when it lands, in the browser |
-| `ctx` | the request rendering the page: params, query, session | now, on the server |
+| `el` | the element the action is on (the form, for a form) | in the browser, when it fires |
+| `ref(selector)` | another element on the page, by CSS selector | in the browser, when it fires |
+| `drag` | for `trigger="drop"`: the element that was dropped | in the browser, when it lands |
+| `ctx` | the request rendering the page: params, query, session | on the server, now |
 | `form` | a stand-in to pass to actions that take a form | |
 
 ```tsx
@@ -164,12 +160,14 @@ The lambda's one parameter has five things; take the ones you need.
 <div action={({ ctx }) => this.more({ page: Number(ctx.query.get("page") ?? 1) + 1 })} trigger="visible" />
 ```
 
-`el`, `drag` and `ref()` offer `value`, `valueAsNumber`, `checked`, `selectedIndex`, `open`, `disabled`, `textContent`, `id`, `name`, `scrollTop`, `scrollLeft`, `dataset.*` and `data(name)` (a `data-*` attribute, typed `string` even with `noUncheckedIndexedAccess` on). Their values don't exist yet when the page renders: the browser reads them when the action fires and sends them along. So pass them straight into the arguments. `el.value.trim()` or `` `${el.value}!` `` throws while rendering, with a message saying so. Do that work in the action instead.
+- `el`, `drag` and `ref()` offer `value`, `valueAsNumber`, `checked`, `selectedIndex`, `open`, `disabled`, `textContent`, `id`, `name`, `scrollTop`, `scrollLeft`, `dataset.*` and `data(name)` (a `data-*` attribute, as a `string`).
+- They're read when the action fires, so pass them straight into the arguments: `el.value.trim()` throws at render.
+- `checked`, `open` and `disabled` arrive as booleans, the numeric ones as numbers, the rest as strings.
 
 > [!NOTE]
-> Where `el` / `ref()` / `drag` values go is signed: they can only fill the spots you put them in. What they contain comes from the browser, like any form field, so validate them (`parse(Dto, args)` in the action does it in one line; see [security](15-security.md#values-the-browser-fills-in)). They arrive typed: `checked`, `open` and `disabled` as booleans, the numeric ones as numbers, the rest as strings. They need the client runtime; a plain form post can't fill them and gets a 400.
+> Their contents are browser input: validate them ([values the browser fills in](15-security.md#values-the-browser-fills-in)). A plain form post can't fill them and gets a 400.
 
-An element with a `name` also sends its own value as a form field, the way it would inside a form. So an input's action can read it from the `ActionForm` instead of the lambda:
+An element with a `name` also sends its value as a form field:
 
 ```tsx
 import { ActionForm, Region, action, get, route } from "@toyz/yerd";
@@ -197,27 +195,25 @@ export class Notes {
 
 | Where | Fires | Without JavaScript |
 |---|---|---|
-| `<form action={...}>` | on submit; the fields arrive as `ActionForm` | works: a normal POST |
-| `<button formaction={...}>` | when that button submits its form ("Save" and "Delete" side by side) | works |
-| `<form action={...} trigger="...">` | on submit, and also on the trigger (search as you type) | works on submit |
+| `<form action={...}>` | on submit, with the fields as `ActionForm` | works |
+| `<button formaction={...}>` | when that button submits its form | works |
+| `<form action={...} trigger="...">` | on submit and on the trigger | on submit |
 | any element, `action={...}` | on `trigger`, default `"click"` | doesn't fire |
 
-Forms are still the default for anything that must work everywhere: a form posts with JavaScript off, so it works before (and without) the runtime. Everything else is the runtime posting the action for you, with the same token and the same responses: Regions morph in, a redirect navigates, nothing refreshes the page's Regions.
+Use a form for anything that must work without JavaScript. From your own script, `requestSubmit()` sends a rendered action form.
 
 ### Triggers
 
 | `trigger` | Fires |
 |---|---|
 | `"click"` (default) | on click |
-| any DOM event: `"change"`, `"keyup"`, `"focusout"`, `"dblclick"`, a custom one... | when the element (or something inside it) fires it |
-| `"input 250ms"` | after the events stop for that long (debounced) |
+| any DOM event: `"change"`, `"keyup"`, `"dblclick"`, a custom one... | when the element or a descendant fires it |
+| `"input 250ms"` | once the events stop for that long |
 | `"keydown:Enter"` | only for that key |
-| `"drop"` | when a `draggable` element is dropped on it; the lambda's `drag` is that element |
-| `"visible"` | when the element scrolls into view (200px early), once per render |
+| `"drop"` | when a `draggable` is dropped on it (see [drag and drop](#drag-and-drop)) |
+| `"visible"` | on scrolling into view (200px early), once per render |
 | `"load"` | as soon as the page has it, once per render |
-| `"every 5s"` | on a timer, while it's on the page and the tab is visible |
-
-A newer run cancels an older one still in flight, so a typeahead never shows stale results. "Once per render" means a `visible` or `load` element fires again only when a response gives it a new action, which is how infinite scroll keeps going.
+| `"every 5s"` | on a timer (250 ms minimum), while the tab is visible |
 
 ```tsx
 <input name="todo" action={this.add} trigger="keydown:Enter" />                     {/* Enter adds; other keys type */}
@@ -226,15 +222,15 @@ A newer run cancels an older one still in flight, so a typeahead never shows sta
 <li class="row" action={() => this.open({ id })} trigger="dblclick">{title}</li>
 ```
 
-- Key names are `KeyboardEvent.key` values: `Enter`, `Escape`, `ArrowDown`, `a`. A filtered key's default action is prevented, so `keydown:Enter` in a form doesn't also submit it.
-- `every` never runs faster than every 250 ms, and pauses while the tab is hidden.
-- When a response changes an element's trigger (`every 2s` to none, a new debounce), the runtime follows the change. That's how a poll stops once the job is done: see [poll a long job](16-recipes.md#poll-a-long-job-until-its-done) and [load a slow panel](16-recipes.md#load-a-slow-panel-after-the-page).
-- When actions nest (a button inside a clickable card), the innermost one wins: a click on the button doesn't also fire the card's action. The event still bubbles on to your own listeners.
-- `data-yx-confirm="Sure?"` asks before any action fires, on any element, not only forms.
+- A newer run cancels one still in flight, so results never arrive stale.
+- "Once per render": again only when a response gives the element a new action.
+- Keys are `KeyboardEvent.key` values; a filtered key's default is prevented, so `keydown:Enter` doesn't also submit.
+- A response can change or remove the trigger, so a poll can stop itself: see [poll a long job](16-recipes.md#poll-a-long-job-until-its-done) and [load a slow panel](16-recipes.md#load-a-slow-panel-after-the-page).
+- Nested actions: the innermost wins, and the event still bubbles to your own listeners.
 
 ### Typeahead
 
-Search as the user types, 200 ms after they stop. Without JavaScript it's an ordinary search form.
+Search 200 ms after typing stops; without JavaScript it's a plain search form.
 
 ```tsx
 import { Region, action, get, query, route } from "@toyz/yerd";
@@ -277,11 +273,11 @@ export class People {
 }
 ```
 
-The newest keystroke cancels a search still in flight, so results never arrive out of order. `el.value` is whatever the visitor typed: the action treats it as untrusted text, like a query parameter.
+Treat `el.value` as untrusted text, like a query parameter.
 
 ### Drag and drop
 
-Make things `draggable="true"` and give the place they land an action with `trigger="drop"`. The lambda's `drag` is whatever was dropped, so a kanban board is a column per status:
+Make things `draggable="true"` and give the target an action with `trigger="drop"`; the lambda's `drag` is what was dropped.
 
 ```tsx
 import { Region, type Action } from "@toyz/yerd";
@@ -310,34 +306,27 @@ function Column({ status, cards, move }: { status: Status; cards: Card[]; move: 
 }
 ```
 
-While a drag is on, the dragged element has `data-yx-dragging` and the target under it `data-yx-over`, so CSS can show what's happening:
+During a drag, the dragged element has `data-yx-dragging` and the target `data-yx-over`:
 
 ```css
 [data-yx-dragging] { opacity: 0.4; }
 [data-yx-over] { outline: 2px dashed currentColor; }
 ```
 
-What a target takes:
-
 | `trigger` | Takes |
 |---|---|
 | `"drop"` | any of the page's `draggable` elements |
-| `"drop:.task"` | only draggables matching the selector (keep cards out of the trash, notes out of the board) |
-| `"drop:files"` | files dragged in from the desktop, filtered by the element's `accept` |
+| `"drop:.task"` | only draggables matching the selector |
+| `"drop:files"` | files from the desktop, filtered by the element's `accept` |
 
-The runtime handles the fiddly parts:
-- A target never takes a drop of itself or of something inside it. Drop a card on itself and the column around it gets the drop instead.
-- When targets nest, the innermost one that accepts the drag wins.
-- Text, links and images dragged in from elsewhere are left to the browser.
-- If the page has a file zone, a file dropped next to it doesn't make the browser navigate away to the file.
-- Folders are skipped, and files `accept` refuses are left out with a notice.
-- The marks are cleaned up if the drag is cancelled, leaves the window, or the dragged element is morphed away mid-drag.
-
-Drag and drop needs the client runtime, so give important moves another way in too (a select, or buttons). `drag.data("id")` is read in the browser when the card lands, so validate it in the action. The [kanban recipe](16-recipes.md#kanban-drag-and-drop) puts it all together: the board service, ordering, a bin, button fallbacks, validation and live updates.
+- A target never takes a drop of itself or its contents: a card dropped on itself goes to the column.
+- When targets nest, the innermost that accepts the drag wins.
+- It needs the runtime, so give important moves another way in (a select, buttons). Validate `drag.data("id")`.
+- The [kanban recipe](16-recipes.md#kanban-drag-and-drop) has the full board.
 
 ### Dropping files
 
-A `drop:files` target posts the files straight to its action as soon as they land. They arrive as multipart, under `files`:
+A `drop:files` target posts files to its action as they land, as multipart under `files`:
 
 ```tsx
 import { ActionForm, Region, UnsupportedMediaType, action, get, route } from "@toyz/yerd";
@@ -372,7 +361,7 @@ export class Inbox {
 }
 ```
 
-To collect files first and upload them with the rest of a form, point a zone at a file input with `dropTo`. Dropped files are added to the input (drop five, then five more: ten), filtered by its `accept`, kept to one unless it's `multiple`, and sent when the form submits:
+To send them with a form instead, point a zone at a file input with `dropTo`:
 
 ```tsx
 <form action={this.post} enctype="multipart/form-data">
@@ -383,11 +372,14 @@ To collect files first and upload them with the rest of a form, point a zone at 
 </form>
 ```
 
-The action reads them like any upload: `form.files("photos")`, or `is.files()` in a DTO. The zone gets `data-yx-files="<count>"` while the input holds files, so CSS can show it (`.dropzone[data-yx-files]::after { content: attr(data-yx-files) " ready" }`). The input still works on its own, with or without JavaScript. Mind the app's `bodyLimit` (1 MiB by default) when taking many or big files. The [photo upload recipe](16-recipes.md#upload-photos-with-a-form) has the whole form, with validation and limits.
+- Drops add to the input's files, filtered by its `accept` and kept to one unless it's `multiple`. Folders are skipped; refused files are left out with a notice.
+- The action reads them like any upload: `form.files("photos")`, or `is.files()` in a DTO.
+- The zone gets `data-yx-files="<count>"` while the input holds files.
+- Mind `bodyLimit` (1 MiB by default); see the [photo upload recipe](16-recipes.md#upload-photos-with-a-form).
 
 ### Infinite scroll
 
-A `<Region append>` in a response adds its children to the end of the Region on the page instead of replacing them (`prepend` adds them first, for newest-on-top feeds). Children with an id or key that's already there are updated in place. Put a sentinel at the bottom that loads the next page when it scrolls into view, and send back a new sentinel each time:
+`<Region append>` in a response adds its children to the end (`prepend`: the start), updating any whose id or key is already there. A `visible` sentinel loads the next page and is replaced each time:
 
 ```tsx
 import { Region, action, between, get, query, route, toInt, type Action } from "@toyz/yerd";
@@ -432,24 +424,22 @@ export class Feed {
 }
 ```
 
-The sentinel holds a plain link to the next page, so without JavaScript "Older posts" still pages through the feed. With it, each response appends ten posts and replaces the sentinel with the next one; the last page sends an empty `more` Region, and loading stops.
-
-For things the triggers don't cover, `data-yx-submit` on a checkbox or select submits its form on change, `requestSubmit()` on a rendered action form sends it from your own script, and [Local](#local-state-no-server-at-all) state handles what never needs the server.
+The last page sends an empty `more` Region, which stops it.
 
 ## Reading the form
 
-[ActionForm](api:yerd.ActionForm) gives you typed access to the fields:
+[ActionForm](api:yerd.ActionForm) reads the submitted fields:
 
 | Method | Returns |
 |---|---|
 | `get(name)` | the first value, or `undefined` |
 | `string(name)` | the first value; a 400 if it's missing |
 | `all(name)` | every value of a repeated field |
-| `has(name)` | whether the field was sent (handy for checkboxes) |
-| `parse(Dto)` | the form validated into a DTO class; a 400 listing every issue otherwise |
+| `has(name)` | whether it was sent (checkboxes) |
+| `parse(Dto)` | the form validated into a DTO; a 400 listing every issue otherwise |
 | `file(name)` / `files(name)` | uploaded `File`s (an empty file input counts as none) |
 
-`parse()` is usually what you want. Uploads join the fields, so DTOs can use `is.file()` (see [request data](03-request-data.md)).
+`parse()` is usually what you want; DTOs take uploads with `is.file()` (see [request data](03-request-data.md)).
 
 ```tsx
 import { ActionForm, action, get, is, length, route, trim } from "@toyz/yerd";
@@ -479,18 +469,11 @@ export class ProfilePage {
 }
 ```
 
-Give file forms `enctype="multipart/form-data"`: the runtime switches to multipart on its own, but the browser needs it when JavaScript is off.
+Give file forms `enctype="multipart/form-data"` for when JavaScript is off.
 
 ### Errors
 
-Throw a [YerdError](api:yerd.YerdError) (or let `parse()` throw one) and, with JavaScript, its message is written into the form's `[data-yx-error]` element.
-
-Validation failures go by field. Each invalid field gets `aria-invalid="true"` (style it with `[aria-invalid="true"]`), the first one is focused, and its message goes:
-
-- into `[data-yx-error="title"]` if the form has a box for that field, or
-- into the form's own `[data-yx-error]`, labelled with the field: "Title: Can't be empty" (the field's `<label>`, or its name).
-
-An issue about one item of a list (`photos[0]`, `tags[1]`) goes to the list's field (`photos`) unless the form has a box for the item itself.
+With JavaScript, a thrown [YerdError](api:yerd.YerdError) (from `parse()` too) shows its message in the form's `[data-yx-error]`.
 
 ```tsx
 <form action={this.save}>
@@ -505,9 +488,12 @@ An issue about one item of a list (`photos[0]`, `tags[1]`) goes to the list's fi
 </form>
 ```
 
-Everything is cleared on the next submit.
+- Invalid fields get `aria-invalid="true"`, and the first is focused.
+- A field's message goes into its `[data-yx-error="field"]`, else the form's box, labelled with the field's `<label>` or name.
+- An issue on a list item (`photos[0]`) goes to the list's box unless the item has one.
+- All of it clears on the next submit. Expired tokens are handled for you: see [stale pages](15-security.md#stale-pages).
 
-Where there's no `[data-yx-error]` (a form without one, an action on a button or input), the runtime shows the message in a small notice at the bottom of the page. It also does when the server can't be reached. To show notices your own way, listen for `yx:notice` and call `preventDefault()`; the message is `event.detail.message`:
+With no `[data-yx-error]`, or the server unreachable, a small notice shows the message. To replace it, handle `yx:notice`:
 
 ```tsx
 // in the root layout's <head>, after <Scripts />
@@ -522,16 +508,14 @@ Where there's no `[data-yx-error]` (a form without one, an action on a button or
 `}</script>
 ```
 
-Give the page a `<div id="toast" role="status" hidden></div>` for it to fill.
-
-If the server restarted with a different secret, was redeployed, or the page sat open past the token's lifetime, the page's actions are stale. The runtime notices, re-fetches the page with fresh tokens and tells the user to try again (the action didn't run, so that's safe). In development the secret is kept in `node_modules/.cache/yerd/secret`, so restarting the dev server doesn't break the open page at all.
+Give the page a `<div id="toast" role="status" hidden></div>` to fill.
 
 > [!WARNING]
-> Without JavaScript, a thrown error renders the error page instead. For forms that must work either way, catch the error, store a message with `session.flash()`, and `return redirect()` back to the form. The [per-field form errors recipe](16-recipes.md#per-field-form-errors) does it with each message under its field.
+> Without JavaScript, a thrown error renders the error page. To work either way, `session.flash()` a message and `return redirect()`: see the [per-field form errors recipe](16-recipes.md#per-field-form-errors).
 
 ## Submit buttons with their own action
 
-`formaction={action}` on a submit button posts to that action instead of the form's. Use it for "Save" and "Delete" in one form.
+`formaction={action}` on a submit button posts to that action instead of the form's.
 
 ```tsx
 <form action={this.save}>
@@ -541,11 +525,11 @@ If the server restarted with a different secret, was redeployed, or the page sat
 </form>
 ```
 
-The button submits the token as its own `name="_yx"` value, so it can't have a `name` or `value` of its own.
+The button can't have its own `name` or `value`: it submits the token.
 
 ## Form helpers
 
-Small behaviours, switched on with attributes:
+Small behaviours switched on by attribute:
 
 | Attribute | On | Does |
 |---|---|---|
@@ -564,11 +548,11 @@ Small behaviours, switched on with attributes:
 </form>
 ```
 
-While a form is in flight it gets `aria-busy="true"` and its enabled buttons are disabled. Elements a morph inserts get `data-yx-new` (for entrance animations), and a form inside a `<details>` closes it on success.
+A form in flight gets `aria-busy="true"` with its buttons disabled, a form in a `<details>` closes it on success, and elements a morph inserts get `data-yx-new` (for entrance animations).
 
 ## Boosted links
 
-Add `data-yx-boost` to a link, or to any element around links, and clicks fetch the next page and morph `<body>` instead of reloading.
+`data-yx-boost` on a link or an ancestor makes clicks fetch the page and morph `<body>` instead of reloading.
 
 ```tsx
 <nav data-yx-boost>
@@ -579,11 +563,12 @@ Add `data-yx-boost` to a link, or to any element around links, and clicks fetch 
 </nav>
 ```
 
-The URL is pushed to history, Back and Forward work, and scroll position is restored. Links with a `target`, `download` or `rel="external"` are left alone, and `data-yx-boost="false"` opts a subtree out.
+- History, Back/Forward and scroll position work.
+- Links with `target`, `download` or `rel="external"` are left alone; `data-yx-boost="false"` opts a subtree out.
 
 ## Live refresh
 
-Point `data-yx-live` at a Server-Sent Events route, and every message refreshes the page's Regions. Combine it with a per-user channel and every open tab stays in sync.
+Point `data-yx-live` at a Server-Sent Events route and every message refreshes the page's Regions.
 
 ```tsx
 import { Channels, get, inject, route, signal, sse } from "@toyz/yerd";
@@ -602,14 +587,13 @@ export class TodoEvents {
 <div data-yx-live="/todos/events" hidden></div>
 ```
 
-Publish to `"todos"` after any change and every connected page refreshes. See [streaming and live](07-streaming-and-live.md) for channels, per-user feeds and SSE details.
-
-> [!NOTE]
-> Only plain `data:` messages trigger a refresh. Events sent with an `event:` name (`event({ event: "x", ... })`) are ignored by `data-yx-live`. A dropped connection that comes back also triggers a refresh, since messages may have been missed.
+- Publish to `"todos"` after a change to refresh every connected page; see [streaming and live](07-streaming-and-live.md).
+- Only plain `data:` messages refresh; named events are ignored.
+- A reconnect also refreshes, in case messages were missed.
 
 ## Auto mode
 
-Don't want to sprinkle attributes? `<Scripts auto />` makes the runtime handle every same-origin link and form on its own.
+`<Scripts auto />` makes the runtime handle every same-origin link and form without attributes.
 
 ```tsx
 <head>
@@ -617,11 +601,10 @@ Don't want to sprinkle attributes? `<Scripts auto />` makes the runtime handle e
 </head>
 ```
 
-- Every same-origin link is boosted (files, other origins, `target`, `download` and `rel="external"` excepted).
-- Every same-origin form goes through `fetch`. Plain forms posting to a normal `@post` route have their redirects followed, and the page they land on is morphed in. So a classic form-and-redirect app gets in-place updates without Regions.
-- With a mouse, the runtime watches the pointer: when it slows down heading for a link, that page is prefetched before the click.
-
-`data-yx-boost="false"` still opts anything out. Nothing changes on the server.
+- Links are boosted, with the same exceptions as `data-yx-boost`.
+- Forms go through `fetch`; a plain form to a `@post` route has its redirect followed and morphed in, so no Regions are needed.
+- A link the mouse slows down toward is prefetched.
+- `data-yx-boost="false"` still opts out.
 
 ## Prefetching
 
@@ -634,14 +617,16 @@ The `prefetch` prop warms the next page before the click.
 <section prefetch={{ url: "/api/stats", as: "json", on: "visible" }}>...</section>
 ```
 
-Boosted links use the runtime's own cache (entries live 15 seconds and are used once). Ordinary links get a `<link rel="prefetch">`. A JSON prefetch is served to `window.yerd.net.fetch(url)` from client code. Every action empties the cache, so a page warmed before signing in (or before any change) is never shown after it. A page the browser restores from its back/forward memory is fetched again too.
+- Boosted links use the runtime's cache (15 seconds, used once); others get a `<link rel="prefetch">`.
+- A JSON prefetch answers `window.yerd.net.fetch(url)`.
+- Every action empties the cache, so nothing warmed before a change is shown after it.
 
 > [!WARNING]
-> Prefetches are real GET requests, sent before anyone clicks. GET handlers must not change anything. Prefetch requests carry a `yx-prefetch: 1` header if you need to tell them apart.
+> Prefetches are real GETs sent before any click, so GET handlers must not change anything. They carry `yx-prefetch: 1`.
 
 ## Local state: no server at all
 
-Some interactivity never needs the server: a toggle, a tab strip, a counter for a form you haven't submitted. [`Local`](api:yerd.Local) gives a piece of the page its own state that lives in the browser. No request, no build step.
+[`Local`](api:yerd.Local) gives part of the page browser-side state for things that never need the server.
 
 ```tsx
 import { Local, not } from "@toyz/yerd";
@@ -665,17 +650,16 @@ export function Details() {
 }
 ```
 
-- Reading a field (`s.likes`, `s.user.name`) renders its value on the server and keeps that spot in step in the browser: text, attributes (`hidden`, `aria-*`, `value`, `checked`) and class flags (`class={{ liked: s.likes }}`). [`not`](api:yerd.not) inverts a boolean.
-- `on*` handlers (`onClick`, `onInput`...) inside a `Local` run in the browser against the state; after each one the bindings refresh. Pushing to an array or editing a nested object just works. Outside a `Local`, handler functions render nothing: use an action.
-- `s` is typed from `state`, so `s.likes++` and `hidden={s.open}` are checked by the compiler.
-- Each `Local` has its own copy, so the same component can appear many times.
+- A field read (`s.likes`, `s.user.name`) renders on the server and stays in step in the browser, in text, attributes and class flags. [`not`](api:yerd.not) inverts a boolean.
+- `on*` handlers run in the browser against the state, then bindings refresh. Outside a `Local` they render nothing.
+- `s` is typed from `state`; each `Local` has its own copy.
 
 > [!WARNING]
-> Handlers are sent to the browser as their source, so they can use the state (by the render prop's parameter name) and their event argument, nothing else from the server: no imports, no outer variables. A binding is a direct field read: `{s.count * 2}` renders the starting value but won't update, so compute it in the handler into another field. Compiling handlers needs `'unsafe-eval'` if you run a strict Content-Security-Policy.
+> Handlers are sent as source: they see only the state (by the render prop's parameter name) and their event, no imports or outer variables. A binding must be a direct field read: `{s.count * 2}` won't update. Strict CSPs need `'unsafe-eval'` ([client-side code](15-security.md#client-side-code)).
 
 ### Comparing: eq()
 
-A binding is a direct field read, so `s.slide === 2` can't stay in step. [eq](api:yerd.eq) can: `eq(s.slide, 2)` is true while the field equals the value, and works anywhere a boolean binding does, inside `not()` and class flags too. That's enough for tabs, steppers and an image slider:
+[eq](api:yerd.eq)`(s.slide, 2)` is a boolean binding, true while the field equals the value; it works in `not()` and class flags too.
 
 ```tsx
 import { Local, eq, not } from "@toyz/yerd";
@@ -701,11 +685,11 @@ function Gallery({ photos }: { photos: string[] }) {
 }
 ```
 
-Handlers can't see outer variables like `n` (they're sent as text), so the count goes in the state and each thumbnail carries its index in `data-n`.
+Handlers can't see `n`, so the count is in the state and each thumbnail carries `data-n`.
 
 ### Keeping it across reloads
 
-Local state is gone on reload unless you give it a key. `persist` saves it in the browser's storage after every handler and loads it back when the page starts:
+`persist` saves the state to browser storage after every handler and restores it on load.
 
 ```tsx
 <Local state={{ theme: "light", collapsed: false }} persist="prefs">
@@ -713,14 +697,14 @@ Local state is gone on reload unless you give it a key. `persist` saves it in th
 </Local>
 ```
 
-- `persist="prefs"` uses localStorage; `persist={{ key: "prefs", storage: "session" }}` uses sessionStorage (this tab only, cleared when it closes).
-- Saved values are merged over `state`, so a field you add later starts at its default.
-- Every `Local` with the same key stays in step: in this page, and in other open tabs.
-- The server still renders the defaults (it can't see the browser's storage), so saved values appear once the runtime starts. For state the server needs to render, keep it on the server: a field in the session (per visitor) or your database, changed through an action.
+- `persist="prefs"` uses localStorage; `persist={{ key: "prefs", storage: "session" }}` uses sessionStorage (this tab only).
+- Saved values merge over `state`, so new fields start at their defaults.
+- `Local`s sharing a key stay in step, across tabs too.
+- The server renders the defaults; saved values appear once the runtime starts. State the server must render belongs in the session or database.
 
 ## Custom attributes
 
-[attribute](api:yerd.attribute) defines your own attribute with an optional server half (`render`: what the prop renders as) and client half (`client`: runs in the browser for each element that has it).
+[attribute](api:yerd.attribute) defines your own attribute: an optional `render` (what it renders as) and `client` (runs in the browser per element).
 
 ```tsx
 import { attribute } from "@toyz/yerd";
@@ -745,22 +729,16 @@ declare module "@toyz/yerd" {
 const button = <button tooltip="Delete this todo">x</button>;
 ```
 
-- The client half connects when an element with the attribute appears (first load, a morph, a boosted page), gets `update` when the value changes, and `disconnect` when it goes away.
-- It can return nothing, a cleanup function, or `{ update, disconnect }`. Its third argument is the runtime API ([YerdClient](api:yerd.YerdClient)), grouped by job: `yerd.page` (`refresh()`, `load(url, push)`, `apply(html)`, `morph(from, to)`), `yerd.net` (`prefetch(url)`, `fetch(url)`) and `yerd.clock` (`now()`, `sync()`).
-- Define attributes at module level in a file the server imports. Names are lowercase words joined by dashes.
-- A client half that needs imports can be a module instead, loaded only where it's used: see [lazy attribute halves](17-client-code.md#lazy-attribute-halves).
+- `client` runs when an element with the attribute appears (load, morph, boosted page) and may return nothing, a cleanup, or `{ update, disconnect }`.
+- Its third argument is the runtime API, [YerdClient](api:yerd.YerdClient): `yerd.page` (`refresh()`, `load()`, `apply()`, `morph()`), `yerd.net` (`prefetch()`, `fetch()`) and `yerd.clock` (`now()`, `sync()`).
+- Define attributes at module level in a file the server imports; names are lowercase and dashed.
+- A client half that needs imports can be a module: see [lazy attribute halves](17-client-code.md#lazy-attribute-halves).
 
 > [!WARNING]
-> The client half is shipped to the browser as source text (`fn.toString()`). It must be self-contained: no imports, and no variables from the surrounding module. Everything it needs comes in through `(el, value, yerd)`.
+> The client half is shipped as source: no imports or module variables, only `(el, value, yerd)`.
 
-For bigger client code (a chart, an editor, a custom element), see [Client code](17-client-code.md).
+For bigger client code, see [Client code](17-client-code.md).
 
 ## Security in brief
 
-You don't add CSRF tokens; actions carry their own.
-
-- **Signed tokens.** The `_yx` token is HMAC-signed with your app secret, so nobody can call another action or change bound arguments.
-- **Expiring and session-bound.** Tokens expire (`actionTtl`, a day by default) and, with sessions on, only work in the session they were rendered for. Expired forms get a 403 asking the user to reload.
-- **Cross-site checks.** Every POST, PUT, PATCH and DELETE from another site is refused with 403.
-
-Set `YERD_SECRET` in production, or forms break on every restart. Details, options, rotation and a checklist are in the [security guide](15-security.md).
+Actions need no CSRF tokens: `_yx` is signed, expires (`actionTtl`, a day) and is session-bound, and cross-site writes are refused ([security](15-security.md)). Set `YERD_SECRET` in production or forms break on restart.
