@@ -1,15 +1,8 @@
 /// <reference types="vite/client" />
 import {
-  Local, Region, Scripts, Stylesheet, action, bind, get, not, route, session, yerd,
+  Local, Region, Scripts, Stylesheet, action, bind, get, route, session, yerd,
   type Action, type Child, type LayoutProps, type Session,
 } from "@toyz/yerd";
-
-// What this app keeps in a visitor's session: their own counts, by counter id.
-declare module "@toyz/yerd" {
-  interface SessionData {
-    mine?: Record<string, number>;
-  }
-}
 
 function RootLayout({ children, meta }: LayoutProps) {
   return (
@@ -28,29 +21,54 @@ function RootLayout({ children, meta }: LayoutProps) {
 }
 
 const LABELS: Record<string, string> = { coffee: "Coffees", bugs: "Bugs fixed", deploys: "Deploys", yerds: "Yerds" };
+const IDS = Object.keys(LABELS);
 
 /** Shared by everyone: one count per counter, in this process. */
-const shared = new Map<string, number>(Object.keys(LABELS).map((id) => [id, 0]));
+const shared = new Map<string, number>(IDS.map((id) => [id, 0]));
+
+/** What this page keeps in a visitor's session: their own counts, by counter id. */
+interface Counts {
+  mine?: Record<string, number>;
+}
+
+/** Where a counter keeps its count. */
+type Store =
+  | { kind: "shared" | "session"; value: number; bump: Action<{ id: string }> }
+  | { kind: "tab" | "browser" };
 
 /**
- * One counter card. Two things let several live on one page:
- * - its Region id is unique (`shared-bugs`, `mine-bugs`), so a response
- *   carrying one morphs that counter and nothing else;
- * - its form is bound to *this* counter with bind(): the action receives
- *   `{ id }`, signed, so the browser can't change which one it bumps.
- * `bump` is typed as an Action taking `{ id }`, so passing the wrong action
- * (or binding the wrong arguments) doesn't compile.
+ * One counter, wherever its count lives. Server stores (shared, session)
+ * post an action and get back just this counter: its Region id is unique
+ * (`shared-bugs`) and its form is bound to this counter with bind(), signed,
+ * so the browser can't change which one it bumps. Client stores (tab,
+ * browser) are a <Local>: clicks never leave the page, and "browser" keeps
+ * the count in localStorage across reloads.
  */
-function Counter({ scope, id, value, bump }: { scope: string; id: string; value: number; bump: Action<{ id: string }> }) {
+function Counter({ id, store }: { id: string; store: Store }) {
+  const big = "text-5xl font-black tabular-nums text-orange-600";
+  if (store.kind === "shared" || store.kind === "session") {
+    return (
+      <Card label={LABELS[id] ?? id}>
+        <Region id={`${store.kind}-${id}`} class={big}>
+          {/* A new key per value, so the runtime inserts a fresh element and data-[yx-new] animates it. */}
+          <span key={store.value} class="inline-block data-[yx-new]:animate-bounce">{store.value}</span>
+        </Region>
+        <form action={bind(store.bump, { id })}>
+          <PlusButton />
+        </form>
+      </Card>
+    );
+  }
   return (
     <Card label={LABELS[id] ?? id}>
-      <Region id={`${scope}-${id}`} class="text-5xl font-black tabular-nums text-orange-600">
-        {/* A new key per value, so the runtime inserts a fresh element and data-[yx-new] animates it. */}
-        <span key={value} class="inline-block data-[yx-new]:animate-bounce">{value}</span>
-      </Region>
-      <form action={bind(bump, { id })}>
-        <PlusButton />
-      </form>
+      <Local state={{ count: 0 }} persist={store.kind === "browser" ? `counter-${id}` : undefined}>
+        {(s) => (
+          <>
+            <span class={big}>{s.count}</span>
+            <PlusButton onClick={() => s.count++} />
+          </>
+        )}
+      </Local>
     </Card>
   );
 }
@@ -64,9 +82,13 @@ function Card({ label, children }: { label: string; children: Child }) {
   );
 }
 
-function PlusButton() {
+/** A form's submit button (server stores), or a click handler (inside a <Local>). */
+function PlusButton({ onClick }: { onClick?: () => unknown }) {
   return (
-    <button class="rounded-xl bg-orange-600 px-4 py-2 font-semibold text-white shadow transition hover:bg-orange-500 active:translate-y-px">
+    <button
+      class="rounded-xl bg-orange-600 px-4 py-2 font-semibold text-white shadow transition hover:bg-orange-500 active:translate-y-px"
+      onClick={onClick}
+    >
       +1
     </button>
   );
@@ -86,7 +108,8 @@ function Section({ title, note, children }: { title: string; note: string; child
 
 @route("/", { meta: { title: "Tailwind in yerd" } })
 export class Home {
-  @session accessor session!: Session;
+  // Session<Counts>: get/set only take Counts' fields, typed.
+  @session accessor session!: Session<Counts>;
 
   get mine(): Record<string, number> {
     return this.session.get("mine") ?? {};
@@ -99,50 +122,23 @@ export class Home {
           <h1 class="text-4xl font-bold tracking-tight sm:text-6xl">
             Tailwind, <span class="text-orange-600">yerd</span> style
           </h1>
-          <p class="text-lg text-stone-600 dark:text-stone-400">Three kinds of state, one page.</p>
+          <p class="text-lg text-stone-600 dark:text-stone-400">One counter component, four places to keep its count.</p>
         </div>
 
         <Section title="Shared" note="Server state everyone sees. Open a second browser: same numbers.">
-          {[...shared.keys()].map((id) => (
-            <Counter scope="shared" id={id} value={shared.get(id)!} bump={this.bumpShared} />
-          ))}
+          {IDS.map((id) => <Counter id={id} store={{ kind: "shared", value: shared.get(id)!, bump: this.bumpShared }} />)}
         </Section>
 
-        <Section title="Yours" note="Kept in your session: survives a reload, and a different browser has its own.">
-          {Object.keys(LABELS).map((id) => (
-            <Counter scope="mine" id={id} value={this.mine[id] ?? 0} bump={this.bumpMine} />
-          ))}
+        <Section title="Yours" note="Kept in your session on the server: survives a reload, another browser has its own.">
+          {IDS.map((id) => <Counter id={id} store={{ kind: "session", value: this.mine[id] ?? 0, bump: this.bumpMine }} />)}
         </Section>
 
-        <Section title="Local" note="Lives only in this tab: no requests at all, gone on reload.">
-          {Object.keys(LABELS).map((id) => (
-            <Card label={LABELS[id]!}>
-              <Local state={{ count: 0, picked: false }}>
-                {(s) => (
-                  <div class="flex flex-col items-center gap-3">
-                    <span class={{ "text-5xl font-black tabular-nums": true, "text-orange-600": not(s.picked), "text-emerald-600": s.picked }}>
-                      {s.count}
-                    </span>
-                    <div class="flex gap-2">
-                      <button
-                        class="rounded-xl bg-orange-600 px-4 py-2 font-semibold text-white shadow transition hover:bg-orange-500 active:translate-y-px"
-                        onClick={() => s.count++}
-                      >
-                        +1
-                      </button>
-                      <button
-                        class="rounded-xl px-3 py-2 font-semibold ring-1 ring-stone-300 dark:ring-stone-700"
-                        aria-pressed={s.picked}
-                        onClick={() => (s.picked = !s.picked)}
-                      >
-                        ★
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </Local>
-            </Card>
-          ))}
+        <Section title="This tab" note="Local state: no requests at all, gone on reload.">
+          {IDS.map((id) => <Counter id={id} store={{ kind: "tab" }} />)}
+        </Section>
+
+        <Section title="This browser" note="Local state kept in localStorage: no requests, survives a reload, other tabs follow along.">
+          {IDS.map((id) => <Counter id={id} store={{ kind: "browser" }} />)}
         </Section>
       </main>
     );
@@ -152,7 +148,7 @@ export class Home {
   @action bumpShared({ id }: { id: string }) {
     if (!shared.has(id)) return 404;
     shared.set(id, shared.get(id)! + 1);
-    return <Counter scope="shared" id={id} value={shared.get(id)!} bump={this.bumpShared} />;
+    return <Counter id={id} store={{ kind: "shared", value: shared.get(id)!, bump: this.bumpShared }} />;
   }
 
   /** Same, in this visitor's session: the action token is bound to the session too, so it can't be replayed from another. */
@@ -160,7 +156,7 @@ export class Home {
     if (!(id in LABELS)) return 404;
     const mine = { ...this.mine, [id]: (this.mine[id] ?? 0) + 1 };
     this.session.set("mine", mine);
-    return <Counter scope="mine" id={id} value={mine[id]!} bump={this.bumpMine} />;
+    return <Counter id={id} store={{ kind: "session", value: mine[id]!, bump: this.bumpMine }} />;
   }
 }
 
