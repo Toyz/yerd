@@ -758,3 +758,32 @@ describe("@instrument edge cases", () => {
     expect(exits.map((r) => r.fields)).toEqual([{}, { ret: { user: "ada", token: "[redacted]" } }]);
   });
 });
+
+describe("unhandled failures", () => {
+  it("listen() answers a failure past the pipeline with a bare 500 and logs it", async () => {
+    const records: LogRecord[] = [];
+    @route("/bad-header")
+    class BadHeader {
+      @get show() {
+        return "x";
+      }
+    }
+    const server = await yerd({ routes: [BadHeader], services: [], handleSignals: false })
+      .services((s) => s.value(ILogger, { write: (r) => void records.push(r) }))
+      .logging({ filter: "warn" })
+      // A header Node refuses, set where nothing checks it: writing the response throws.
+      .use(async (_ctx, next) => {
+        const out = await next();
+        out.headers["x-bad"] = "a\nb";
+        return out;
+      })
+      .listen(0, "127.0.0.1");
+    try {
+      const r = await fetch(server.url + "/bad-header");
+      expect(r.status).toBe(500);
+      expect(records.filter((rec) => rec.message === "unhandled error")).toHaveLength(1);
+    } finally {
+      await server.close();
+    }
+  });
+});
