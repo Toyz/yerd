@@ -1,0 +1,95 @@
+/**
+ * `YERD_LOG` directives, like Rust's `RUST_LOG`:
+ *
+ * ```
+ * info                       everything at info and above
+ * warn,UserRepo=debug        quiet, except one class
+ * info,yerd::router=debug    yerd's own targets start with yerd::
+ * info,[charge]=trace        a span named charge, and everything inside it
+ * ```
+ *
+ * A target directive matches the target or anything under it (`yerd` covers
+ * `yerd::request`); the longest match wins. Span directives win over target
+ * ones for anything inside a matching span.
+ */
+
+import { LEVELS, type Level } from "./ilogger.js";
+
+type Threshold = number;
+
+export class LogFilter {
+  readonly #base: Threshold;
+  readonly #targets: Array<[prefix: string, threshold: Threshold]>;
+  readonly #spans: Map<string, Threshold>;
+  /** target -> threshold, so the per-call decision is one Map lookup. */
+  readonly #cache = new Map<string, Threshold>();
+
+  constructor(readonly source: string) {
+    let base: Threshold = LEVELS.info;
+    const targets: Array<[string, Threshold]> = [];
+    const spans = new Map<string, Threshold>();
+    for (const raw of source.split(",")) {
+      const part = raw.trim();
+      if (!part) continue;
+      const eq = part.lastIndexOf("=");
+      if (eq === -1) {
+        base = threshold(part);
+        continue;
+      }
+      const name = part.slice(0, eq).trim();
+      const level = threshold(part.slice(eq + 1));
+      if (name.startsWith("[") && name.endsWith("]")) spans.set(name.slice(1, -1), level);
+      else targets.push([name, level]);
+    }
+    // Longest prefix first, so the most specific directive wins.
+    targets.sort((a, b) => b[0].length - a[0].length);
+    this.#base = base;
+    this.#targets = targets;
+    this.#spans = spans;
+  }
+
+  /** The lowest level written for `target`, ignoring span directives. */
+  #thresholdFor(target: string): Threshold {
+    let found = this.#cache.get(target);
+    if (found === undefined) {
+      found = this.#base;
+      for (const [prefix, level] of this.#targets) {
+        if (target === prefix || target.startsWith(`${prefix}::`)) {
+          found = level;
+          break;
+        }
+      }
+      if (this.#cache.size < 1024) this.#cache.set(target, found);
+    }
+    return found;
+  }
+
+  /** Whether a record at `level` for `target`, inside spans named `spans`, is written. */
+  enabled(level: Level, target: string, spans?: Iterable<string>): boolean {
+    const value = LEVELS[level];
+    if (value >= this.#thresholdFor(target)) return true;
+    if (this.#spans.size > 0 && spans) {
+      for (const name of spans) {
+        const spanLevel = this.#spans.get(name);
+        if (spanLevel !== undefined && value >= spanLevel) return true;
+      }
+    }
+    return false;
+  }
+
+  /** True when span directives exist (callers then need to pass span names). */
+  get hasSpanDirectives(): boolean {
+    return this.#spans.size > 0;
+  }
+}
+
+function threshold(text: string): Threshold {
+  const level = text.trim().toLowerCase();
+  if (level in LEVELS) return LEVELS[level as Level | "off"];
+  throw new Error(`Unknown log level "${text}" in YERD_LOG (use trace, debug, info, warn, error or off)`);
+}
+
+/** YERD_LOG, else warn under tests and info otherwise. */
+export function defaultFilter(): string {
+  return process.env.YERD_LOG ?? (process.env.NODE_ENV === "test" ? "warn" : "info");
+}

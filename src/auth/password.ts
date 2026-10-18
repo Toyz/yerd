@@ -1,0 +1,71 @@
+/**
+ * Password hashing with node:crypto.
+ *
+ * argon2id (OWASP's minimum: 19 MiB, 2 passes, 1 lane) via crypto.argon2,
+ * stored in the standard PHC format so parameters can be raised later and old
+ * hashes still verify. scrypt is the fallback where crypto.argon2 is missing,
+ * and verifyPassword reads both.
+ */
+
+import { argon2, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+
+const ARGON = { memory: 19456, passes: 2, parallelism: 1, tagLength: 32 };
+
+function argon2id(password: string, nonce: Buffer, params: typeof ARGON): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    argon2("argon2id", { message: password, nonce, ...params }, (error, key) => (error ? reject(error) : resolve(key)));
+  });
+}
+
+function scryptHash(password: string, salt: Buffer, N: number, r: number, p: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, 32, { N, r, p, maxmem: 128 * N * r * 2 }, (error, key) => (error ? reject(error) : resolve(key)));
+  });
+}
+
+const hasArgon2 = typeof argon2 === "function";
+
+/** Hash a password for storage. */
+export async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16);
+  if (hasArgon2) {
+    const key = await argon2id(password, salt, ARGON);
+    return `$argon2id$v=19$m=${ARGON.memory},t=${ARGON.passes},p=${ARGON.parallelism}$${salt.toString("base64url")}$${key.toString("base64url")}`;
+  }
+  const key = await scryptHash(password, salt, 1 << 15, 8, 1);
+  return `scrypt$32768$8$1$${salt.toString("base64url")}$${key.toString("base64url")}`;
+}
+
+// A real hash of nothing in particular, so a lookup of an unknown user costs the same.
+let dummy: Promise<string> | undefined;
+
+/**
+ * Check a password against a stored hash. Pass `undefined` when the user
+ * doesn't exist: it still runs a full hash, so response timing doesn't reveal
+ * which accounts exist.
+ */
+export async function verifyPassword(password: string, stored: string | undefined): Promise<boolean> {
+  if (stored === undefined) {
+    dummy ??= hashPassword("yerd-dummy-password");
+    await verifyPassword(password, await dummy);
+    return false;
+  }
+  let expected: Buffer;
+  let actual: Buffer;
+  const argonMatch = /^\$argon2id\$v=19\$m=(\d+),t=(\d+),p=(\d+)\$([\w-]+)\$([\w-]+)$/.exec(stored);
+  const scryptMatch = /^scrypt\$(\d+)\$(\d+)\$(\d+)\$([\w-]+)\$([\w-]+)$/.exec(stored);
+  if (argonMatch) {
+    const [, m, t, p, salt, hash] = argonMatch;
+    expected = Buffer.from(hash!, "base64url");
+    actual = await argon2id(password, Buffer.from(salt!, "base64url"), {
+      memory: Number(m), passes: Number(t), parallelism: Number(p), tagLength: expected.length,
+    });
+  } else if (scryptMatch) {
+    const [, N, r, p, salt, hash] = scryptMatch;
+    expected = Buffer.from(hash!, "base64url");
+    actual = await scryptHash(password, Buffer.from(salt!, "base64url"), Number(N), Number(r), Number(p));
+  } else {
+    throw new Error("Unrecognized password hash format");
+  }
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}

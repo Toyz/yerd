@@ -1,0 +1,84 @@
+/**
+ * Turn arbitrary values into something safe to log: never throws, bounded in
+ * size, and with secrets taken out. Used for every field before it reaches a
+ * sink, so a sink can JSON.stringify a record without surprises.
+ *
+ * Limits: depth 4, strings 256 chars, arrays 20 items, objects 30 keys.
+ * Circular references become "[Circular]", binary data its length, class
+ * instances `Name{...}`, errors `{ name, message }`.
+ */
+
+const SECRET = /pass|secret|token|authorization|cookie|session|api[-_]?key/i;
+const MAX_DEPTH = 4;
+const MAX_STRING = 256;
+const MAX_ITEMS = 20;
+const MAX_KEYS = 30;
+
+export function safeFields(fields: Record<string, unknown> | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!fields) return out;
+  const seen = new Set<object>();
+  for (const key of Object.keys(fields)) out[key] = SECRET.test(key) ? "[redacted]" : safeValue(fields[key], 1, seen);
+  return out;
+}
+
+export function safeValue(value: unknown, depth = 1, seen = new Set<object>()): unknown {
+  switch (typeof value) {
+    case "string":
+      return value.length > MAX_STRING ? `${value.slice(0, MAX_STRING)}... (${value.length} chars)` : value;
+    case "number":
+    case "boolean":
+    case "undefined":
+      return value;
+    case "bigint":
+      return `${value}n`;
+    case "symbol":
+      return value.toString();
+    case "function":
+      return `[Function ${value.name || "anonymous"}]`;
+  }
+  if (value === null) return null;
+  const object = value as object;
+  if (seen.has(object)) return "[Circular]";
+  if (object instanceof Error) return { name: object.name, message: object.message };
+  if (object instanceof Date) return Number.isNaN(object.getTime()) ? "Invalid Date" : object.toISOString();
+  if (object instanceof URL) return object.href;
+  if (ArrayBuffer.isView(object)) return `[${object.constructor.name} ${object.byteLength} bytes]`;
+  if (object instanceof ArrayBuffer) return `[ArrayBuffer ${object.byteLength} bytes]`;
+  if (depth > MAX_DEPTH) return Array.isArray(object) ? `[Array(${object.length})]` : "[Object]";
+  seen.add(object);
+  try {
+    if (Array.isArray(object)) {
+      const items = object.slice(0, MAX_ITEMS).map((v) => safeValue(v, depth + 1, seen));
+      if (object.length > MAX_ITEMS) items.push(`... ${object.length - MAX_ITEMS} more`);
+      return items;
+    }
+    if (object instanceof Map) return safeValue(Object.fromEntries([...object].slice(0, MAX_KEYS)), depth, seen);
+    if (object instanceof Set) return safeValue([...object], depth, seen);
+    const out: Record<string, unknown> = {};
+    let count = 0;
+    for (const key of Object.keys(object)) {
+      if (count++ === MAX_KEYS) {
+        out["..."] = `${Object.keys(object).length - MAX_KEYS} more keys`;
+        break;
+      }
+      let v: unknown;
+      try {
+        v = (object as Record<string, unknown>)[key];
+      } catch {
+        v = "[getter threw]";
+      }
+      out[key] = SECRET.test(key) ? "[redacted]" : safeValue(v, depth + 1, seen);
+    }
+    const name = object.constructor?.name;
+    return name && name !== "Object" ? { [`${name}`]: out } : out;
+  } finally {
+    seen.delete(object);
+  }
+}
+
+/** An error, for a record's `error` field. */
+export function errorInfo(error: unknown): { name: string; message: string; stack?: string } {
+  if (error instanceof Error) return { name: error.name, message: error.message, stack: error.stack };
+  return { name: "Error", message: String(safeValue(error)) };
+}

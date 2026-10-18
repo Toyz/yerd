@@ -1,0 +1,9 @@
+node_modules/
+dist/
+spikes/m0/out-*/
+*.tsbuildinfo
+.data/
+test-results/
+playwright-report/
+examples/*/dist/
+*.tgz
