@@ -110,6 +110,37 @@ describe("raw request targets", () => {
   });
 });
 
+describe("ctx.url never takes its host from the path", () => {
+  @route("/*rest")
+  class Everything {
+    @get show() {
+      const { host, pathname, search } = currentContext().url;
+      return { host, pathname, search, path: currentContext().path };
+    }
+  }
+
+  let s: RunningServer;
+  beforeAll(async () => {
+    s = await serve([Everything]);
+  });
+  afterAll(() => s.close());
+
+  it.each([
+    ["//evil.com/x?a=1", "//evil.com/x", "?a=1"],
+    ["/\\evil.com/x", "//evil.com/x", ""],
+    ["///evil.com", "///evil.com", ""],
+    ["/ok/path", "/ok/path", ""],
+  ])("GET %s", async (target, pathname, search) => {
+    const r = await rawGet(s.url, target);
+    expect(r.status).toBe(200);
+    const body = JSON.parse(r.body) as Record<string, string>;
+    expect(body.host).toBe("localhost");
+    expect(body.pathname).toBe(pathname);
+    expect(body.search).toBe(search);
+    expect(body.path).toBe(target.split("?")[0]);
+  });
+});
+
 describe("streamed bodies", () => {
   it("a stream that fails after its first chunk is cut off: the status is already out", async () => {
     streamed = 0;

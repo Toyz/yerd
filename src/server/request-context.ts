@@ -105,12 +105,18 @@ export class RequestContext implements YerdContext {
       const tls = (this.req.socket as { encrypted?: boolean }).encrypted === true;
       const proto = (this.env.trustProxy ? forwarded("x-forwarded-proto") : undefined) ?? (tls ? "https" : "http");
       const host = (this.env.trustProxy ? forwarded("x-forwarded-host") : undefined) ?? headers.host ?? "localhost";
+      // Path and query are set on their own: resolved against a base, a request
+      // for "//evil.com/x" (or "/\evil.com/x") would be read as a URL on evil.com.
+      let url: URL;
       try {
-        this.#url = new URL(this.path + this.#search, `${proto === "https" ? "https" : "http"}://${host}`);
+        url = new URL(`${proto === "https" ? "https" : "http"}://${host}`);
       } catch {
         // The client's own fault ("Host: a b"): a 400, not a crash logged as a server error.
         throw new HttpError(400, "Malformed Host header");
       }
+      url.pathname = this.path;
+      url.search = this.#search;
+      this.#url = url;
     }
     return this.#url;
   }
