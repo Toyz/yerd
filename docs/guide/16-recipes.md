@@ -1,6 +1,6 @@
 # Recipes
 
-Complete solutions to common tasks, each linking to the guides for the pieces it uses. More recipes live next to their feature:
+Whole solutions to common problems, most of them on the shop. Each links to the guides for the pieces it uses. More live next to their feature:
 
 | Task | Where |
 | --- | --- |
@@ -19,45 +19,271 @@ Complete solutions to common tasks, each linking to the guides for the pieces it
 
 The examples keep data in memory; swap the services for your database.
 
+## Paginate the catalog
+
+The front page shows three products at a time, with previous and next links that keep the search. Uses [@query](03-request-data.md#transforms-and-validators) with a validator.
+
+```tsx
+// src/routes/products.tsx
+import { NotFound, between, toInt /* , ... */ } from "@toyz/yerd";
+
+const PER_PAGE = 3;
+
+/** Previous / next links that keep the search and category. */
+function Pager({ page, pages, params }: { page: number; pages: number; params: Record<string, string | undefined> }) {
+  const href = (n: number) => {
+    const search = new URLSearchParams(Object.entries(params).filter((e): e is [string, string] => !!e[1]));
+    if (n > 1) search.set("page", String(n));
+    return `/?${search}`;
+  };
+  return (
+    <nav class="pager" aria-label="Pages">
+      {page > 1 ? <a href={href(page - 1)} rel="prev">Previous</a> : null}
+      <span>Page {page} of {pages}</span>
+      {page < pages ? <a href={href(page + 1)} rel="next">Next</a> : null}
+    </nav>
+  );
+}
+
+@route("/", { meta: { title: "Shop" } })
+export class ProductList {
+  // ...catalog, q, category
+  @query("page", { transform: toInt, validate: between(1, 1000) }) accessor pageNo = 1;
+
+  @get page() {
+    const found = this.catalog.search({ q: this.q, category: this.category });
+    const pages = Math.max(1, Math.ceil(found.length / PER_PAGE));
+    if (this.pageNo > pages) throw new NotFound(`There is no page ${this.pageNo}`);
+    const products = found.slice((this.pageNo - 1) * PER_PAGE, this.pageNo * PER_PAGE);
+    return (
+      <>
+        {/* ...search form and categories */}
+        <ul class="grid">{products.map((p) => <ProductCard product={p} />)}</ul>
+        <Pager page={this.pageNo} pages={pages} params={{ q: this.q, category: this.category }} />
+      </>
+    );
+  }
+}
+```
+
+```answer
+GET /?page=3
+200 OK
+content-type: text/html; charset=utf-8
+
+<!-- ... --><ul class="grid"><li class="card"><a href="/products/7">Field notebook</a><span class="price">$24.00</span></li><li class="card"><a href="/products/8">Dot grid journal</a><span class="price">$32.00</span><span class="sold-out">Sold out</span></li></ul><nav class="pager" aria-label="Pages"><a href="/?page=2" rel="prev">Previous</a><span>Page 3 of 3</span></nav><!-- ... -->
+---
+GET /?page=9
+404 Not Found
+content-type: application/json; charset=utf-8
+
+{"error":"There is no page 9","code":"not_found"}
+---
+GET /?page=0
+400 Bad Request
+content-type: application/json; charset=utf-8
+
+{"error":"Must be from 1 to 1000 (got 0)","code":"validation_failed","issues":[{"path":"page","message":"Must be from 1 to 1000 (got 0)"}]}
+```
+
+- **The accessor isn't `page`:** the handler has that name. Page 1 has no `?page=`, so the front page keeps one URL.
+- **A page past the end is a 404**, so a stale link doesn't show an empty grid.
+- **A database** pages with `LIMIT` and `OFFSET`, plus a count; past a few thousand rows, page by the last id seen instead.
+
+## Rate-limit sign-in
+
+At most five sign-in attempts a minute from one address, declared on the action with a decorator of your own. Uses [methodValue](03-request-data.md#method-and-class-decorators) and a [guard](02-routing.md#guards) that reads it through `ctx.route`.
+
+```ts
+// src/limits.ts
+import { TooManyRequests, createGuard, methodValue } from "@toyz/yerd";
+
+/** `@perMinute(5)`: at most that many calls a minute from one address. */
+export const perMinute = methodValue<number>("perMinute", {
+  validate: (n) => (Number.isInteger(n) && n > 0 ? undefined : "a whole number above 0"),
+});
+
+const hits = new Map<string, { minute: number; count: number }>();
+
+/** One guard for the app: it enforces @perMinute on whichever method serves the request. */
+export const rateLimited = createGuard("rateLimited", (ctx) => {
+  const max = perMinute.get(ctx.route.target!, ctx.route.method!);
+  if (max === undefined) return;
+  const key = `${ctx.request.socket.remoteAddress} ${ctx.route.className}.${String(ctx.route.method)}`;
+  const minute = Math.floor(Date.now() / 60_000);
+  const seen = hits.get(key);
+  if (seen?.minute !== minute) hits.set(key, { minute, count: 1 });
+  else if (++seen.count > max) return new TooManyRequests("Too many tries. Wait a minute.", { retryAfter: 60 });
+});
+```
+
+```tsx
+// src/app.ts: .guard(rateLimited) after .use(auth)
+
+// src/routes/auth.tsx
+@action @perMinute(5) async submit(_: {}, form: ActionForm) {
+  // ...unchanged
+}
+```
+
+The sixth wrong password inside a minute:
+
+```answer
+POST /login
+_yx=(the form's token)&name=ada&password=wrong
+>>>
+429 Too Many Requests
+content-type: application/json; charset=utf-8
+retry-after: 60
+
+{"error":"Too many tries. Wait a minute.","code":"too_many_requests"}
+```
+
+- **One guard, many limits.** `ctx.route.method` is the action being posted (or the handler), so any method can carry `@perMinute(n)`.
+- **The runtime shows the message** in the form's `data-yx-error` box; a plain post gets the error page.
+- **Behind a proxy** the socket address is the proxy's: key on the first `X-Forwarded-For` hop your proxy sets.
+- **One process only.** The map lives in memory; several instances need a shared counter (Redis `INCR` with an expiry).
+
+## Cache the product API
+
+The JSON API answers the same for everyone: let browsers and CDNs keep it a minute, and answer a revalidation with a 304. Uses [@setHeader](04-responses.md#status-and-setheader), [res()](04-responses.md#res-for-full-control) and [@header](03-request-data.md#accessors).
+
+```ts
+// src/routes/api.ts
+import { createHash } from "node:crypto";
+import { header, res, setHeader /* , ... */ } from "@toyz/yerd";
+
+@route("/api/products", { session: false })
+export class ProductsApi {
+  // ...catalog, q, category
+  @header("if-none-match") accessor ifNoneMatch: string | undefined;
+
+  @get @setHeader("cache-control", "public, max-age=60") list() {
+    const products = this.catalog.search({ q: this.q, category: this.category });
+    const etag = `"${createHash("sha256").update(JSON.stringify(products)).digest("base64url").slice(0, 16)}"`;
+    if (this.ifNoneMatch === etag) return res(null, { status: 304, headers: { etag } });
+    return res(products, { headers: { etag } });
+  }
+}
+```
+
+The first request, then the same one sending its ETag as `If-None-Match`:
+
+```answer
+GET /api/products?category=desk
+200 OK
+content-type: application/json; charset=utf-8
+cache-control: public, max-age=60
+etag: "af2783UEEIRdZYrX"
+
+[{"id":4,"name":"Desk lamp","category":"desk","price":6500,"stock":3,"description":"Warm light, one arm, no app."},{"id":5,"name":"Brass ruler","category":"desk","price":1800,"stock":9,"description":"Thirty centimetres, gets better with age."}]
+---
+GET /api/products?category=desk
+304 Not Modified
+cache-control: public, max-age=60
+etag: "af2783UEEIRdZYrX"
+```
+
+- **`session: false`** matters: no cookie goes out, so a shared cache can't store one visitor's session.
+- **Never on pages with forms or a cart badge.** They carry the visitor's tokens; yerd marks them `private, no-cache` ([caching headers](04-responses.md#caching-headers)).
+- **Hashing the body** still runs the query; an ETag from a version or `updatedAt` skips the work.
+
+## Per-field form errors
+
+Each message under its own field, with and without JavaScript: the shop's checkout. Uses [DTO validation](03-request-data.md#bodies-and-dto-classes), [field error boxes](06-interactivity.md#errors) and [flash](09-sessions-and-auth.md#the-session-api).
+
+With the runtime, a thrown validation error lands in each field's `[data-yx-error="<field>"]` box by itself. A plain post would get the error page, so the action flashes the messages and input and goes back to the form, which renders them in the same boxes:
+
+```tsx
+// src/components.tsx
+export function Field(props: { name: string; label: string; type?: string; value?: string | undefined; error?: string | undefined }) {
+  const { name, label, type = "text", value, error } = props;
+  return (
+    <p class="field">
+      <label for={name}>{label}</label>
+      <input id={name} name={name} type={type} value={value} aria-invalid={error ? true : undefined} />
+      <span class="field-error" data-yx-error={name}>{error}</span>
+    </p>
+  );
+}
+```
+
+```tsx
+// src/routes/checkout.tsx
+interface CheckoutState {
+  errors?: Record<string, string>;
+  draft?: Record<string, string | undefined>;
+}
+
+  @get page() {
+    // ...
+    const { errors = {}, draft = { name: this.me.name } } = (this.session.flash("checkout") ?? {}) as CheckoutState;
+    return (
+      <form action={this.place}>
+        <Field name="name" label="Name" value={draft.name} error={errors.name} />
+        <Field name="email" label="Email" type="email" value={draft.email} error={errors.email} />
+        <Field name="address" label="Address" value={draft.address} error={errors.address} />
+        <p class="form-error" data-yx-error role="alert"></p>
+        <button>Place order</button>
+      </form>
+    );
+  }
+
+  @action async place(_: {}, form: ActionForm) {
+    let details: CheckoutForm;
+    try {
+      details = form.parse(CheckoutForm);
+    } catch (error) {
+      // From the runtime (it sends a `yx` header): rethrow, and each issue lands in its field's box.
+      if (!(error instanceof ValidationFailed) || currentContext().headers.yx !== undefined) throw error;
+      // A plain form post: keep the messages and the input for the page we send it back to.
+      const errors: Record<string, string> = {};
+      for (const { path, message } of error.issues) errors[path] ??= message;
+      const draft = { name: form.get("name"), email: form.get("email"), address: form.get("address") };
+      this.session.flash("checkout", { errors, draft } satisfies CheckoutState);
+      return redirect("/checkout");
+    }
+    // ...place the order
+  }
+```
+
+The runtime's post, then a plain post and the page it goes back to:
+
+```answer
+POST /checkout
+_yx=(the form's token)&name=A&email=nope&address=
+>>>
+400 Bad Request
+content-type: application/json; charset=utf-8
+
+{"error":"Validation failed","code":"validation_failed","issues":[{"path":"name","message":"Must be 2 to 80 characters (got 1)"},{"path":"email","message":"Expected an email address"},{"path":"address","message":"Can't be empty"}]}
+---
+POST /checkout
+_yx=(the form's token)&name=A&email=nope&address=
+>>>
+303 See Other
+location: /checkout
+---
+GET /checkout
+200 OK
+content-type: text/html; charset=utf-8
+
+<!-- ... --><p class="field"><label for="name">Name</label><input id="name" name="name" type="text" value="A" autocomplete="name" aria-invalid="true"><span class="field-error" data-yx-error="name">Must be 2 to 80 characters (got 1)</span></p><p class="field"><label for="email">Email</label><input id="email" name="email" type="email" value="nope" autocomplete="email" aria-invalid="true"><span class="field-error" data-yx-error="email">Expected an email address</span></p><!-- ... -->
+```
+
+- **One markup for both.** The server fills the same boxes the runtime writes into (and clears on the next submit).
+- **Your own errors.** For a check of your own (the email is taken), throw a `YerdError` with `details: { issues: [{ path: "email", message: "That email is taken" }] }`.
+- **List fields.** An issue for `tags[1]` belongs to the `tags` box; strip the index when you build `errors`. How unmatched messages are placed is in [field error boxes](06-interactivity.md#errors).
+- **Never redisplay secrets.** Leave passwords and card numbers out of the flashed draft.
+
 ## Show a saved cart after sign-in
 
 A guest fills a cart, signs in, and finds it merged with the one they left last week on another device. Uses a [session shape class](09-sessions-and-auth.md#a-class-for-methods-and-defaults), [createAuth hooks](09-sessions-and-auth.md#keeping-a-guests-cart-across-sign-in) and a [service](08-services.md).
 
-The cart is a session shape; only `lines` is stored.
+The cart is a session shape like the shop's, with `lines` of `{ id, name, qty }`. Saved carts are a service, and a notice is its own small shape:
 
 ```ts
 // src/cart.ts
-import { service } from "@toyz/yerd";
-
-export interface Line {
-  id: string;
-  name: string;
-  qty: number;
-}
-
-export class Cart {
-  lines: Line[] = [];
-
-  get count(): number {
-    return this.lines.reduce((n, line) => n + line.qty, 0);
-  }
-
-  add(item: { id: string; name: string }): void {
-    const line = this.lines.find((l) => l.id === item.id);
-    if (line) line.qty++; // changed in place: still saved
-    else this.lines.push({ ...item, qty: 1 });
-  }
-
-  remove(id: string): void {
-    this.lines = this.lines.filter((l) => l.id !== id);
-  }
-
-  // Not clear(): that's the session's own method, and it would sign the user out too.
-  empty(): void {
-    this.lines = [];
-  }
-}
-
 /** A one-time notice after sign-in, kept apart from the cart. */
 export class CartNotice {
   welcomeBack?: number;
@@ -89,17 +315,12 @@ export function mergeCarts(saved: Line[], guest: Line[]): Line[] {
 }
 ```
 
-The auth hooks merge on sign-in and save on sign-out, using `session.as(Cart)` for the cart view:
+The auth hooks merge on sign-in and save on sign-out, through `session.as(Cart)`:
 
 ```ts
-// src/auth.ts
-import { resolve } from "@toyz/yerd";
-import { createAuth } from "@toyz/yerd/auth";
-import { Cart, CartNotice, Carts, mergeCarts } from "./cart.js";
-import { Users, type User } from "./users.js";
-
+// src/users.ts
 export const auth = createAuth<User>({
-  load: (id) => resolve(Users).find(id),
+  load: (id) => resolve(Users).get(id),
   onLogin(user, session) {
     const carts = resolve(Carts);
     const cart = session.as(Cart);
@@ -118,11 +339,6 @@ The cart page says "welcome back" once, and saves a signed-in user's cart on eve
 
 ```tsx
 // src/routes/cart.tsx
-import { Region, action, get, inject, route, session, type Session } from "@toyz/yerd";
-import { auth } from "../auth.js";
-import { Cart, CartNotice, Carts } from "../cart.js";
-import type { User } from "../users.js";
-
 @route("/cart")
 export class CartPage {
   @session(Cart) accessor cart!: Session<Cart>;
@@ -165,94 +381,20 @@ export class CartPage {
 }
 ```
 
+Gel pens added as a guest on one device, then again on another, signing in each time:
+
+```answer
+GET /cart
+200 OK
+content-type: text/html; charset=utf-8
+
+<main><h1>Your cart</h1><p role="status">Welcome back: we kept 1 item from last time.</p><ul id="cart" data-yx-region><li data-key="p2">Gel pens x 2<!-- ... --></li></ul></main>
+```
+
 - **Only a guest's cart is merged.** If someone else was still signed in, `login()` starts a fresh session.
 - **Logout empties the cart on screen.** The saved copy comes back at the next sign-in.
 - **Cookie size.** With the default `CookieStore` the whole session must fit in about 4 KB; big carts need [a store](09-sessions-and-auth.md#which-store).
-- **Prices change.** Store ids and quantities; look prices up when showing the cart.
-
-## Per-field form errors
-
-Each message under its own field, with and without JavaScript. Uses [DTO validation](03-request-data.md#bodies-and-dto-classes), [field error boxes](06-interactivity.md#errors) and [flash](09-sessions-and-auth.md#the-session-api).
-
-With the client runtime, a thrown validation error already lands in each field's `[data-yx-error="<field>"]` box. Without JavaScript the browser would get the error page, so the action catches the failure, flashes the messages and input, and redirects back to a page that renders them in the same boxes.
-
-```tsx
-// src/routes/signup.tsx
-import { ActionForm, ValidationFailed, YerdError, action, between, currentContext, get, is, length, redirect, route, session, trim, type Session } from "@toyz/yerd";
-
-class Signup {
-  @is.string({ transform: trim, validate: length(2, 40) }) name!: string;
-  @is.email() email!: string;
-  @is.int({ validate: between(13, 120) }) age!: number;
-}
-
-interface FormState {
-  errors?: Record<string, string>;
-  draft?: Record<string, string | undefined>;
-}
-
-/** One message per field; "tags[1]" belongs to "tags", "(root)" to the form. */
-function byField(error: YerdError): Record<string, string> {
-  const issues = error instanceof ValidationFailed ? error.issues : [{ path: "", message: error.message }];
-  const errors: Record<string, string> = {};
-  for (const { path, message } of issues) {
-    const field = path === "(root)" ? "" : path.replace(/(\[\d+\])+$/, "");
-    errors[field] ??= message;
-  }
-  return errors;
-}
-
-function Field({ name, label, type = "text", state }: { name: string; label: string; type?: string; state: FormState }) {
-  const error = state.errors?.[name];
-  return (
-    <p>
-      <label for={name}>{label}</label>
-      <input id={name} name={name} type={type} value={state.draft?.[name]} aria-invalid={error ? true : undefined} aria-describedby={`${name}-error`} />
-      <span id={`${name}-error`} class="field-error" data-yx-error={name}>{error}</span>
-    </p>
-  );
-}
-
-@route("/signup")
-export class SignupPage {
-  @session accessor session!: Session;
-
-  @get page() {
-    const state = (this.session.flash("signup") ?? {}) as FormState;
-    return (
-      <form action={this.submit}>
-        <Field name="name" label="Name" state={state} />
-        <Field name="email" label="Email" type="email" state={state} />
-        <Field name="age" label="Age" type="number" state={state} />
-        <p class="form-error" data-yx-error role="alert">{state.errors?.[""]}</p>
-        <button>Sign up</button>
-      </form>
-    );
-  }
-
-  @action submit(_: {}, form: ActionForm) {
-    let signup: Signup;
-    try {
-      signup = form.parse(Signup);
-    } catch (error) {
-      // From the runtime (it sends a `yx` header): rethrow, and the issues land by field.
-      const fromScript = currentContext().headers.yx !== undefined;
-      if (!(error instanceof YerdError) || error.status >= 500 || fromScript) throw error;
-      // A plain form post: keep the messages and the input for the page we go back to.
-      const draft = { name: form.get("name"), email: form.get("email"), age: form.get("age") };
-      this.session.flash("signup", { errors: byField(error), draft } satisfies FormState);
-      return redirect("/signup");
-    }
-    console.log(`welcome, ${signup.name}`);
-    return redirect("/welcome");
-  }
-}
-```
-
-- **One markup for both.** The server fills the same boxes the runtime writes into (and clears on the next submit).
-- **Your own errors.** For a check of your own (the email is taken), throw a `YerdError` with `details: { issues: [{ path: "email", message: "That email is taken" }] }`.
-- **Never redisplay secrets.** Leave passwords and card numbers out of the flashed draft.
-- How unmatched and list-item messages are placed is in [field error boxes](06-interactivity.md#errors).
+- **Prices change.** Store ids and quantities, as the shop does; look prices up when showing the cart.
 
 ## Upload photos with a form
 
@@ -311,14 +453,30 @@ export class NewPostPage {
 
 ```ts
 // src/main.ts: ten photos of 5 MB each must fit in one request
-import { yerd } from "@toyz/yerd";
-
 export default yerd({ bodyLimit: 55 * 1024 * 1024 });
 ```
 
 ```css
 .dropzone[data-yx-files]::after { content: " (" attr(data-yx-files) " ready)"; }
 .dropzone[data-yx-over] { outline: 2px dashed currentColor; }
+```
+
+A PNG, then a text file, posted as `multipart/form-data` by the runtime:
+
+```answer
+POST /posts/new
+_yx=(the form's token)&title=Desk tour&photos=(desk.png)
+>>>
+200 OK
+yx-location: /posts
+---
+POST /posts/new
+_yx=(the form's token)&title=Desk tour&photos=(notes.txt)
+>>>
+400 Bad Request
+content-type: application/json; charset=utf-8
+
+{"error":"Validation failed","code":"validation_failed","issues":[{"path":"photos[0]","message":"notes.txt has type text/plain, which isn't accepted (image/png, image/jpeg, image/webp)"}]}
 ```
 
 - **Two limits.** `maxSize` is per file (an issue for `photos[n]`); `bodyLimit` caps the whole request (413 before the action). Raise it to fit all files plus fields.
@@ -485,12 +643,30 @@ export class BoardPage {
 .column[data-yx-over], .card[data-yx-over], .bin[data-yx-over] { outline: 2px dashed currentColor; }
 ```
 
-- **Where values come from.** `to` and `before` are server-written and signed; `drag.data("id")` is read in the browser, so `parse(Move, args)` validates it.
+"Ship it" dropped on the Done column, then a card id someone typed in by hand:
+
+```answer
+POST /board
+_yx=(the Done column's token)&_yxh0=c2
+>>>
+200 OK
+content-type: text/html; charset=utf-8
+
+<div class="board" id="board" data-yx-region><section class="column" data-yx-action="/board" data-yx-token="..." data-yx-trigger="drop" data-yx-holes="[[&quot;drag&quot;,&quot;dataset&quot;,&quot;id&quot;]]"><h2>To do</h2><ul><li class="card" data-id="c1" draggable="true" data-key="c1"><!-- ... -->Write the docs<!-- ... --></li></ul></section><!-- ... --><h2>Done</h2><ul><li class="card" data-id="c2" draggable="true" data-key="c2"><!-- ... -->Ship it<!-- ... --></li></ul></section></div>
+---
+POST /board
+_yx=(the Done column's token)&_yxh0=nope
+>>>
+400 Bad Request
+content-type: application/json; charset=utf-8
+
+{"error":"Validation failed","code":"validation_failed","issues":[{"path":"card","message":"Not a card id"}]}
+```
+
+- **Where values come from.** `to` and `before` are server-written and signed; `drag.data("id")` is read in the browser and travels as `_yxh0`, so `parse(Move, args)` validates it.
 - **The innermost target wins.** Dropping on a card runs the card's action, not the column's; dropping a card on itself goes to its column.
-- **`drop:.card`** keeps the bin from taking anything else draggable.
-- **`data-yx-confirm`** works on any action, not only forms.
-- **Every board updates** through `boardChannel` and live refresh.
-- **Check permissions** in `move` and `remove` on a real board.
+- **`drop:.card`** keeps the bin from taking anything else draggable. **`data-yx-confirm`** works on any action, not only forms.
+- **Every board updates** through `boardChannel` and live refresh. **Check permissions** in `move` and `remove` on a real board.
 
 ## Poll a long job until it's done
 
@@ -553,6 +729,18 @@ export class ExportPage {
 }
 ```
 
+The runtime's poll returns the Region with its trigger, so it asks again:
+
+```answer
+POST /exports/e1
+_yx=(the Region's token)
+>>>
+200 OK
+content-type: text/html; charset=utf-8
+
+<div aria-live="polite" id="status" data-yx-region data-yx-action="/exports/e1" data-yx-token="..." data-yx-trigger="every 2s"><progress value="0" max="100"></progress> 0%</div>
+```
+
 - **It stops by itself** once a response replaces the Region with one that has no trigger.
 - **Only while someone's looking:** `every` runs while the element is on the page and the tab is visible, at most every 250 ms.
 - **No JavaScript, no polling.** Add `<meta http-equiv="refresh" content="5">` in a `<noscript>` if that matters.
@@ -594,6 +782,22 @@ export class Dashboard {
     );
   }
 }
+```
+
+```answer
+GET /dashboard
+200 OK
+content-type: text/html; charset=utf-8
+
+<main><h1>Dashboard</h1><div id="stats" data-yx-region data-yx-action="/dashboard" data-yx-token="..." data-yx-trigger="load"><p aria-busy="true">Crunching numbers...</p><noscript><a href="/dashboard/stats">See the numbers</a></noscript></div></main>
+---
+POST /dashboard
+_yx=(the Region's token)
+>>>
+200 OK
+content-type: text/html; charset=utf-8
+
+<div id="stats" data-yx-region><p>42 orders, $1234 today</p></div>
 ```
 
 `load` fires once per render; the returned Region has no trigger, so it doesn't loop. The alternatives:
