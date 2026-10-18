@@ -7,6 +7,10 @@ declare module "@toyz/yerd" {
   interface PageMeta {
     /** Which top-nav item is active. */
     nav?: "todos" | "about";
+    /** The page's absolute URL, for <link rel="canonical"> and og:url. */
+    url?: string;
+    /** false leaves the client runtime out: the pages served to crawlers have nothing to enhance. */
+    scripts?: boolean;
   }
 }
 
@@ -16,16 +20,28 @@ declare module "@toyz/yerd" {
  */
 export function RootLayout({ children, meta }: LayoutProps) {
   const title = meta.title ? `${meta.title} · yerd todos` : "yerd todos";
+  const description = meta.description ?? "A todo app written in yerd: decorated routes, TSX, actions and live updates.";
   return (
     <html lang="en">
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="description" content={meta.description ?? "A todo app written in yerd: decorated routes, TSX, actions and live updates."} />
+        <meta name="description" content={description} />
         <meta name="theme-color" content="#e2552d" />
         <title>{title}</title>
+        {/* Open Graph: what link previews (chat apps, social sites) show. */}
+        <meta property="og:site_name" content="yerd todos" />
+        <meta property="og:type" content="website" />
+        <meta property="og:title" content={meta.title ?? "yerd todos"} />
+        <meta property="og:description" content={description} />
+        {meta.url ? (
+          <>
+            <meta property="og:url" content={meta.url} />
+            <link rel="canonical" href={meta.url} />
+          </>
+        ) : null}
         <Stylesheet href="src/styles.css" />
-        <Scripts auto />
+        {meta.scripts === false ? null : <Scripts auto />}
       </head>
       <body>{children}</body>
     </html>
@@ -84,6 +100,11 @@ export function CardLayout({ children }: LayoutProps) {
       <article class="panel card">{children}</article>
     </div>
   );
+}
+
+/** The card a shared list sits in, inside the marketing layout (`@layout(MarketingLayout, SharedCard)`). */
+export function SharedCard({ children }: LayoutProps) {
+  return <article class="panel card shared">{children}</article>;
 }
 
 /** Auth layout for /login and /signup: just the brand and a centered card. */

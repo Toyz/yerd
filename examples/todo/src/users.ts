@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
-import { is, length, matches, onBoot, onShutdown, resolve, service, trim, lower } from "@toyz/yerd";
+import { is, length, logger, matches, onBoot, onShutdown, resolve, service, trim, lower, type Logger } from "@toyz/yerd";
 import { createAuth, hashPassword } from "@toyz/yerd/auth";
 
 export interface User {
@@ -9,6 +9,8 @@ export interface User {
   name: string;
   passwordHash: string;
   createdAt: string;
+  /** Set while the user shares a read-only link to their list: /share/<token>. */
+  shareToken?: string;
 }
 
 export class SignupForm {
@@ -28,6 +30,7 @@ export class UserRepo {
   #users: User[] = [];
   #saving: Promise<void> = Promise.resolve();
   readonly #file = process.env.USERS_FILE ?? (process.env.TODO_FILE === ":memory:" ? ":memory:" : join(process.cwd(), ".data", "users.json"));
+  @logger accessor log!: Logger;
 
   @onBoot async load() {
     if (this.#file === ":memory:") return;
@@ -50,21 +53,43 @@ export class UserRepo {
     return this.#users.find((u) => u.name === name);
   }
 
+  byShareToken(token: string): User | undefined {
+    return this.#users.find((u) => u.shareToken !== undefined && u.shareToken === token);
+  }
+
   async create(name: string, password: string): Promise<User> {
     const user: User = { id: randomUUID(), name, passwordHash: await hashPassword(password), createdAt: new Date().toISOString() };
     this.#users.push(user);
-    if (this.#file !== ":memory:") {
-      const snapshot = JSON.stringify(this.#users, null, 2);
-      const file = this.#file;
-      this.#saving = this.#saving
-        .then(async () => {
-          await mkdir(dirname(file), { recursive: true });
-          await writeFile(`${file}.tmp`, snapshot);
-          await rename(`${file}.tmp`, file);
-        })
-        .catch((error) => console.error("[todo] failed to save users:", error));
-    }
+    this.#save();
+    // Fields named like secrets are redacted anyway; there's just no reason to log more than the name.
+    this.log.info("signed up", { name });
     return user;
+  }
+
+  /** Start sharing a read-only link to this user's list (a fresh, unguessable token), or keep the current one. */
+  share(user: User): string {
+    user.shareToken ??= randomBytes(12).toString("base64url");
+    this.#save();
+    return user.shareToken;
+  }
+
+  /** Turn the link off: the old URL is a 404 from now on. */
+  unshare(user: User): void {
+    delete user.shareToken;
+    this.#save();
+  }
+
+  #save(): void {
+    if (this.#file === ":memory:") return;
+    const snapshot = JSON.stringify(this.#users, null, 2);
+    const file = this.#file;
+    this.#saving = this.#saving
+      .then(async () => {
+        await mkdir(dirname(file), { recursive: true });
+        await writeFile(`${file}.tmp`, snapshot);
+        await rename(`${file}.tmp`, file);
+      })
+      .catch((error) => this.log.error("failed to save users", { file, error }));
   }
 }
 

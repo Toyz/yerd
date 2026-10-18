@@ -1,5 +1,5 @@
-import { body, del, get, inject, ndjson, param, post, res, route, signal, sse } from "@toyz/yerd";
-import { NewTodo, TodoRepo } from "../todos.js";
+import { body, catches, currentContext, del, get, inject, ndjson, param, patch, post, res, route, signal, sse, status } from "@toyz/yerd";
+import { NewTodo, TodoChanges, TodoNotFound, TodoRepo } from "../todos.js";
 import { auth, type User } from "../users.js";
 
 /** Live updates: one SSE message per change. The client runtime refreshes the page's Regions on each. */
@@ -18,7 +18,16 @@ export class TodoEvents {
   }
 }
 
-/** JSON API next to the HTML app. */
+/**
+ * The JSON API, next to the HTML app: a collection and its items, with the
+ * same login (a browser session, or a 401 for scripts without one).
+ *
+ * ```sh
+ * curl -b cookies.txt localhost:3000/api/todos
+ * curl -b cookies.txt -H 'content-type: application/json' -d '{"title":"Buy milk"}' localhost:3000/api/todos
+ * curl -b cookies.txt -X PATCH -H 'content-type: application/json' -d '{"done":true}' localhost:3000/api/todos/<id>
+ * ```
+ */
 @route("/api/todos", { guards: [auth.required] })
 export class TodosApi {
   @inject(TodoRepo) accessor repo!: TodoRepo;
@@ -33,9 +42,11 @@ export class TodosApi {
     return { todos: this.todos.list(), ...this.todos.counts() };
   }
 
-  @post async create() {
-    const { title } = await this.input;
-    return res(this.todos.add(title), { status: 201 });
+  /** 201 with the new todo, and where it lives (only known once it exists, hence ctx.setHeader). */
+  @post @status(201) async create() {
+    const todo = this.todos.add((await this.input).title);
+    currentContext().setHeader("location", `/api/todos/${todo.id}`);
+    return todo;
   }
 }
 
@@ -48,13 +59,25 @@ export class TodoApi {
     return this.repo.for(this.me.id);
   }
   @param("id") accessor id!: string;
+  /** All optional: only what was sent is changed. */
+  @body(TodoChanges) accessor changes!: Promise<TodoChanges>;
 
   @get show() {
-    return this.todos.get(this.id) ?? 404;
+    return this.todos.find(this.id);
+  }
+
+  @patch async update() {
+    return this.todos.update(this.id, await this.changes);
   }
 
   @del remove() {
-    return this.todos.remove(this.id) ? 204 : 404;
+    if (!this.todos.remove(this.id)) throw new TodoNotFound(this.id);
+  }
+
+  /** The store throws a domain error; this route decides it's a 404 with a JSON body. */
+  @catches(TodoNotFound)
+  notFound(error: TodoNotFound) {
+    return res({ error: error.message, id: error.id }, { status: 404 });
   }
 }
 
@@ -66,7 +89,7 @@ export class TodoApi {
  * `curl -N localhost:3000/api/todos/changes.ndjson`
  */
 @route("/api/todos/changes.ndjson", { guards: [auth.required] })
-export class TodoChanges {
+export class TodoChangeFeed {
   @inject(TodoRepo) accessor repo!: TodoRepo;
   @auth.user accessor me!: User;
 

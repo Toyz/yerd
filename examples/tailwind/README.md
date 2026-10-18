@@ -11,6 +11,14 @@ Tailwind CSS v4 in a yerd app. `npm run tailwind` from the repo root.
   (`/assets/app-AbC123xy.css`, cached for a year) and the same tag links that.
 - Tailwind scans the TSX as text, so `class="..."` (not `className`), arrays
   and objects all work, as long as full class names appear in the source.
+- Three kinds of state on one page:
+  - **Shared**: server state everyone sees (a module-level Map), changed by an action.
+  - **Yours**: the same counters kept in the visitor's session (`app.sessions()`,
+    `@session accessor`, typed via `SessionData`), so they survive a reload and
+    another browser has its own.
+  - **Local**: `<Local state={{ count: 0, picked: false }}>` state that lives only
+    in the tab: clicks run in the browser with no request, `class` flags and
+    `aria-pressed` follow the state.
 - Four counters, one action. Each `Counter` renders its own
   `<Region id="counter-{id}">` and a form bound to itself with
   `bind(bump, { id })`, so the action knows which counter to bump (signed:

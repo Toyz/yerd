@@ -1,4 +1,5 @@
 import { Region, bind, type Action, type ActionForm } from "@toyz/yerd";
+import { Ago } from "./attributes.js";
 import type { Filter, Todo } from "./todos.js";
 
 /** The actions the list needs, passed down from the route. */
@@ -27,7 +28,11 @@ function TodoItem({ todo, actions }: { todo: Todo; actions: ListActions }) {
       </form>
       <div class="todo-main">
         <a class="todo-title" href={`/todos/${todo.id}`} data-yx-boost prefetch>{todo.title}</a>
-        {todo.notes ? <span class="todo-notes">{todo.notes}</span> : null}
+        <span class="todo-sub">
+          {/* A custom attribute: "just now" from the server, kept fresh by its client half. */}
+          <Ago iso={todo.createdAt} />
+          {todo.notes ? <span class="todo-notes">{todo.notes}</span> : null}
+        </span>
       </div>
       {/* Quick rename: a <details>, so it opens without JavaScript. Morphing keeps it open while you type. */}
       <details class="edit">
@@ -106,5 +111,53 @@ export function NewTodoForm({ add }: { add: Action }) {
       </div>
       <p class="form-error" data-yx-error role="alert"></p>
     </form>
+  );
+}
+
+/** Sharing: a Region, so turning the link on or off updates it in place. */
+export function SharePanel({ url, share, unshare }: { url: string | undefined; share: Action; unshare: Action }) {
+  return (
+    <Region id="share" class="panel extra">
+      <h2>Share</h2>
+      {url ? (
+        <>
+          <p>Anyone with this link can see your list (read-only).</p>
+          <div class="share-link">
+            <label class="visually-hidden" for="share-url">Share link</label>
+            <input class="input" id="share-url" value={url} readonly />
+            <a class="btn btn-ghost" href={url} target="_blank">Open</a>
+          </div>
+          <form action={unshare}>
+            <button class="btn btn-ghost btn-danger">Stop sharing</button>
+          </form>
+        </>
+      ) : (
+        <>
+          <p>Get a read-only link to your list, with a proper preview when you paste it in a chat.</p>
+          <form action={share}>
+            <button class="btn">Create link</button>
+          </form>
+        </>
+      )}
+    </Region>
+  );
+}
+
+/**
+ * Import from a .txt file. `enctype` matters without JavaScript; with it, the
+ * runtime sends file forms as multipart on its own.
+ */
+export function ImportForm({ importFile }: { importFile: Action }) {
+  return (
+    <section class="panel extra">
+      <h2>Import</h2>
+      <p>A plain-text file, one todo per line.</p>
+      <form action={importFile} enctype="multipart/form-data" data-yx-reset>
+        <label class="visually-hidden" for="import-file">Todo file</label>
+        <input class="input" id="import-file" type="file" name="file" accept=".txt,text/plain" required />
+        <button class="btn">Import</button>
+        <p class="form-error" data-yx-error role="alert"></p>
+      </form>
+    </section>
   );
 }

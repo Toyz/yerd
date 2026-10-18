@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
-import { Channels, channel, inject, is, length, onBoot, onShutdown, service, trim } from "@toyz/yerd";
+import { Channels, channel, inject, instrument, is, length, logger, onBoot, onShutdown, service, trim, type Logger } from "@toyz/yerd";
 
 export interface Todo {
   id: string;
@@ -39,6 +39,29 @@ export class EditTodo {
 }
 
 /**
+ * A PATCH body for the JSON API. Every field is optional, and a field the
+ * client left out isn't on the instance at all, so merging it can't wipe the
+ * others: `{ "done": true }` keeps the title and notes.
+ */
+export class TodoChanges {
+  @is.string({ optional: true, transform: trim, validate: length(1, 140) }) title?: string;
+  @is.string({ optional: true, transform: trim, validate: length(0, 2000) }) notes?: string;
+  @is.boolean({ optional: true }) done?: boolean;
+}
+
+/** The import form: a plain-text file, one todo per line. */
+export class ImportTodos {
+  @is.file({ types: ["text/plain"], maxSize: 64 * 1024 }) file!: File;
+}
+
+/** A domain error, not an HTTP one: routes decide what it means (the JSON API maps it to a 404 with @catches). */
+export class TodoNotFound extends Error {
+  constructor(readonly id: string) {
+    super(`No todo with id ${id}`);
+  }
+}
+
+/**
  * The todo store: an in-memory list persisted to a JSON file. Set TODO_FILE to
  * choose the file, or ":memory:" to keep nothing on disk (tests).
  *
@@ -51,6 +74,8 @@ export class TodoRepo {
   #saving: Promise<void> = Promise.resolve();
   readonly #file = process.env.TODO_FILE ?? join(process.cwd(), ".data", "todos.json");
   @inject(Channels) accessor channels!: Channels;
+  /** Logs as "TodoRepo", from whichever request is running. */
+  @logger accessor log!: Logger;
   version = 0;
 
   @onBoot async load() {
@@ -58,6 +83,7 @@ export class TodoRepo {
     try {
       const data = JSON.parse(await readFile(this.#file, "utf8")) as Todo[];
       if (Array.isArray(data)) this.#todos = data.filter((t) => typeof t.owner === "string");
+      this.log.info("loaded todos", { count: this.#todos.length, file: this.#file });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -93,9 +119,16 @@ export class TodoRepo {
         await writeFile(`${file}.tmp`, snapshot);
         await rename(`${file}.tmp`, file);
       })
-      .catch((error) => console.error("[todo] failed to save:", error));
+      .catch((error) => this.log.error("failed to save todos", { file, error }));
   }
 }
+
+/**
+ * The log target for TodoList's spans, spelled out: the target defaults to the
+ * class name, and the production bundle renames this class (TodoList$1) because
+ * components.tsx has a TodoList too.
+ */
+const TARGET = "TodoList";
 
 /** A user's view of the store. Every method only sees that user's todos. */
 export class TodoList {
@@ -119,6 +152,13 @@ export class TodoList {
     return this.#mine().find((t) => t.id === id);
   }
 
+  /** Like get(), but a missing todo is a TodoNotFound. */
+  find(id: string): Todo {
+    const todo = this.get(id);
+    if (!todo) throw new TodoNotFound(id);
+    return todo;
+  }
+
   counts() {
     const mine = this.#mine();
     const done = mine.filter((t) => t.done).length;
@@ -126,16 +166,34 @@ export class TodoList {
   }
 
   add(title: string): Todo {
-    const now = new Date().toISOString();
-    const todo: Todo = { id: randomUUID(), owner: this.owner, title, notes: "", done: false, createdAt: now, updatedAt: now };
+    const todo = this.#create(title);
     this.repo.all().push(todo);
     this.repo.changed(this.owner, { type: "added", todo });
     return todo;
   }
 
-  update(id: string, patch: Partial<Pick<Todo, "title" | "notes" | "done">>): Todo | undefined {
-    const todo = this.get(id);
-    if (!todo) return undefined;
+  /** Several at once (the import), as one change. Logged as a span with just the count, not every title. */
+  @instrument({ target: TARGET, level: "info", skipAll: true, fields: (list, [titles]) => ({ owner: list.owner, count: titles.length }) })
+  addMany(titles: string[]): Todo[] {
+    const added = titles.map((title) => this.#create(title));
+    this.repo.all().push(...added);
+    this.repo.changed(this.owner, { type: "bulk", ids: added.map((t) => t.id) });
+    return added;
+  }
+
+  #create(title: string): Todo {
+    const now = new Date().toISOString();
+    return { id: randomUUID(), owner: this.owner, title, notes: "", done: false, createdAt: now, updatedAt: now };
+  }
+
+  /**
+   * Merge `patch` into a todo. Notes are the user's own words, so the span
+   * leaves them out ("patch.notes" is checked by the compiler: a typo there
+   * doesn't build) and skips the return value, which carries them too.
+   */
+  @instrument({ target: TARGET, skip: ["patch.notes"], ret: false })
+  update(id: string, patch: Partial<Pick<Todo, "title" | "notes" | "done">>): Todo {
+    const todo = this.find(id);
     Object.assign(todo, patch, { updatedAt: new Date().toISOString() });
     this.repo.changed(this.owner, { type: "updated", todo });
     return todo;

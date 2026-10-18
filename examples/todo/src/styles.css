@@ -134,7 +134,10 @@ html[aria-busy="true"] { cursor: progress; }
 .todo-title { display: block; overflow-wrap: anywhere; text-decoration: none; font-weight: 600; }
 .todo-title:hover { text-decoration: underline; text-decoration-color: var(--line); }
 .todo.done .todo-title { color: var(--muted); text-decoration: line-through; }
-.todo-notes { display: block; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todo-sub { display: flex; gap: 6px; min-width: 0; color: var(--muted); font-size: 13px; }
+.todo-sub time { flex: none; }
+.todo-notes { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todo-notes::before { content: "·"; margin-right: 6px; }
 .edit summary { list-style: none; cursor: pointer; }
 .edit summary::-webkit-details-marker { display: none; }
 .edit .when-open, .edit[open] .when-closed { display: none; }
@@ -145,6 +148,17 @@ html[aria-busy="true"] { cursor: progress; }
 .edit-form .form-error { width: 100%; }
 .empty { padding: 40px 16px; text-align: center; color: var(--muted); }
 .empty strong { display: block; font-size: 18px; color: var(--text); margin-bottom: 4px; }
+
+/* ── share + import panels under the list ── */
+.extras { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; margin-top: 16px; }
+.extra { padding: 16px; display: grid; gap: 10px; align-content: start; }
+.extra h2 { margin: 0; font-size: 15px; letter-spacing: -0.01em; }
+.extra p { margin: 0; color: var(--muted); font-size: 14px; }
+.extra form { display: flex; gap: 8px; flex-wrap: wrap; }
+.extra form .form-error { width: 100%; }
+.extra input[type="file"] { padding: 8px 10px; font-size: 14px; }
+.share-link { display: flex; gap: 8px; }
+.share-link .input { font-family: var(--mono); font-size: 13px; padding: 8px 10px; }
 
 @keyframes pop-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 
@@ -160,6 +174,16 @@ html[aria-busy="true"] { cursor: progress; }
 .checkbox { display: flex; align-items: center; gap: 10px; font-weight: 600; margin-bottom: 20px; }
 .checkbox input { width: 20px; height: 20px; accent-color: var(--ok); }
 .row { display: flex; gap: 8px; justify-content: space-between; flex-wrap: wrap; }
+
+/* ── shared list (public, inside the marketing layout) ── */
+.shared { width: min(640px, calc(100vw - 32px)); justify-self: center; }
+.hero .shared h1 { font-size: clamp(26px, 5vw, 34px); line-height: 1.15; letter-spacing: -0.02em; margin: 0 0 4px; overflow-wrap: anywhere; }
+.shared .meta-line { margin-bottom: 12px; }
+.shared .filters { margin-bottom: 8px; color: var(--muted); font-size: 14px; }
+.shared-list { list-style: none; margin: 0 -24px -24px; padding: 0; border-top: 1px solid var(--line); }
+.shared-list .todo { grid-template-columns: auto 1fr; padding: 10px 24px; }
+.shared-list .check { cursor: default; }
+.shared-notes { margin: 4px 0 0; color: var(--muted); font-size: 14px; white-space: pre-wrap; }
 
 /* ── account + auth layout ── */
 .account { display: flex; align-items: center; gap: 4px; }
@@ -215,6 +239,8 @@ html[aria-busy="true"] { cursor: progress; }
   .edit[open] { grid-template-columns: 1fr; }
   .edit[open] summary { grid-column: 1; grid-row: 2; justify-self: start; }
   .card { padding: 18px; }
+  .shared-list { margin: 0 -18px -18px; }
+  .shared-list .todo { padding: 10px 18px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

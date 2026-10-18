@@ -1,10 +1,12 @@
 import {
   ActionForm, HttpError, accepts, action, get, group, inject, negotiate, oneOf, param, query, redirect, route, setMeta,
 } from "@toyz/yerd";
-import { NewTodoForm, TodoList, Toolbar, type ListActions } from "../components.js";
+import { Ago } from "../attributes.js";
+import { ImportForm, NewTodoForm, SharePanel, TodoList, Toolbar, type ListActions } from "../components.js";
 import { AppShell, CardLayout, TodoCount } from "../layouts.js";
-import { EditTodo, NewTodo, TodoRepo, type Filter } from "../todos.js";
-import { auth, type User } from "../users.js";
+import { EditTodo, ImportTodos, NewTodo, TodoRepo, type Filter } from "../todos.js";
+import { UserRepo, auth, type User } from "../users.js";
+import { shareUrl } from "./share.js";
 
 /** Everything inside the app chrome, signed in only. Prefix "/" so member routes keep their own paths. */
 @group("/", { layout: AppShell, meta: { nav: "todos" }, guards: [auth.required] })
@@ -17,6 +19,7 @@ export class TodoPages {}
 @route("/todos", { group: App, meta: { title: "Todos" } })
 export class TodoListPage implements ListActions {
   @inject(TodoRepo) accessor repo!: TodoRepo;
+  @inject(UserRepo) accessor users!: UserRepo;
   @auth.user accessor me!: User;
 
   /** Only this user's todos. */
@@ -35,8 +38,17 @@ export class TodoListPage implements ListActions {
           <TodoList todos={this.todos.list(this.filter)} filter={this.filter} actions={this} />
           <Toolbar filter={this.filter} counts={this.todos.counts()} actions={this} />
         </section>
+        <div class="extras">
+          {this.sharePanel()}
+          <ImportForm importFile={this.importFile} />
+        </div>
       </>
     );
+  }
+
+  sharePanel() {
+    const token = this.me.shareToken;
+    return <SharePanel url={token ? shareUrl(token) : undefined} share={this.share} unshare={this.unshare} />;
   }
 
   /** Same URL, JSON for API clients: `curl -H 'accept: application/json' localhost:3000/todos?filter=active` */
@@ -67,7 +79,8 @@ export class TodoListPage implements ListActions {
 
   @action rename({ id }: { id: string }, form: ActionForm) {
     const { title } = form.parse(NewTodo);
-    if (!this.todos.update(id, { title })) throw new HttpError(404, "That todo is gone");
+    if (!this.todos.get(id)) throw new HttpError(404, "That todo is gone");
+    this.todos.update(id, { title });
     return this.regions();
   }
 
@@ -83,6 +96,28 @@ export class TodoListPage implements ListActions {
 
   @action clearCompleted() {
     this.todos.clearCompleted();
+    return this.regions();
+  }
+
+  @action share() {
+    this.users.share(this.me);
+    return this.sharePanel();
+  }
+
+  @action unshare() {
+    this.users.unshare(this.me);
+    return this.sharePanel();
+  }
+
+  /** The upload: `is.file` in the DTO checks the type and size, then every non-blank line becomes a todo. */
+  @action async importFile(_: {}, form: ActionForm) {
+    const { file } = form.parse(ImportTodos);
+    const titles = (await file.text()).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (titles.length === 0) throw new HttpError(400, "That file has no todos in it.");
+    if (titles.length > 200) throw new HttpError(400, "That's more than 200 todos; split the file up.");
+    const long = titles.findIndex((title) => title.length > 140);
+    if (long >= 0) throw new HttpError(400, `Todo ${long + 1} is longer than 140 characters.`);
+    this.todos.addMany(titles);
     return this.regions();
   }
 }
@@ -113,12 +148,11 @@ export class TodoDetailPage {
   #card() {
     const todo = this.#todo();
     setMeta({ title: todo.title });
-    const created = new Date(todo.createdAt).toLocaleString("en", { dateStyle: "medium", timeStyle: "short" });
     return (
       <>
         <h1>{todo.title}</h1>
         <p class="meta-line">
-          Created {created} · {todo.done ? "done" : "open"}
+          Created <Ago iso={todo.createdAt} /> · {todo.done ? "done" : "open"}
         </p>
         <form action={this.save}>
           <div class="field">

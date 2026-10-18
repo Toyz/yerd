@@ -309,3 +309,174 @@ test("auth: auto mode prefetches the link the pointer is heading for, before it 
   const request = await prefetched;
   expect(new URL(request.url()).pathname).toBe("/signup");
 });
+
+// ── share links: request variants for crawlers ──
+
+const GOOGLEBOT = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+// Playwright's own headless Chrome says "HeadlessChrome", which isBot counts as a crawler.
+const PERSON = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+
+async function shareList(page: Page) {
+  await page.getByRole("button", { name: "Create link" }).click();
+  const field = page.getByLabel("Share link");
+  await expect(field).toHaveValue(/\/share\/[\w-]+$/);
+  return new URL(await field.inputValue()).pathname;
+}
+
+test("share: crawlers get a complete, script-free page with Open Graph tags", async ({ page, browser }) => {
+  const name = await signUp(page);
+  await addTodo(page, "Buy milk");
+  await addTodo(page, "Walk the dog");
+  await page.getByRole("button", { name: 'Mark "Buy milk" as done' }).click();
+  await expect(page.locator(".todo.done")).toHaveCount(1);
+  const id = (await page.locator(".todo-title", { hasText: "Walk the dog" }).getAttribute("href"))!.split("/").pop();
+  expect((await page.request.patch(`/api/todos/${id}`, { data: { notes: "Twice round the park" } })).status()).toBe(200);
+  const path = await shareList(page);
+
+  // The raw response: Vary for caches, and no client runtime at all.
+  const response = await page.request.get(path, { headers: { "user-agent": GOOGLEBOT } });
+  expect(response.status()).toBe(200);
+  expect(response.headers()["vary"]).toMatch(/user-agent/i);
+  expect(await response.text()).not.toContain("/_yerd/runtime.js");
+
+  // What a crawler reads from it.
+  const crawler = await browser.newContext({ userAgent: GOOGLEBOT, javaScriptEnabled: false });
+  const bot = await crawler.newPage();
+  await bot.goto(path);
+  const meta = (selector: string) => bot.locator(selector).getAttribute("content");
+  await expect(bot).toHaveTitle(`@${name}'s todos · yerd todos`);
+  expect(await meta('meta[name="description"]')).toBe("1 of 2 done. Next up: Walk the dog");
+  expect(await meta('meta[property="og:title"]')).toBe(`@${name}'s todos`);
+  expect(await meta('meta[property="og:description"]')).toBe("1 of 2 done. Next up: Walk the dog");
+  expect(new URL((await meta('meta[property="og:url"]'))!).pathname).toBe(path);
+  expect(await bot.locator('link[rel="canonical"]').getAttribute("href")).toBe(await meta('meta[property="og:url"]'));
+  // Everything in the HTML, full notes included; no filters to click.
+  await expect(bot.locator(".shared .todo-title")).toHaveText(["Buy milk", "Walk the dog"]);
+  await expect(bot.locator(".shared-notes")).toHaveText("Twice round the park");
+  await expect(bot.locator(".filters")).toHaveCount(0);
+  await crawler.close();
+});
+
+test("share: people get the interactive page, and the link stops working when sharing stops", async ({ page, browser }) => {
+  const name = await signUp(page);
+  await addTodo(page, "Buy milk");
+  await addTodo(page, "Walk the dog");
+  await page.getByRole("button", { name: 'Mark "Buy milk" as done' }).click();
+  await expect(page.locator(".todo.done")).toHaveCount(1);
+  const path = await shareList(page);
+
+  const visitor = await browser.newContext({ userAgent: PERSON });
+  const other = await visitor.newPage();
+  await other.goto(path);
+  await expect(other).toHaveTitle(`@${name}'s todos · yerd todos`);
+  await expect(other.locator(".shared h1")).toHaveText(`@${name}'s todos`);
+  await expect(other.locator(".shared .todo-title")).toHaveText(["Buy milk", "Walk the dog"]);
+  await expect(other.locator('script[src="/_yerd/runtime.js"]')).toHaveCount(1);
+  await expect(other.locator("#account-cta")).toContainText("Sign up");
+  // Boosted filters: no full reload.
+  await markPage(other);
+  await other.getByRole("link", { name: "Done" }).click();
+  await expect(other).toHaveURL(/filter=completed/);
+  await expect(other.locator(".shared .todo-title")).toHaveText(["Buy milk"]);
+  await stillSamePage(other);
+
+  await page.getByRole("button", { name: "Stop sharing" }).click();
+  await expect(page.getByRole("button", { name: "Create link" })).toBeVisible();
+  expect((await other.goto(path))?.status()).toBe(404);
+  expect((await page.request.get(path, { headers: { "user-agent": GOOGLEBOT } })).status()).toBe(404);
+  await visitor.close();
+});
+
+// ── the JSON API ──
+
+test("api: create, read, patch only what's sent, delete, and JSON 404s from @catches", async ({ page, playwright, baseURL }) => {
+  const api = page.request; // shares the signed-in session cookie
+
+  const created = await api.post("/api/todos", { data: { title: "  From the API  " } });
+  expect(created.status()).toBe(201);
+  const todo = await created.json();
+  expect(todo).toMatchObject({ title: "From the API", notes: "", done: false });
+  expect(created.headers()["location"]).toBe(`/api/todos/${todo.id}`);
+
+  expect(await (await api.get(`/api/todos/${todo.id}`)).json()).toMatchObject({ id: todo.id, title: "From the API" });
+  expect((await (await api.get("/api/todos")).json()).todos.map((t: { id: string }) => t.id)).toEqual([todo.id]);
+
+  // Partial updates: each PATCH changes its own field and keeps the rest.
+  let patched = await api.patch(`/api/todos/${todo.id}`, { data: { notes: "Written by curl" } });
+  expect(patched.status()).toBe(200);
+  expect(await patched.json()).toMatchObject({ title: "From the API", notes: "Written by curl", done: false });
+  patched = await api.patch(`/api/todos/${todo.id}`, { data: { done: true } });
+  expect(await patched.json()).toMatchObject({ title: "From the API", notes: "Written by curl", done: true });
+
+  const invalid = await api.patch(`/api/todos/${todo.id}`, { data: { title: "   " } });
+  expect(invalid.status()).toBe(400);
+  expect((await invalid.json()).issues[0].path).toBe("title");
+
+  // The page sees API changes too.
+  await page.goto("/todos");
+  await expect(page.locator(".todo.done .todo-title")).toHaveText("From the API");
+  await expect(page.locator(".todo-notes")).toHaveText("Written by curl");
+
+  expect((await api.delete(`/api/todos/${todo.id}`)).status()).toBe(204);
+  for (const gone of [api.get(`/api/todos/${todo.id}`), api.patch(`/api/todos/${todo.id}`, { data: { done: false } }), api.delete(`/api/todos/${todo.id}`)]) {
+    const response = await gone;
+    expect(response.status()).toBe(404);
+    expect(await response.json()).toEqual({ error: `No todo with id ${todo.id}`, id: todo.id });
+  }
+
+  // No session: 401, not a login redirect.
+  const anonymous = await playwright.request.newContext({ baseURL });
+  expect((await anonymous.get("/api/todos")).status()).toBe(401);
+  await anonymous.dispose();
+});
+
+// ── custom attribute with a client half ──
+
+test("relative-time: rendered on the server and kept fresh in the browser", async ({ page }) => {
+  await page.clock.install();
+  await page.goto("/todos");
+  await addTodo(page, "Tick tock");
+  const time = page.locator(".todo", { hasText: "Tick tock" }).locator("time[relative-time]");
+  await expect(time).toHaveText("just now");
+  expect(await time.getAttribute("datetime")).toMatch(/^\d{4}-\d\d-\d\dT/);
+
+  // The server writes the text too (no JavaScript needed to read it).
+  expect(await (await page.request.get("/todos")).text()).toMatch(/<time relative-time="[^"]+" datetime="[^"]+" title="[^"]+">just now<\/time>/);
+
+  await page.clock.fastForward("05:00");
+  await expect(time).toHaveText("5 minutes ago");
+  await page.clock.fastForward("02:00:00");
+  await expect(time).toHaveText("2 hours ago");
+});
+
+// ── uploads ──
+
+const todoFile = (text: string, name = "todos.txt", mimeType = "text/plain") => ({ name, mimeType, buffer: Buffer.from(text) });
+
+test("import: a .txt file becomes todos, in place, with JavaScript", async ({ page }) => {
+  await page.goto("/todos");
+  await markPage(page);
+  await page.getByLabel("Todo file").setInputFiles(todoFile("Buy milk\n\n   Call mom  \r\nFile taxes\n"));
+  await page.getByRole("button", { name: "Import" }).click();
+  await expect(page.locator(".todo-title")).toHaveText(["Buy milk", "Call mom", "File taxes"]);
+  await expect(page.locator("#todo-count")).toHaveText("3 left");
+  await expect(page.getByLabel("Todo file")).toHaveValue("");
+
+  // is.file({ types }) turns other files away, with the message next to the form.
+  await page.getByLabel("Todo file").setInputFiles(todoFile("not really a png", "photo.png", "image/png"));
+  await page.getByRole("button", { name: "Import" }).click();
+  await expect(page.locator(".extra .form-error")).toHaveText("File type image/png isn't accepted (text/plain)");
+  await expect(page.locator(".todo")).toHaveCount(3);
+  await stillSamePage(page);
+});
+
+test("import: works with JavaScript disabled", async ({ browser }) => {
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  const page = await context.newPage();
+  await signUp(page);
+  await page.getByLabel("Todo file").setInputFiles(todoFile("Plain\nOld\nForms\n"));
+  await page.getByRole("button", { name: "Import" }).click();
+  await expect(page).toHaveURL(/\/todos$/);
+  await expect(page.locator(".todo-title")).toHaveText(["Plain", "Old", "Forms"]);
+  await context.close();
+});

@@ -26,6 +26,20 @@ the source file in dev, `/assets/styles-<hash>.css` (cached for a year) in produ
 `curl -H 'accept: application/json' localhost:3000/todos?filter=active`
 (`@accepts("json")` on the list, `negotiate()` on the detail page).
 
+There's also a REST API, same login (`src/routes/api.ts`):
+
+| Request | Answer |
+|---------|--------|
+| `GET /api/todos` | your todos and counts |
+| `POST /api/todos` `{"title"}` | 201 + `Location` (`@status(201)`, `ctx.setHeader`) |
+| `GET /api/todos/:id` | the todo |
+| `PATCH /api/todos/:id` `{"title"?, "notes"?, "done"?}` | only the fields you send change (all-optional `TodoChanges` DTO) |
+| `DELETE /api/todos/:id` | 204 |
+
+A missing todo is a `TodoNotFound` from the store, a domain error that the
+route's `@catches(TodoNotFound)` turns into `404 {"error", "id"}`. Bad bodies
+are a 400 listing every issue; no session is a 401.
+
 Todos are saved to `.data/todos.json` (set `TODO_FILE` to move it, or
 `TODO_FILE=:memory:` to keep nothing).
 
@@ -48,10 +62,12 @@ Every HTML response, error pages included, goes through layers of layouts:
 | `/todos/:id` | `RootLayout` > `AppShell` > `CardLayout` | nested `@group("/todos/:id", { group: App, layout: CardLayout })` |
 | `/about` | `RootLayout` > `MarketingLayout` | `@layout(MarketingLayout)` on the route, no group |
 | `/login`, `/signup` | `RootLayout` > `AuthLayout` | `@group("/", { layout: AuthLayout })` |
+| `/share/:token` | `RootLayout` > `MarketingLayout` > `SharedCard` | `@layout(MarketingLayout, SharedCard)`: two in one decorator |
 | 404 / errors | `RootLayout` > `ErrorPage` | `app.errorPage(ErrorPage)` |
 
-Layouts get `meta` (title, active nav), merged from group meta, route meta and
-`setMeta()` calls in handlers. `AppShell` reads the todo count straight from DI
+Layouts get `meta` (title, description, canonical URL, active nav), merged from
+group meta, route meta and `setMeta()` calls in handlers. `RootLayout` turns it
+into `<title>`, the meta description and Open Graph tags. `AppShell` reads the todo count straight from DI
 with `resolve(TodoRepo)`.
 
 ## Reactivity
@@ -63,15 +79,47 @@ with `resolve(TodoRepo)`.
   Todo titles also have `prefetch`, so hovering one warms its page and the click needs no request.
 - **Live:** the shell subscribes to `/todos/events` (SSE); every change refreshes all tabs.
 - **Validation:** `NewTodo` / `EditTodo` DTO classes; messages appear next to the form.
+- **Custom attribute:** `relative-time={iso}` (`src/attributes.tsx`, made with
+  `attribute()`). The server writes "3 minutes ago" plus `datetime` and a full
+  date on hover; its client half (shipped as source text, so self-contained)
+  re-renders the text every 15 seconds.
+- **Upload:** "Import" on `/todos` takes a `.txt` file, one todo per line: an
+  action whose `ImportTodos` DTO has `is.file({ types: ["text/plain"], maxSize })`.
+  `enctype="multipart/form-data"` makes it work without JavaScript; with it, the
+  runtime sends the file itself and the list updates in place.
+
+## Sharing, and pages for crawlers
+
+"Create link" on `/todos` gives a public, read-only `/share/<token>`
+(`src/routes/share.tsx`). It's one route with two `@get` handlers:
+
+- `@get page()`: people get the live page (boosted filters, ticking times).
+- `@get(isBot) crawlable()`: search engines and link unfurlers get every todo
+  with full notes, no filters and no client runtime (`setMeta({ scripts: false })`).
+
+Both set the title, description and URL that `RootLayout` renders as Open Graph
+tags, and `isBot` adds `Vary: User-Agent` so caches keep the two apart. Variants
+need a request to test, which is why this page isn't prerendered.
+`curl -A Googlebot localhost:3000/share/<token>` shows the crawler version.
+
+## Logging
+
+`app.logging({ filter })` in `src/app.ts` (`YERD_LOG` still wins). `TodoRepo`
+and `UserRepo` log through `@logger`. `TodoList.update` and `TodoList.addMany`
+are `@instrument`ed: spans with their arguments, except `"patch.notes"` (a
+compiler-checked path into the argument: notes are the user's own words).
 
 ## Files
 
 | File | What |
 |------|------|
-| `src/todos.ts` | `TodoRepo` service (JSON file persistence, change events), DTOs |
-| `src/layouts.tsx` | `RootLayout`, `AppShell`, `CardLayout`, `MarketingLayout`, `ErrorPage` |
-| `src/components.tsx` | list, rows, toolbar, new-todo form |
-| `src/routes/todos.tsx` | groups, list page with actions, detail page |
+| `src/todos.ts` | `TodoRepo` service (JSON file persistence, change events, logging), DTOs, `TodoNotFound` |
+| `src/users.ts` | `UserRepo` (accounts, share tokens), `createAuth(...)` |
+| `src/attributes.tsx` | the `relative-time` custom attribute and `<Ago>` |
+| `src/layouts.tsx` | `RootLayout` (Open Graph), `AppShell`, `CardLayout`, `MarketingLayout`, `SharedCard`, `ErrorPage` |
+| `src/components.tsx` | list, rows, toolbar, new-todo form, share panel, import form |
+| `src/routes/todos.tsx` | groups, list page with actions (share, import), detail page |
+| `src/routes/share.tsx` | `/share/:token`: people vs `@get(isBot)` |
 | `src/routes/pages.tsx` | `/` redirect, `/about` |
-| `src/routes/api.ts` | SSE live feed, live NDJSON feed (`curl -N /api/todos/changes.ndjson`), JSON API, NDJSON export |
+| `src/routes/api.ts` | SSE live feed, REST API, live NDJSON feed (`curl -N /api/todos/changes.ndjson`), NDJSON export |
 | `src/styles.css` | the stylesheet (light/dark, responsive) |
