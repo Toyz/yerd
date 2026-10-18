@@ -1,10 +1,10 @@
 # Responses
 
-This page covers what a handler can return, how to set status codes, headers and cookies, and how errors become responses.
+What a handler can return, how to set status codes, headers and cookies, and how errors become responses.
 
 ## Return anything
 
-A handler returns whatever is natural, and yerd picks the status, content type and body from what it gets.
+Return whatever is natural; yerd picks the status, content type and body from it.
 
 ```tsx
 import { get, post, route } from "@toyz/yerd";
@@ -36,14 +36,12 @@ export class Demo {
 | [`negotiate({...})`](api:yerd.negotiate) | The variant the Accept header asks for (see [routing](02-routing.md)) |
 | [`bare(node)`](api:yerd.bare) | HTML with no layouts, for fragments |
 
-> [!NOTE]
-> Objects become JSON: plain objects, instances of your own classes (a DTO you just validated sends its fields), and anything with `toJSON` (a `Date` sends its ISO string). Built-ins JSON can't represent, like `Map`, `Set` or an `Error`, are refused with a 500 whose log line says what to do instead.
-
-`return todos.get(id) ?? 404` is a common idiom: the object as JSON when it exists, an empty 404 when it doesn't.
+- Objects become JSON: plain objects, your own class instances (a validated DTO sends its fields), anything with `toJSON` (a `Date`). `Map`, `Set` and `Error` are refused with a 500 whose log line says what to do.
+- `return todos.get(id) ?? 404` sends the object or an empty 404.
 
 ## res() for full control
 
-[`res()`](api:yerd.res) wraps any body with an explicit status, headers, cookies or layouts. The body still goes through the table above.
+[`res()`](api:yerd.res) wraps any body with an explicit status, headers, cookies or layouts; the body still follows the table above.
 
 ```tsx
 import { get, post, res, route } from "@toyz/yerd";
@@ -72,14 +70,15 @@ export class ThingsApi {
 | `layout` | Layout or layouts for a JSX body, innermost in the chain. |
 | `inherit` | `false` makes `layout` the whole chain, with no app or route layouts. |
 
-So `res(<Receipt />, { layout: PrintLayout, inherit: false })` renders a page in just `PrintLayout`. The [routing guide](02-routing.md) explains how layout chains combine.
+See [routing](02-routing.md#layouts-anywhere) for how layout chains combine.
 
 ## Redirects
 
-[`redirect()`](api:yerd.redirect) sends a `Location` header and no body. The default status is 303, which is what you want after a form post.
+[`redirect()`](api:yerd.redirect) sends a `Location` header and no body, 303 by default (right after a form post).
 
 ```tsx
-import { get, redirect, route } from "@toyz/yerd";
+import { get, query, redirect, route } from "@toyz/yerd";
+import { safeNext } from "@toyz/yerd/auth";
 
 @route("/old-path")
 export class OldPath {
@@ -87,13 +86,6 @@ export class OldPath {
     return redirect("/new-path", 301);
   }
 }
-```
-
-The second argument can be 301, 302, 303, 307 or 308. Non-ASCII characters in the location are percent-encoded as UTF-8 (`/café` goes out as `/caf%C3%A9`); everything else is sent as given, so check targets that come from the request before redirecting to them: [`safeNext(value)`](api:auth.safeNext) lets only same-site paths through. A location with a line break is refused (a 500), so request data can't add headers.
-
-```tsx
-import { get, query, redirect, route } from "@toyz/yerd";
-import { safeNext } from "@toyz/yerd/auth";
 
 @route("/go")
 export class Go {
@@ -105,9 +97,13 @@ export class Go {
 }
 ```
 
+- The status can be 301, 302, 303, 307 or 308.
+- Non-ASCII is percent-encoded (`/café` becomes `/caf%C3%A9`); a line break is refused with a 500.
+- Nothing else is checked, so run targets from the request through [`safeNext()`](api:auth.safeNext).
+
 ## @status and @setHeader
 
-When a handler always answers the same way, declare it on the method and keep returning plain values.
+Declare a fixed status or header on the method and keep returning plain values.
 
 ```tsx
 import { post, route, setHeader, status } from "@toyz/yerd";
@@ -121,13 +117,13 @@ export class Comments {
 }
 ```
 
-- [`@status`](api:yerd.status) only replaces the default 200 (or 204 for an empty result). A status from `res()` or a returned number wins.
-- [`@setHeader`](api:yerd.setHeader) adds a header unless the result already set the same one. `Vary` is the exception for both: values add up, so the `Accept` or `User-Agent` that negotiation and variants rely on is never lost.
-- Neither applies when the handler throws: an error response keeps its own status and headers. Headers you set with `ctx.setHeader()` do go out on errors.
+- [`@status`](api:yerd.status) only replaces the default 200 (or 204); a status from `res()` or a returned number wins.
+- [`@setHeader`](api:yerd.setHeader) adds a header unless the result set it. `Vary` values add up instead.
+- Neither applies when the handler throws. Headers set with `ctx.setHeader()` do go out on errors.
 
 ## Caching headers
 
-yerd sets a few caching headers itself, so that caches in front of you (a CDN, the browser) never mix up what different visitors should see:
+yerd sets a few caching headers itself so caches never mix up what different visitors see:
 
 | Response | Header yerd adds |
 | --- | --- |
@@ -137,9 +133,7 @@ yerd sets a few caching headers itself, so that caches in front of you (a CDN, t
 | A static file with a hashed name | `Cache-Control: public, max-age=31536000, immutable` |
 | Other static files and the client runtime | `Cache-Control: no-cache` and an `ETag`, so revalidating costs a 304 |
 
-`Vary` adds up wherever it's set: `@setHeader("vary", "Cookie")`, `ctx.setHeader("vary", ...)` and `res(body, { headers: { vary } })` add to the values yerd needs instead of replacing them.
-
-To let caches keep a response, say so:
+`Vary` adds up wherever you set it (`@setHeader`, `ctx.setHeader`, `res()` headers). To let caches keep a response, say so:
 
 ```tsx
 import { get, route, setHeader } from "@toyz/yerd";
@@ -153,11 +147,11 @@ export class Rates {
 ```
 
 > [!WARNING]
-> Don't make a page public-cacheable if it renders an action form or reads the session. With sessions on, a page with action forms carries tokens bound to one visitor's session, and a first visit sets that visitor's session cookie: a shared cache would hand both to everyone. Mark only responses that are the same for every visitor (an API answer, a [prerendered](05-pages-and-layouts.md#prerendering) page).
+> Only mark responses that are the same for every visitor as public. A page that reads the session, or renders action forms for a visitor with one, carries that visitor's data and tokens (see [action tokens](15-security.md#action-tokens)).
 
 ## Setting things from inside a handler
 
-Sometimes you only know a header or cookie halfway through. [`currentContext()`](api:yerd.currentContext) returns the request context, which can set them without changing what you return.
+[`currentContext()`](api:yerd.currentContext) sets headers, cookies and status mid-handler without changing what you return.
 
 ```tsx
 import { currentContext, get, route } from "@toyz/yerd";
@@ -182,14 +176,12 @@ export class Hello {
 | `ctx.deleteCookie(name, options?)` | Expires a cookie. Pass the same `path` / `domain` it was set with. |
 | `ctx.status(code)` | Like `@status`, decided at run time. |
 
-Cookie options are `maxAge` (seconds), `expires`, `path`, `domain`, `secure`, `httpOnly` and `sameSite`. The defaults are `Path=/`, `HttpOnly` and `SameSite=Lax`.
-
-> [!TIP]
-> Cookies set through the context still go out when the handler later throws, so a "failed attempts" cookie survives the 401.
+- Cookie options: `maxAge` (seconds), `expires`, `path`, `domain`, `secure`, `httpOnly`, `sameSite`. Defaults: `Path=/`, `HttpOnly`, `SameSite=Lax`.
+- Context cookies still go out when the handler later throws, so a "failed attempts" cookie survives the 401.
 
 ## Errors with YerdError
 
-Throw a [`YerdError`](api:yerd.YerdError), or one of its subclasses, to answer with a status. It works anywhere in a request: a handler, a guard, a transform, a service.
+Throw an [`YerdError`](api:yerd.YerdError) anywhere in the request (handler, guard, transform, service) to answer with a status.
 
 ```tsx
 import { Conflict, NotFound, del, get, route } from "@toyz/yerd";
@@ -244,37 +236,11 @@ Each takes `(message?, options?)`. For any other status, `new YerdError(status, 
 | `headers` | Headers for the error response. |
 | `cause` | The underlying error, for your logs. |
 
-yerd's own failures are these classes too: an unknown path is a `NotFound`, a wrong method a `MethodNotAllowed`, a failed DTO a `ValidationFailed`. `@catches` and `instanceof` see them like yours.
-
-### Your own errors
-
-Extend the closest class:
-
-```ts
-import { Conflict, YerdError } from "@toyz/yerd";
-
-class OutOfStock extends Conflict {
-  constructor(readonly sku: string) {
-    super(`${sku} is out of stock`, { code: "out_of_stock", details: { sku } });
-  }
-}
-
-// A different body shape: override toJSON().
-class Problem extends YerdError {
-  override toJSON() {
-    return { type: `https://example.com/problems/${this.code}`, title: this.message, status: this.status };
-  }
-}
-
-throw new Problem(422, "Quantity must be positive", { code: "bad_qty", headers: { "content-type": "application/problem+json" } });
-```
-
-- `@catches(Conflict)` catches an `OutOfStock`, and `error.name` is `"OutOfStock"`.
-- An overridden `toJSON()` is used even without a code or details.
+Any other thrown error is a logged 500 with the body `Internal Server Error`; its message never reaches the client.
 
 ## Handling errors with @catches
 
-[`@catches`](api:yerd.catches) marks a route method as the handler for errors thrown by that route's handlers, guards and actions. It gets the error and returns anything a handler can.
+[`@catches`](api:yerd.catches) marks a method that handles errors from the route's handlers, guards and actions, returning anything a handler can.
 
 ```tsx
 import { NotFound, catches, get, res, route } from "@toyz/yerd";
@@ -304,14 +270,14 @@ export class Pet {
 }
 ```
 
-- With error classes, it handles only those; with none, it handles everything. Methods are tried in the order written.
+- With error classes it handles only those; with none, everything. Methods are tried in written order.
 - JSX renders inside the route's layouts.
-- The response keeps the error's status (a `YerdError`'s, else 500) unless you return `res(..., { status })` or a number.
-- Returning `undefined` passes the error on to the next `@catches`, then `app.onError`, then the error page.
+- The error's status (an `YerdError`'s, else 500) sticks unless you return `res(..., { status })` or a number.
+- `undefined` passes the error on to the next `@catches`, then `app.onError`, then the error page.
 
 ## app.onError
 
-`app.onError` is the app-wide version. It sees every error a route didn't handle, including 404s and 405s that never reached a route.
+`app.onError` is the app-wide version, seeing every unhandled error including 404s and 405s that never reached a route.
 
 ```tsx
 import { NotFound, res, yerd } from "@toyz/yerd";
@@ -326,32 +292,16 @@ export default yerd().onError((error, ctx) => {
 });
 ```
 
-Same rules as `@catches`: JSX renders in the app's root layouts, the error's status sticks unless you pick one, and `undefined` falls through to the error page.
+Same rules as `@catches`, with JSX rendered in the app's root layouts.
 
 ## Error pages
 
-[`app.errorPage()`](api:yerd.YerdApp.errorPage) renders errors as a page for browsers. The component gets the status, a message that's safe to show, and the thrown `error` (see [error pages](05-pages-and-layouts.md#error-pages) for showing details in development only). It renders inside your root layouts.
+[`app.errorPage()`](api:yerd.YerdApp.errorPage) renders errors as a page inside your root layouts; writing one is covered in [pages and layouts](05-pages-and-layouts.md#error-pages).
 
-```tsx
-import { yerd, type ErrorPageProps } from "@toyz/yerd";
-import { RootLayout } from "./layouts.js";
-
-function ErrorPage({ status, message }: ErrorPageProps) {
-  return (
-    <section class="error">
-      <h1>{status}</h1>
-      <p>{message}</p>
-    </section>
-  );
-}
-
-export default yerd().layout(RootLayout).errorPage(ErrorPage);
-```
-
-It applies only when the request's Accept header includes `text/html`, and not to actions posted by the client runtime, which get the plain error so the runtime can show its message in the form. API clients keep getting the plain error body. The `message` is an exposed `YerdError`'s message, otherwise the standard status text ("Not Found", "Internal Server Error").
-
-The full order for any error: the route's `@catches` methods, then `app.onError`, then the error page, then the plain response.
+- It applies only when Accept includes `text/html`, and not to actions posted by the client runtime, which shows the message in the form.
+- API clients get plain text, or JSON for errors with `details`.
+- The full order: the route's `@catches`, `app.onError`, the error page, then the plain response.
 
 ## Streaming
 
-Returning an async iterable already streams text. For Server-Sent Events, NDJSON feeds and live updates pushed to every open tab, see [streaming and live updates](07-streaming-and-live.md).
+Returning an async iterable streams text. For Server-Sent Events, NDJSON and live updates, see [streaming and live](07-streaming-and-live.md).
