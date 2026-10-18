@@ -40,12 +40,66 @@ function publicMessage(error: unknown): string {
   return "Internal Server Error";
 }
 
+/** What a heartbeat function is told about the beat it's making. */
+export interface HeartbeatInfo {
+  /** 1 for the first beat since the stream started, then 2, 3... */
+  count: number;
+  /** How long the stream has been quiet (since the last item, or the start), in ms. */
+  idleMs: number;
+  /** How long the stream has been open, in ms. */
+  openMs: number;
+}
+
 /**
- * Pull from `source`, yielding `heartbeat()` whenever it's quiet for `ms`.
+ * Keep a quiet stream alive. A number is how often (ms; 0 is off), sending
+ * the default beat (a blank NDJSON line, an SSE comment). An object sets what
+ * to send too: a value, or a function that makes one per beat (return
+ * undefined for the default). It's written like any item of the stream, so
+ * for SSE `event({ event: "ping" })` is a named event and a plain value is a
+ * message.
+ *
+ * ```ts
+ * @get @sse({ heartbeat: { every: 20_000, send: ({ count }) => event({ event: "ping", data: { count } }) } }) feed() { ... }
+ * return ndjson(rows, { heartbeat: { every: 10_000, send: { type: "keepalive" } } });
+ * ```
+ */
+export type Heartbeat =
+  | number
+  | {
+      /** How often, while the stream is quiet, in ms. */
+      every: number;
+      /** What to send: a value, or a function making one per beat (undefined: the default beat). */
+      send?: ((info: HeartbeatInfo) => unknown) | string | number | boolean | null | object;
+    };
+
+/** A heartbeat option as an interval and a function producing each beat's text. */
+function beating(option: Heartbeat | undefined, fallback: number, plain: string, format: (value: unknown) => string): { ms: number; beat: (info: HeartbeatInfo) => string } {
+  if (option === undefined || typeof option === "number") {
+    const ms = option ?? fallback;
+    if (!Number.isFinite(ms) || ms < 0) throw new TypeError(`heartbeat must be a number of ms (0 is off), got ${ms}`);
+    return { ms, beat: () => plain };
+  }
+  const { every, send } = option;
+  if (!Number.isFinite(every) || every < 0) throw new TypeError(`heartbeat.every must be a number of ms (0 is off), got ${every}`);
+  if (send === undefined) return { ms: every, beat: () => plain };
+  return {
+    ms: every,
+    beat: (info) => {
+      const value = typeof send === "function" ? (send as (info: HeartbeatInfo) => unknown)(info) : send;
+      return value === undefined ? plain : format(value);
+    },
+  };
+}
+
+/**
+ * Pull from `source`, yielding a heartbeat whenever it's quiet for `ms`.
  * Returns the source's items through `onItem`.
  */
-async function* withHeartbeat<T>(source: AsyncIterable<T>, ms: number, beat: string, onItem: (item: T) => string): AsyncGenerator<string> {
+async function* withHeartbeat<T>(source: AsyncIterable<T>, ms: number, beat: (info: HeartbeatInfo) => string, onItem: (item: T) => string): AsyncGenerator<string> {
   const iterator = source[Symbol.asyncIterator]();
+  const opened = Date.now();
+  let lastItem = opened;
+  let count = 0;
   try {
     let pending = iterator.next();
     while (true) {
@@ -59,10 +113,12 @@ async function* withHeartbeat<T>(source: AsyncIterable<T>, ms: number, beat: str
       const result = await (tick ? Promise.race([pending, tick]) : pending);
       clearTimeout(timer);
       if (result === "tick") {
-        yield beat;
+        const now = Date.now();
+        yield beat({ count: ++count, idleMs: now - lastItem, openMs: now - opened });
         continue;
       }
       if (result.done) return;
+      lastItem = Date.now();
       yield onItem(result.value);
       pending = iterator.next();
     }
@@ -76,13 +132,17 @@ async function* withHeartbeat<T>(source: AsyncIterable<T>, ms: number, beat: str
 /** Options for ndjson(). */
 export interface NdjsonOptions {
   /**
-   * Write an empty line every N ms while the source is quiet (readers skip blank lines). 0 disables. Default 0.
+   * Keep the stream alive while the source is quiet. A number of ms writes an
+   * empty line that often (readers skip blank lines); `{ every, send }`
+   * writes `send` (a value, or a function per beat) as a JSON line instead.
+   * 0 disables. Default 0.
    *
    * ```ts
    * @get @ndjson({ heartbeat: 15_000 }) feed() { return this.channels.subscribe(orders, this.stop); }
+   * @get @ndjson({ heartbeat: { every: 10_000, send: ({ idleMs }) => ({ type: "ping", idleMs }) } }) jobs() { ... }
    * ```
    */
-  heartbeat?: number;
+  heartbeat?: Heartbeat;
   /**
    * If the source throws after streaming has started, write one last line
    * `{"error": message}` before closing. Default true; false just closes.
@@ -96,7 +156,9 @@ export interface NdjsonOptions {
 
 async function* ndjsonLines(source: AsyncIterable<unknown>, options: NdjsonOptions): AsyncGenerator<string> {
   try {
-    yield* withHeartbeat(source, options.heartbeat ?? 0, "\n", (item) => `${JSON.stringify(item) ?? "null"}\n`);
+    const line = (item: unknown) => `${JSON.stringify(item) ?? "null"}\n`;
+    const { ms, beat } = beating(options.heartbeat, 0, "\n", line);
+    yield* withHeartbeat(source, ms, beat, line);
   } catch (error) {
     if (options.errorLine === false) throw error;
     yield `${JSON.stringify({ error: publicMessage(error) })}\n`;
@@ -104,6 +166,8 @@ async function* ndjsonLines(source: AsyncIterable<unknown>, options: NdjsonOptio
 }
 
 function ndjsonResponse(source: AsyncIterable<unknown>, options: NdjsonOptions = {}): YerdResponse {
+  // Checked here, where the mistake is: inside the stream it would surface after the headers went out.
+  beating(options.heartbeat, 0, "", String);
   return new YerdResponse(200, { "content-type": "application/x-ndjson; charset=utf-8", ...STREAM_HEADERS }, ndjsonLines(source, options));
 }
 
@@ -220,13 +284,18 @@ export function formatEvent(item: unknown): string {
 /** Options for sse(). */
 export interface SseOptions {
   /**
-   * Send a comment every N ms while the source is quiet, so proxies keep the connection. 0 disables. Default 15000.
+   * Keep the connection alive while the source is quiet, so proxies don't
+   * drop it. A number of ms sends a comment (`: ping`) that often;
+   * `{ every, send }` sends `send` instead, written like any item: `event()`
+   * for a named event the client can listen for, a plain value as a message.
+   * 0 disables. Default 15000.
    *
    * ```ts
    * @get @sse({ heartbeat: 30_000 }) feed() { return this.channels.subscribe(news, this.stop); }
+   * @get @sse({ heartbeat: { every: 20_000, send: ({ count }) => event({ event: "ping", data: { count } }) } }) live() { ... }
    * ```
    */
-  heartbeat?: number;
+  heartbeat?: Heartbeat;
   /**
    * Reconnect delay hint sent once at the start, in ms.
    *
@@ -248,7 +317,8 @@ export interface SseOptions {
 async function* sseEvents(source: AsyncIterable<unknown>, options: SseOptions): AsyncGenerator<string> {
   if (options.retry !== undefined && Number.isFinite(options.retry)) yield `retry: ${Math.max(0, Math.floor(options.retry))}\n\n`;
   try {
-    yield* withHeartbeat(source, options.heartbeat ?? 15000, ": ping\n\n", formatEvent);
+    const { ms, beat } = beating(options.heartbeat, 15000, ": ping\n\n", formatEvent);
+    yield* withHeartbeat(source, ms, beat, formatEvent);
   } catch (error) {
     if (options.errorEvent === false) throw error;
     yield formatEvent(event({ event: "error", data: { error: publicMessage(error) } }));
@@ -256,6 +326,7 @@ async function* sseEvents(source: AsyncIterable<unknown>, options: SseOptions): 
 }
 
 function sseResponse(source: AsyncIterable<unknown>, options: SseOptions = {}): YerdResponse {
+  beating(options.heartbeat, 15000, "", String);
   return new YerdResponse(200, { "content-type": "text/event-stream; charset=utf-8", ...STREAM_HEADERS }, sseEvents(source, options));
 }
 

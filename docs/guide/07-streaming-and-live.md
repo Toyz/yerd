@@ -48,7 +48,7 @@ Pass options to the decorator, `@ndjson({ heartbeat: 15_000 })`, or call `ndjson
 
 | Option | Default | Does |
 |---|---|---|
-| `heartbeat` | `0` (off) | writes an empty line every N ms while the source is quiet, so proxies keep the connection open |
+| `heartbeat` | `0` (off) | writes an empty line every N ms while the source is quiet, so proxies keep the connection open; or `{ every, send }` for a line of your own ([custom heartbeats](#custom-heartbeats)) |
 | `errorLine` | `true` | if the source throws mid-stream, writes a last line `{"error": "..."}` before closing |
 
 ## Server-Sent Events
@@ -77,11 +77,48 @@ source.addEventListener("user", (e) => console.log(e.data));   // event: user
 
 | Option | Default | Does |
 |---|---|---|
-| `heartbeat` | `15000` | sends a `: ping` comment every N ms while quiet |
+| `heartbeat` | `15000` | sends a `: ping` comment every N ms while quiet; or `{ every, send }` for an event of your own ([custom heartbeats](#custom-heartbeats)) |
 | `retry` | none | sends a reconnect delay hint (ms) once at the start |
 | `errorEvent` | `true` | if the source throws, sends `event: error` with the message before closing |
 
 `event()` also takes `retry` and `comment`. To refresh a page's Regions on every message, point `data-yx-live` at an SSE route (see [interactivity](06-interactivity.md#live-refresh)).
+
+### Custom heartbeats
+
+A heartbeat keeps a quiet connection from being dropped by proxies and load balancers. The plain beat (a blank NDJSON line, an SSE comment) is invisible to clients. When the client should see it (to show "live", to detect a stalled connection, to carry a server time), give the heartbeat a body: `{ every, send }`.
+
+`send` is written like any item of the stream. For SSE, `event()` makes a named event the client can listen for, and a plain value is a message. For NDJSON it's a JSON line.
+
+```tsx
+import { event, get, ndjson, route, sse } from "@toyz/yerd";
+
+@route("/live")
+export class Live {
+  // The same body every time.
+  @get @sse({ heartbeat: { every: 20_000, send: event({ event: "ping" }) } }) feed() { ... }
+
+  // A function makes each beat: it's told which beat it is, how long the stream
+  // has been quiet, and how long it's been open.
+  @get stats() {
+    return ndjson(this.updates(), {
+      heartbeat: { every: 10_000, send: ({ count, idleMs }) => ({ type: "keepalive", count, idleMs }) },
+    });
+  }
+}
+```
+
+```js
+// In the browser: a named heartbeat event, and a timer that notices when beats stop.
+const source = new EventSource("/live");
+let lastBeat = Date.now();
+source.addEventListener("ping", () => (lastBeat = Date.now()));
+setInterval(() => document.body.classList.toggle("stalled", Date.now() - lastBeat > 45_000), 5_000);
+```
+
+- The function may return `undefined` for the plain beat that time.
+- `idleMs` restarts with every item, so it's the time since the last real update; `openMs` is since the stream started.
+- A heartbeat only goes out while the source is quiet: a busy stream doesn't need one, so it gets none.
+- A bad interval (negative, `NaN`) is refused when the stream is created, not after its headers have gone out.
 
 ### Errors mid-stream
 

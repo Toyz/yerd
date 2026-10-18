@@ -32,7 +32,7 @@ export {
   Events, EventTransport, MemoryTransport, Call, named, eventName, on, handles,
   type OnOptions, type CallOptions, type WaitOptions, type ResultOf,
 } from "./events/events.js";
-export { sse, ndjson, event, type SseEvent, type SseEventInit, type SseOptions, type NdjsonOptions } from "./respond/stream.js";
+export { sse, ndjson, event, type SseEvent, type SseEventInit, type SseOptions, type NdjsonOptions, type Heartbeat, type HeartbeatInfo } from "./respond/stream.js";
 export { Container, Scope, ServiceCollection, token, resolve, type Token, type ServiceKey, type Lifetime } from "./di/container.js";
 export {
   service, singleton, scoped, transient, inject, maybe, onBoot, onShutdown, every, hosted, parseDuration, resetServiceRegistry,
