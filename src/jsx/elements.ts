@@ -68,6 +68,7 @@ export type FormMethod = "get" | "post" | "dialog" | "GET" | "POST" | "DIALOG";
 export type FormEnctype = "application/x-www-form-urlencoded" | "multipart/form-data" | "text/plain";
 export type PopoverTargetAction = "hide" | "show" | "toggle";
 
+/** Values for `<input type>`; any other string is allowed too. */
 export type InputType =
   | "button"
   | "checkbox"
@@ -193,11 +194,13 @@ export interface GlobalAttributes extends CustomAttributes {
 
 /** For elements that can't have children (`<br>`, `<img>`, `<input>`, ...). */
 export interface VoidAttributes extends GlobalAttributes {
+  /** Void elements take no children. */
   children?: undefined;
 }
 
 // ── per element ──
 
+/** Attributes for `<a>`. */
 export interface AnchorAttributes extends GlobalAttributes {
   href?: string;
   target?: HTMLAttributeAnchorTarget;
@@ -269,6 +272,7 @@ interface FormSubmitterAttributes {
   popovertargetaction?: PopoverTargetAction;
 }
 
+/** Attributes for `<button>`. `formaction` may be a yerd action, like a form's `action`. */
 export interface ButtonAttributes extends GlobalAttributes, FormSubmitterAttributes {
   type?: "submit" | "reset" | "button";
   name?: string;
@@ -319,6 +323,7 @@ export interface FieldsetAttributes extends GlobalAttributes {
   name?: string;
 }
 
+/** Attributes for `<form>`. */
 export interface FormAttributes extends GlobalAttributes {
   /**
    * A URL, or a yerd action. An action renders as a POST to the owning route
@@ -354,6 +359,7 @@ export interface IframeAttributes extends GlobalAttributes {
   credentialless?: boolean;
 }
 
+/** Attributes for `<img>`. */
 export interface ImgAttributes extends VoidAttributes {
   src?: string;
   alt?: string;
@@ -370,6 +376,7 @@ export interface ImgAttributes extends VoidAttributes {
   fetchpriority?: FetchPriority;
 }
 
+/** Attributes for `<input>`. */
 export interface InputAttributes extends VoidAttributes, FormSubmitterAttributes {
   type?: InputType;
   name?: string;
@@ -399,6 +406,7 @@ export interface InputAttributes extends VoidAttributes, FormSubmitterAttributes
   height?: Numberish;
 }
 
+/** Attributes for `<label>`. */
 export interface LabelAttributes extends GlobalAttributes {
   for?: string;
 }
@@ -407,6 +415,7 @@ export interface LiAttributes extends GlobalAttributes {
   value?: Numberish;
 }
 
+/** Attributes for `<link>`. */
 export interface LinkAttributes extends VoidAttributes {
   href?: string;
   rel?: string;
@@ -443,6 +452,7 @@ export interface MapAttributes extends GlobalAttributes {
   name?: string;
 }
 
+/** Attributes for `<meta>`. */
 export interface MetaAttributes extends VoidAttributes {
   name?: string;
   content?: string;
@@ -480,6 +490,7 @@ export interface OptgroupAttributes extends GlobalAttributes {
   label?: string;
 }
 
+/** Attributes for `<option>`. */
 export interface OptionAttributes extends GlobalAttributes {
   disabled?: boolean;
   label?: string;
@@ -498,6 +509,7 @@ export interface ProgressAttributes extends GlobalAttributes {
   max?: Numberish;
 }
 
+/** Attributes for `<script>`. */
 export interface ScriptAttributes extends GlobalAttributes {
   src?: string;
   type?: Open<"module" | "importmap" | "speculationrules" | "text/javascript" | "application/json" | "application/ld+json">;
@@ -511,6 +523,7 @@ export interface ScriptAttributes extends GlobalAttributes {
   fetchpriority?: FetchPriority;
 }
 
+/** Attributes for `<select>`. */
 export interface SelectAttributes extends GlobalAttributes {
   autocomplete?: AutoFill;
   disabled?: boolean;
@@ -558,6 +571,7 @@ export interface TemplateAttributes extends GlobalAttributes {
   shadowrootserializable?: boolean;
 }
 
+/** Attributes for `<textarea>`. */
 export interface TextareaAttributes extends GlobalAttributes {
   autocomplete?: AutoFill;
   cols?: Numberish;

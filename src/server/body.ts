@@ -1,10 +1,16 @@
 import type { IncomingMessage } from "node:http";
 import { HttpError } from "../respond/response.js";
 
+/** Text fields from a form body, by name. A name sent more than once becomes an array, in order. */
 export type FormFields = Record<string, string | string[]>;
 /** Uploaded files from a multipart form, by field name (a field can carry several). */
 export type FormFiles = Record<string, File[]>;
 
+/**
+ * A request body, parsed by its Content-Type: JSON (`application/json`,
+ * `+json`), NDJSON, url-encoded or multipart forms, `text/*`, else raw bytes.
+ * `none` when the request has no body. Malformed JSON is a 400.
+ */
 export type ParsedBody =
   | { kind: "none"; value: undefined }
   | { kind: "json"; value: unknown }

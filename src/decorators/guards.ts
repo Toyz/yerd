@@ -24,18 +24,23 @@ import type { YerdContext } from "../server/context.js";
 import { createKey } from "./keys.js";
 
 export type GuardResult = boolean | string | void | undefined | unknown;
+/** A guard's check: gets the request context, returns a guard result (see the module notes above). May be async. */
 export type GuardFn = (ctx: YerdContext) => GuardResult | Promise<GuardResult>;
 
 const GUARD: unique symbol = Symbol.for("yerd.guard");
 
 /** A value guard: callable as a class or method decorator, or listed in `guards`. */
 export interface GuardRef {
+  /** Brand that marks a createGuard() result. */
   readonly [GUARD]: true;
+  /** The name given to createGuard(), used in logs and errors. */
   readonly label: string;
+  /** The check itself. */
   readonly run: GuardFn;
   (value: Function, context: ClassDecoratorContext | ClassMethodDecoratorContext): void;
 }
 
+/** A guard in a `guards` list: the name of a @guard service method, or a value guard from createGuard(). */
 export type GuardSpec = string | GuardRef;
 
 export function isGuardRef(value: unknown): value is GuardRef {
@@ -118,6 +123,7 @@ export function onGuardRegistryReset(fn: () => void): void {
   resetHooks.push(fn);
 }
 
+/** Forget every @guard method. Used by dev servers before re-importing the app. */
 export function resetGuardRegistry(): void {
   guardRegistry.length = 0;
   for (const fn of resetHooks) fn();

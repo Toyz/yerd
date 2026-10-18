@@ -33,7 +33,13 @@ import { Logger } from "../log/logger.js";
 
 const channelLog = new Logger("yerd::channels");
 
+/**
+ * How messages travel between publishers and subscribers. The default is
+ * in-process (MemoryBackend); register your own under the ChannelBackend
+ * token to fan out across processes (Redis pub/sub, Postgres NOTIFY, ...).
+ */
 export interface ChannelBackend {
+  /** Deliver `message` to every current subscriber of `channel`. */
   publish(channel: string, message: unknown): void | Promise<void>;
   /** Start delivering a channel's messages to `listener`; returns a function that stops it. */
   subscribe(channel: string, listener: (message: unknown) => void): () => void;
@@ -46,6 +52,7 @@ export const ChannelBackend = token<ChannelBackend>("ChannelBackend");
 export class MemoryBackend implements ChannelBackend {
   readonly #listeners = new Map<string, Set<(message: unknown) => void>>();
 
+  /** Call each of the channel's listeners synchronously, in subscription order. */
   publish(channel: string, message: unknown): void {
     for (const listener of [...(this.#listeners.get(channel) ?? [])]) listener(message);
   }
@@ -70,7 +77,9 @@ const REF: unique symbol = Symbol.for("yerd.channel");
 
 /** A channel name that carries its message type. */
 export interface ChannelRef<T> {
+  /** Brand that marks a channel() result. */
   readonly [REF]: true;
+  /** The channel name the backend sees. */
   readonly name: string;
   /** Phantom: the message type. */
   readonly __message?: T;
@@ -95,6 +104,7 @@ function nameOf(target: Target<unknown>): string {
   return typeof target === "string" ? target : target.name;
 }
 
+/** Options for Channels.subscribe(). */
 export interface SubscribeOptions {
   /** Messages kept for a slow subscriber before the oldest are dropped. Default 1000. */
   buffer?: number;
@@ -183,9 +193,11 @@ class Subscription<T> implements AsyncGenerator<T, undefined, unknown> {
 
 /** The channel hub. Built in: every app has one in DI. */
 export class Channels {
+  /** The backend registered under the ChannelBackend token, if any. */
   @maybe(ChannelBackend) accessor custom: ChannelBackend | undefined;
   readonly #memory = new MemoryBackend();
 
+  /** The backend in use: the custom one, else an in-process MemoryBackend. */
   get backend(): ChannelBackend {
     return this.custom ?? this.#memory;
   }

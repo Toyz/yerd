@@ -34,7 +34,9 @@ const RAW: unique symbol = Symbol.for("yerd.raw");
 
 /** Pre-rendered HTML that the renderer writes without escaping. */
 export interface RawHtml {
+  /** Brand that marks a raw() result. */
   readonly [RAW]: true;
+  /** The HTML, written as is. */
   readonly html: string;
 }
 

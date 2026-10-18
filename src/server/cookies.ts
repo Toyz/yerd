@@ -20,18 +20,36 @@ export function parseCookies(header: string | undefined): Record<string, string>
   return out;
 }
 
+/** Attributes for a Set-Cookie header (ctx.setCookie(), @setCookie, serializeCookie()). */
 export interface CookieOptions {
+  /** Lifetime in seconds (rounded down). Unset: a session cookie. */
   maxAge?: number;
+  /** Absolute expiry. Max-Age wins in browsers when both are set. */
   expires?: Date;
+  /** Default "/". */
   path?: string;
+  /** Unset: host-only (this exact host, no subdomains). */
   domain?: string;
+  /** Send only over HTTPS. Default false; browsers require it with sameSite "None". */
   secure?: boolean;
+  /** Hide the cookie from client-side JavaScript. Default true. */
   httpOnly?: boolean;
+  /** Default "Lax". */
   sameSite?: "Strict" | "Lax" | "None";
 }
 
 const NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
+/**
+ * Build a Set-Cookie header value. The value is percent-encoded; the
+ * defaults are Path=/, HttpOnly and SameSite=Lax. Throws a TypeError for a
+ * name that isn't an RFC 6265 token.
+ *
+ * ```ts
+ * serializeCookie("theme", "dark", { maxAge: 31536000 });
+ * // "theme=dark; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax"
+ * ```
+ */
 export function serializeCookie(name: string, value: string, options: CookieOptions = {}): string {
   if (!NAME.test(name)) throw new TypeError(`Invalid cookie name: ${JSON.stringify(name)}`);
   let cookie = `${name}=${encodeURIComponent(value)}`;

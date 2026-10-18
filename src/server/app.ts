@@ -48,6 +48,7 @@ import { REQUEST_SPAN, bindLogging, endRequestSpan, startRequestSpan, type LogBi
 const lifecycleLog = new Logger("yerd::lifecycle");
 const requestLog = new Logger("yerd::request");
 
+/** Options for {@link yerd} / `new YerdApp()`. Every field is optional. */
 export interface YerdOptions {
   /** Only serve these route classes. Defaults to every class decorated with @route. */
   routes?: Function[];
@@ -80,6 +81,7 @@ export interface YerdOptions {
   trustProxy?: boolean;
 }
 
+/** Options for app.logging(): which records are written, and how. */
 export interface LoggingOptions {
   /** Directives like YERD_LOG ("info,UserRepo=debug"). Default: YERD_LOG, else info (warn under tests). */
   filter?: string;
@@ -125,14 +127,19 @@ function pickHandler(group: HandlerGroup, accept: string | undefined): Handler |
 
 /** Props for app.errorPage(). */
 export interface ErrorPageProps {
+  /** The HTTP status being sent, e.g. 404 or 500. */
   status: number;
+  /** A message safe to show: the HttpError's message when it's exposed, else the status text. */
   message: string;
 }
 
 type Next = (error?: unknown) => void;
 
+/** What app.listen() resolves to once the server is accepting connections. */
 export interface RunningServer {
+  /** The underlying node:http server. */
   readonly server: Server;
+  /** The base URL, `http://<host>:<port>`, with the real port when listening on port 0. Host defaults to localhost. */
   readonly url: string;
   /** Graceful: stop accepting, end streams, let requests finish, stop background work, dispose services. */
   close(): Promise<void>;
@@ -140,6 +147,7 @@ export interface RunningServer {
 
 /** Thrown by boot validation; lists every problem at once. */
 export class BootError extends Error {
+  /** `problems`: one message per thing that's wrong; the error message lists them all. */
   constructor(readonly problems: string[]) {
     super(`yerd refused to start:\n  - ${problems.join("\n  - ")}`);
     this.name = "BootError";
@@ -195,6 +203,21 @@ function startPeriodic(run: (signal: AbortSignal) => unknown, ms: number, immedi
   };
 }
 
+/**
+ * A yerd application: routes, layouts, services and the server around them.
+ * Create one with {@link yerd}; the configuration methods return the app, so
+ * they chain, and most must be called before the app starts. Boot happens on
+ * the first listen(), start(), boot() or request.
+ *
+ * ```ts
+ * const app = yerd({ bodyLimit: 4 * 1024 * 1024 })
+ *   .layout(RootLayout)
+ *   .sessions()
+ *   .static("/assets", "./public");
+ *
+ * const server = await app.listen(3000);
+ * ```
+ */
 export class YerdApp {
   readonly #options: YerdOptions;
   readonly #layouts: Component<LayoutProps>[] = [];
@@ -230,6 +253,7 @@ export class YerdApp {
   #tornDown: Promise<void> | undefined;
   #lifecycle: { abort: AbortController; hosted: Promise<unknown>[]; periodic: Periodic[]; shutdown: Array<() => unknown> } | undefined;
 
+  /** Prefer {@link yerd}, which does the same. Throws if a `trustedOrigins` entry isn't a valid URL. */
   constructor(options: YerdOptions = {}) {
     this.#options = options;
     this.#trustedOrigins = new Set((options.trustedOrigins ?? []).map((o) => new URL(o).origin));
@@ -408,7 +432,7 @@ export class YerdApp {
     try {
       const page = await coerce(jsx(this.#errorPage, { status: plain.status, message }), {
         layouts: this.#layouts,
-        meta: { title: message, ...meta },
+        meta: { ...meta, title: message },
       });
       return { ...page, status: plain.status };
     } catch (renderError) {
@@ -635,7 +659,8 @@ export class YerdApp {
 
     let filter: LogFilter | undefined;
     try {
-      filter = new LogFilter(this.#loggingOptions.filter ?? defaultFilter());
+      // YERD_LOG wins over code, so a deploy can turn logging up or down without a rebuild.
+      filter = new LogFilter(process.env.YERD_LOG ?? this.#loggingOptions.filter ?? defaultFilter());
     } catch (error) {
       problems.push((error as Error).message);
     }
@@ -643,7 +668,9 @@ export class YerdApp {
     if (sinkRegistration && sinkRegistration.lifetime !== "singleton") problems.push("ILogger must be a singleton service");
 
     if (problems.length > 0) throw new BootError(problems);
-    const sink = sinkRegistration ? container.get(ILogger) : new ConsoleLogger({ format: this.#loggingOptions.format });
+    const envFormat = process.env.YERD_LOG_FORMAT;
+    const format = envFormat === "pretty" || envFormat === "json" ? envFormat : this.#loggingOptions.format;
+    const sink = sinkRegistration ? container.get(ILogger) : new ConsoleLogger({ format });
     this.#log = { sink, filter: filter! };
     bindLogging(container, this.#log);
     for (const [name, guard] of namedGuards) this.#namedGuards.set(name, guard);
@@ -1148,6 +1175,19 @@ export class YerdApp {
     return coerce(result, { layouts: owner.layouts, meta: context.meta });
   }
 
+  /**
+   * Start the app (see start()) and serve HTTP on `port` (default 3000; 0
+   * picks a free one). Unless `handleSignals` is false (here or in
+   * YerdOptions), SIGINT and SIGTERM close the server gracefully and exit
+   * the process. close() stops accepting, ends long-lived streams, waits up
+   * to `shutdownTimeout` for in-flight requests, then calls stop().
+   *
+   * ```ts
+   * const { url, close } = await yerd().listen(0, "127.0.0.1", { handleSignals: false });
+   * await fetch(url);
+   * await close();
+   * ```
+   */
   async listen(port = 3000, host?: string, options: { handleSignals?: boolean } = {}): Promise<RunningServer> {
     await this.start();
     const server = createServer((req, res) => {
@@ -1198,7 +1238,8 @@ export class YerdApp {
       process.once("SIGTERM", onSignal);
     }
 
-    return { server, url: `http://${host ?? "localhost"}:${actualPort}`, close };
+    const shown = host === undefined ? "localhost" : host.includes(":") ? `[${host}]` : host;
+    return { server, url: `http://${shown}:${actualPort}`, close };
   }
 }
 
@@ -1445,6 +1486,20 @@ async function send(res: ServerResponse, out: Outgoing, headOnly: boolean, signa
   }
 }
 
+/**
+ * Create an app. Routes are every class decorated with @route (or just
+ * `options.routes`); nothing is served until listen(), or until you hand
+ * app.handle to another server.
+ *
+ * ```tsx
+ * @route("/")
+ * class Home {
+ *   @get page() { return <h1>hello</h1>; }
+ * }
+ *
+ * await yerd().listen(3000);
+ * ```
+ */
 export function yerd(options?: YerdOptions): YerdApp {
   return new YerdApp(options);
 }

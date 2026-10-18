@@ -12,8 +12,10 @@
  * `unique symbol` types as property keys in type declarations.
  */
 export class YerdKey<T = unknown> {
+  /** The symbol values are stored under, described `yerd:<name>`. */
   readonly key: symbol;
 
+  /** Use createKey() (shared by name) or localKey() (private) rather than `new`. */
   constructor(readonly name: string) {
     this.key = Symbol(`yerd:${name}`);
   }
@@ -32,6 +34,7 @@ export class YerdKey<T = unknown> {
     (target as Record<symbol, unknown>)[this.key] = value;
   }
 
+  /** True when `target` carries the value, own or inherited. */
   has(target: object): boolean {
     return this.key in target;
   }
@@ -59,10 +62,12 @@ export class YerdKey<T = unknown> {
     return own;
   }
 
+  /** The symbol's description, `yerd:<name>`. */
   get description(): string | undefined {
     return this.key.description;
   }
 
+  /** `Symbol(yerd:<name>)`, for messages. */
   toString(): string {
     return this.key.toString();
   }

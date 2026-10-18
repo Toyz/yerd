@@ -17,8 +17,9 @@ import type { Plugin, ViteDevServer } from "vite";
 import type { ModuleRunner } from "vite/module-runner";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+/** Options for the `@toyz/yerd/vite` plugin (the package's default export). */
 export interface YerdViteOptions {
-  /** Module whose default export is the yerd app. */
+  /** Module whose default export is the yerd app. Default "/src/main.ts". */
   entry?: string;
   /**
    * Client build entries, relative to the Vite root: stylesheets and other
@@ -128,11 +129,19 @@ function loadEsbuild(): Promise<EsbuildModule> {
   return esbuild;
 }
 
+/** Options for yerdDecorators(). */
 export interface DecoratorOptions {
   /** esbuild target for client code. Default "es2016" (async lowered for the async-context polyfill). */
   clientTarget?: string;
 }
 
+/**
+ * Just the decorator-lowering part of the yerd plugin: compiles app .ts/.tsx
+ * with esbuild (TC39 decorators, yerd JSX) and turns off Vite's Oxc
+ * transform. The full plugin already includes it; use this alone to tune the
+ * client target or in a Vite setup that doesn't run the yerd app. Needs
+ * esbuild installed.
+ */
 function decorators(options: DecoratorOptions = {}): Plugin {
   return {
     name: "yerd:decorators",
@@ -278,6 +287,7 @@ function devServer(options: YerdViteOptions): Plugin {
   };
 }
 
+/** The yerd Vite plugin: decorator lowering, the dev server mount, and the production build. */
 export default function yerd(options: YerdViteOptions = {}): Plugin[] {
   return [decorators(), devServer(options), production(options)];
 }

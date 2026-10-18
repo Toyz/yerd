@@ -27,31 +27,45 @@ export interface SessionData {}
 
 type Data = Record<string, unknown>;
 
+/** What a SessionStore saves for one session. */
 export interface SessionRecord {
+  /** The session's values. */
   data: Data;
   /** Flash values set this request, readable next request. */
   flash: Data;
+  /** When the session started, in ms since the epoch; absoluteMaxAge counts from here. */
   createdAt: number;
 }
 
+/**
+ * Where session data lives. Implement it to keep sessions in Redis, a
+ * database, etc. ("id" kind); methods may be sync or async.
+ */
 export interface SessionStore {
   /** "cookie" stores keep the sealed record in the cookie itself; "id" stores keep an id there. */
   readonly kind: "cookie" | "id";
+  /** The record for `id`, or undefined when unknown or expired. */
   get(id: string): SessionRecord | undefined | Promise<SessionRecord | undefined>;
+  /** Save `record` under `id`, replacing any old one; it may be dropped after `ttlMs`. */
   set(id: string, record: SessionRecord, ttlMs: number): void | Promise<void>;
+  /** Delete the record for `id` (logout, regenerate). */
   destroy(id: string): void | Promise<void>;
 }
 
 /** Data in the cookie, sealed. No server state. ~4KB limit. */
 export class CookieStore implements SessionStore {
   readonly kind = "cookie" as const;
+  /** No-op: the session manager reads the record from the cookie itself. */
   get(): undefined {
     return undefined;
   }
+  /** No-op: the record is written into the cookie. */
   set(): void {}
+  /** No-op: destroying clears the cookie. */
   destroy(): void {}
 }
 
+/** Options for MemoryStore. */
 export interface MemoryStoreOptions {
   /** Most sessions kept; past it, the least recently saved are evicted. Default: no cap. */
   maxSize?: number;
@@ -71,6 +85,7 @@ export class MemoryStore implements SessionStore {
   readonly #sweepInterval: number;
   #lastSweep = Date.now();
 
+  /** See MemoryStoreOptions for the defaults. */
   constructor(options: MemoryStoreOptions = {}) {
     this.#maxSize = options.maxSize ?? Infinity;
     this.#sweepInterval = options.sweepInterval ?? 60_000;
@@ -81,6 +96,7 @@ export class MemoryStore implements SessionStore {
     return createHash("sha256").update(id).digest("base64url");
   }
 
+  /** A copy of the record, or undefined when missing or expired. */
   get(id: string): SessionRecord | undefined {
     const entry = this.#records.get(this.#key(id));
     if (!entry) return undefined;
@@ -91,6 +107,7 @@ export class MemoryStore implements SessionStore {
     return structuredClone(entry.record);
   }
 
+  /** Save a copy of the record for `ttlMs`, evicting the least recently saved past `maxSize`. */
   set(id: string, record: SessionRecord, ttlMs: number): void {
     const now = Date.now();
     const key = this.#key(id);
@@ -106,10 +123,12 @@ export class MemoryStore implements SessionStore {
     }
   }
 
+  /** Forget the session. */
   destroy(id: string): void {
     this.#records.delete(this.#key(id));
   }
 
+  /** How many sessions are held, expired ones not yet swept included. */
   get size(): number {
     return this.#records.size;
   }
@@ -168,6 +187,7 @@ export class Session<D = SessionData> {
   #replaced = false;
   #createdAt: number;
 
+  /** yerd creates sessions per request; you get one through @session or ctx.session. */
   constructor(
     record: SessionRecord | undefined,
     /** Store id, or undefined for a new session or a cookie store. */
@@ -179,6 +199,7 @@ export class Session<D = SessionData> {
     this.#createdAt = createdAt;
   }
 
+  /** When the session started, in ms since the epoch. */
   get createdAt(): number {
     return this.#createdAt;
   }
@@ -200,16 +221,22 @@ export class Session<D = SessionData> {
     return this.id === undefined && Object.keys(this.#data).length === 0 && !this.#dirty;
   }
 
+  /**
+   * A value, or undefined. Changing a returned object in place doesn't mark
+   * the session changed; set() it again to be sure it's saved.
+   */
   get<K extends Key<D>>(key: K): D[K] | undefined {
     return this.#data[key] as D[K] | undefined;
   }
 
+  /** Set a value. Keep it JSON-safe: the cookie store serializes the session as JSON. */
   set<K extends Key<D>>(key: K, value: D[K]): void {
     this.#revive();
     this.#data[key] = value;
     this.#dirty = true;
   }
 
+  /** Remove a value. */
   delete(key: Key<D>): void {
     if (key in this.#data) {
       delete this.#data[key];
@@ -217,6 +244,7 @@ export class Session<D = SessionData> {
     }
   }
 
+  /** Remove every value but keep the session (same id, same creation time). Use destroy() to end it. */
   clear(): void {
     this.#data = {};
     this.#dirty = true;
@@ -277,7 +305,9 @@ export class Session<D = SessionData> {
   }
 }
 
+/** Options for app.sessions(). */
 export interface SessionOptions {
+  /** Where data lives. Default: a CookieStore. */
   store?: SessionStore;
   /** Idle lifetime in ms. Default 14 days. */
   maxAge?: number;

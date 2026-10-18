@@ -39,8 +39,19 @@ describe("coerce", () => {
     expect((await coerce(false, opts)).body).toBe("false");
   });
 
-  it("refuses class instances it doesn't know", async () => {
-    await expect(coerce(new Map(), opts)).rejects.toThrow(/Don't know how to send/);
+  it("sends your own class instances and toJSON values as JSON", async () => {
+    class Signup {
+      email = "a@b.c";
+      plan = "pro";
+    }
+    expect((await coerce(new Signup(), opts)).body).toBe('{"email":"a@b.c","plan":"pro"}');
+    expect((await coerce({ at: new Date(0) }, opts)).body).toBe('{"at":"1970-01-01T00:00:00.000Z"}');
+    expect((await coerce(new Date(0), opts)).body).toBe('"1970-01-01T00:00:00.000Z"');
+  });
+
+  it("refuses built-ins JSON can't represent, saying what to do", async () => {
+    await expect(coerce(new Map(), opts)).rejects.toThrow(/a Map \(JSON can't represent it/);
+    await expect(coerce(new Error("x"), opts)).rejects.toThrow(/throw it/);
   });
 
   it("Uint8Array -> octet-stream", async () => {

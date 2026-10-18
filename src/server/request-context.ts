@@ -164,7 +164,9 @@ export class RequestContext implements YerdContext {
    * either way (a cookie set before a redirect or a 401 still goes out).
    */
   finish(out: Outgoing, failed: boolean): Outgoing {
-    const defaults = this.declared;
+    // @status / @setHeader describe the handler's result, so an error response
+    // doesn't get them; headers and cookies set on the context do apply.
+    const defaults = failed ? undefined : this.declared;
     if (defaults) {
       for (const name in defaults.headers) if (!(name in out.headers)) out.headers[name] = defaults.headers[name]!;
     }

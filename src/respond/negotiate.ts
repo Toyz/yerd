@@ -35,6 +35,11 @@ interface Range {
   q: number;
 }
 
+/**
+ * Parse an Accept header into media ranges with their q-values, in header
+ * order (not sorted). q is clamped to 0-1; a malformed q counts as 0. A
+ * missing header gives an empty list.
+ */
 export function parseAccept(header: string | undefined): Range[] {
   if (!header) return [];
   const ranges: Range[] = [];
@@ -112,10 +117,14 @@ export function choose(variants: readonly (readonly string[])[], accept: string 
 
 const NEGOTIATED: unique symbol = Symbol.for("yerd.negotiated");
 
+/** negotiate()'s argument: a producer per type, keyed by shorthand or mime type. The first key is the default. */
 export type Variants = Record<string, () => unknown>;
 
+/** What negotiate() returns; the response pipeline picks and runs one variant. */
 export interface Negotiated {
+  /** Brand that marks a negotiate() result. */
   readonly [NEGOTIATED]: true;
+  /** The variants, as passed to negotiate(). */
   readonly variants: Variants;
 }
 

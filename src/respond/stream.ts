@@ -15,6 +15,7 @@
 
 import { HttpError, YerdResponse } from "./response.js";
 import { Logger } from "../log/logger.js";
+import { maybeContext } from "../server/context.js";
 
 const streamLog = new Logger("yerd::stream");
 
@@ -31,7 +32,11 @@ const STREAM_HEADERS = {
 /** What a client may see when a stream fails partway: HttpError messages if exposed, otherwise a generic one. */
 function publicMessage(error: unknown): string {
   if (error instanceof HttpError && error.expose) return error.message;
-  streamLog.error("stream failed", { error });
+  // The client left (or the server is shutting down) and the source stopped
+  // because of it: that's an ending, not a failure.
+  const aborted = (maybeContext() as { signal?: AbortSignal } | undefined)?.signal?.aborted;
+  if (aborted || (error instanceof Error && error.name === "AbortError")) streamLog.debug("stream ended by abort", { error });
+  else streamLog.error("stream failed", { error });
   return "Internal Server Error";
 }
 
@@ -68,6 +73,7 @@ async function* withHeartbeat<T>(source: AsyncIterable<T>, ms: number, beat: str
 
 // ── NDJSON ──
 
+/** Options for ndjson(). */
 export interface NdjsonOptions {
   /** Write an empty line every N ms while the source is quiet (readers skip blank lines). 0 disables. Default 0. */
   heartbeat?: number;
@@ -95,6 +101,7 @@ function ndjsonResponse(source: AsyncIterable<unknown>, options: NdjsonOptions =
 
 const EVENT: unique symbol = Symbol.for("yerd.sse.event");
 
+/** The fields of one Server-Sent Event, for event(). */
 export interface SseEventInit {
   /** Payload. Strings are sent as-is; anything else as JSON. */
   data?: unknown;
@@ -108,7 +115,9 @@ export interface SseEventInit {
   comment?: string;
 }
 
+/** An event built with event(), sent with its fields rather than as plain data. */
 export interface SseEvent extends SseEventInit {
+  /** Brand that marks an event() result. */
   readonly [EVENT]: true;
 }
 
@@ -140,6 +149,7 @@ export function formatEvent(item: unknown): string {
   return out + "\n";
 }
 
+/** Options for sse(). */
 export interface SseOptions {
   /** Send a comment every N ms while the source is quiet, so proxies keep the connection. 0 disables. Default 15000. */
   heartbeat?: number;

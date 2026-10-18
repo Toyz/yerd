@@ -115,8 +115,10 @@ dist/
     .vite/manifest.json
     .yerd/prerendered.json   @prerender paths -> files written next to them
   server/
-    server.js          generated entry: the app + yerd as one SSR bundle (not
-                       minified); serves dist/client, listens on PORT (and HOST)
+    server.js          generated entry: the app's code as an SSR bundle (not
+                       minified), importing yerd and other packages from
+                       node_modules (Vite's default), so deploy them alongside;
+                       serves dist/client, listens on PORT (and HOST)
     prerender.js       the app without listening, used for build-time prerendering
 ```
 

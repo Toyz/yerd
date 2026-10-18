@@ -56,14 +56,25 @@ export type ClientSetup = (el: HTMLElement, value: string, yerd: YerdClient) => 
 /** The server half: turns the prop's value into the attributes actually written. */
 export type RenderAttribute<V> = (value: V, element: { tag: string; props: Readonly<Record<string, unknown>> }) => Record<string, unknown> | null | undefined;
 
+/** The two halves of a custom attribute, for attribute(). Both are optional. */
 export interface AttributeOptions<V> {
+  /**
+   * Server half: the attributes to write for the prop's value; null or
+   * undefined writes nothing. Without it the prop is written under its own
+   * name, objects as JSON.
+   */
   render?: RenderAttribute<V>;
+  /** Client half: runs in the browser for each element carrying the attribute. Must be self-contained (it's sent as source text). */
   client?: ClientSetup;
 }
 
+/** A defined custom attribute, as returned by attribute(). */
 export interface AttributeDef<V = unknown> {
+  /** The attribute (and JSX prop) name. */
   readonly name: string;
+  /** The server half, if any. */
   readonly render: RenderAttribute<V> | undefined;
+  /** The client half, if any. */
   readonly client: ClientSetup | undefined;
 }
 
@@ -99,6 +110,7 @@ export function attributeVersion(): number {
   return version;
 }
 
+/** Forget every user-defined custom attribute (built-ins stay). Used by dev servers before re-importing the app. */
 export function resetAttributeRegistry(): void {
   registry.clear();
   version++;
@@ -110,6 +122,7 @@ function builtin<V>(name: string, render: RenderAttribute<V>): void {
 
 // ── prefetch ──
 
+/** When `prefetch` fires: on hover or focus ("intent"), on scrolling into view ("visible"), or at page load ("load"). */
 export type PrefetchMode = "intent" | "visible" | "load";
 
 /**

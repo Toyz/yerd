@@ -22,23 +22,37 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { localKey } from "../decorators/keys.js";
 import { maybeContext } from "../server/context.js";
 
+/** How long a service instance lives: one per app, one per request, or a new one per resolution. */
 export type Lifetime = "singleton" | "scoped" | "transient";
 
 const TOKEN: unique symbol = Symbol.for("yerd.token");
 
 /** A DI key for things with no runtime class: interfaces, config objects. */
 export interface Token<T> {
+  /** Brand that marks a token() result. */
   readonly [TOKEN]: true;
+  /** The name given to token(), used in error messages. */
   readonly name: string;
   /** Phantom: carries T for type inference. */
   readonly __type?: T;
 }
 
+/**
+ * Make a DI key for a type with no runtime class. Tokens compare by
+ * identity, not name, so create each one once and export it. A token needs an
+ * implementation when registered.
+ *
+ * ```ts
+ * export const Config = token<{ dbUrl: string }>("Config");
+ * app.services((s) => s.value(Config, { dbUrl: process.env.DB_URL! }));
+ * ```
+ */
 export function token<T>(name: string): Token<T> {
   return { [TOKEN]: true, name };
 }
 
 export type Constructor<T> = abstract new (...args: never[]) => T;
+/** What a service is registered and resolved by: a class or a token. */
 export type ServiceKey<T = unknown> = Token<T> | Constructor<T>;
 
 export function keyName(key: ServiceKey): string {
@@ -123,7 +137,9 @@ async function disposeAll(created: unknown[]): Promise<void> {
 
 /** One request's worth of scoped instances. */
 export class Scope {
+  /** Scoped instances by key, created on first resolution. */
   readonly instances = new Map<ServiceKey, unknown>();
+  /** Disposable instances owned by this scope, in creation order. */
   readonly created: unknown[] = [];
 
   /** Nothing was resolved in this scope (the common case): disposing would be a no-op. */
@@ -131,29 +147,39 @@ export class Scope {
     return this.instances.size === 0 && this.created.length === 0;
   }
 
+  /** Dispose this scope's instances, newest first. Several failures are thrown as an AggregateError. */
   async dispose(): Promise<void> {
     this.instances.clear();
     await disposeAll(this.created);
   }
 }
 
+/**
+ * The app's service container: registrations, singletons and their disposal.
+ * The app builds it at boot (app.container); you normally resolve through
+ * @inject or resolve() rather than calling it.
+ */
 export class Container {
   readonly #registrations = new Map<ServiceKey, Registration>();
   readonly #singletons = new Map<ServiceKey, unknown>();
   readonly #created: unknown[] = [];
 
+  /** Add a registration, replacing any earlier one for the same key. */
   register(registration: Registration): void {
     this.#registrations.set(registration.key, registration);
   }
 
+  /** The registration for `key`, if there is one. */
   registration(key: ServiceKey): Registration | undefined {
     return this.#registrations.get(key);
   }
 
+  /** Every registration, in the order keys were first registered. */
   registrations(): IterableIterator<Registration> {
     return this.#registrations.values();
   }
 
+  /** Whether anything is registered for `key`. */
   has(key: ServiceKey): boolean {
     return this.#registrations.has(key);
   }
@@ -227,16 +253,31 @@ export class Container {
 
 /** Fluent registration API passed to `app.services(...)`. */
 export class ServiceCollection {
+  /** Created by the app; you receive one in app.services(). */
   constructor(private readonly add: (registration: Registration) => void) {}
 
+  /**
+   * Register a singleton. `impl` is a class or a factory `(container) => T`;
+   * without it, `key` itself must be a class. Tells classes from factories
+   * by their source (`class ...`), so pass plain functions only as factories.
+   *
+   * ```ts
+   * app.services((s) => s
+   *   .singleton(Clock, FakeClock)
+   *   .singleton(Db, () => new Db(process.env.DB_URL!))
+   *   .scoped(UnitOfWork));
+   * ```
+   */
   singleton<T>(key: ServiceKey<T>, impl?: (new () => T) | ((container: Container) => T)): this {
     return this.#register(key, "singleton", impl);
   }
 
+  /** Register a scoped service (one per request); `impl` as for singleton(). */
   scoped<T>(key: ServiceKey<T>, impl?: (new () => T) | ((container: Container) => T)): this {
     return this.#register(key, "scoped", impl);
   }
 
+  /** Register a transient service (a new instance per resolution); `impl` as for singleton(). */
   transient<T>(key: ServiceKey<T>, impl?: (new () => T) | ((container: Container) => T)): this {
     return this.#register(key, "transient", impl);
   }
@@ -250,7 +291,11 @@ export class ServiceCollection {
   #register<T>(key: ServiceKey<T>, lifetime: Lifetime, impl?: (new () => T) | ((container: Container) => T)): this {
     const target = impl ?? (typeof key === "function" ? (key as unknown as new () => T) : undefined);
     if (!target) throw new TypeError(`${keyName(key)} is a token, so it needs an implementation`);
-    const isClass = /^class[\s{]/.test(Function.prototype.toString.call(target));
+    // A class, or an old-style constructor function with prototype methods;
+    // anything else is a factory `(container) => instance`.
+    const isClass =
+      /^class[\s{]/.test(Function.prototype.toString.call(target)) ||
+      (target.prototype !== undefined && Object.getOwnPropertyNames(target.prototype).length > 1);
     if (isClass) {
       const cls = target as new () => T;
       this.add({

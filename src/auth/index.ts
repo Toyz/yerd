@@ -38,6 +38,7 @@ const DEFAULT_KEY = "__yerd_uid";
 const claimedKeys = new Set<string>();
 onGuardRegistryReset(() => claimedKeys.clear());
 
+/** Options for createAuth(). Only `load` is required. */
 export interface AuthOptions<User> {
   /** Load a user by the id stored in the session; undefined if they're gone. */
   load: (id: string) => User | undefined | Promise<User | undefined>;
@@ -54,6 +55,10 @@ export interface AuthOptions<User> {
   sessionKey?: string;
 }
 
+/**
+ * What createAuth() returns: middleware, accessors and guards for one kind of
+ * sign-in. Pass it to app.use(), which installs its middleware.
+ */
 export interface Auth<User> {
   /** Loads the signed-in user once per request. `app.use(auth)`. */
   readonly middleware: Middleware;
@@ -83,6 +88,25 @@ function wantsPage(ctx: YerdContext): boolean {
   return (ctx.headers.accept ?? "").includes("text/html");
 }
 
+/**
+ * Set up session-based sign-in for a user type. Needs app.sessions() and
+ * app.use(auth). Each request loads the signed-in user once (an id whose
+ * user is gone is dropped from the session). Throws if another auth in the
+ * process already uses the same `sessionKey`.
+ *
+ * ```ts
+ * const auth = createAuth<User>({ load: (id) => users.get(id), roles: (u) => u.roles });
+ *
+ * @route("/login") class Login {
+ *   @action async signIn(_: {}, form: ActionForm) {
+ *     const user = users.byEmail(form.string("email"));
+ *     if (!(await verifyPassword(form.string("password"), user?.passwordHash))) throw new HttpError(401, "Wrong email or password");
+ *     auth.login(user!);
+ *     return redirect("/account");
+ *   }
+ * }
+ * ```
+ */
 export function createAuth<User>(options: AuthOptions<User>): Auth<User> {
   const loaded = localKey<{ user: User | undefined }>("auth:user");
   const idOf = options.idOf ?? ((user: User) => String((user as { id: unknown }).id));
@@ -118,7 +142,8 @@ export function createAuth<User>(options: AuthOptions<User>): Auth<User> {
     const id = session.get(userKey as never) as string | undefined;
     let user: User | undefined;
     if (id !== undefined) {
-      user = await options.load(id);
+      // null counts as "no such user" too: database clients tend to return it.
+      user = (await options.load(id)) ?? undefined;
       // The account is gone: forget it, so we don't look it up on every request.
       if (user === undefined) session.delete(userKey as never);
     }

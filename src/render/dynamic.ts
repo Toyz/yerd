@@ -1,5 +1,6 @@
 import type { Child } from "../jsx/jsx-runtime.js";
 
+/** Props for <Dynamic>. */
 export interface DynamicProps {
   /** Unique on the page: the Region id the runtime fills. */
   id: string;
@@ -15,6 +16,7 @@ export interface DynamicProps {
   children: () => Child | Promise<Child>;
   /** Wrapper element. Default "div". */
   as?: string;
+  /** Other attributes go on the wrapper element (class, style, data-*, ...). */
   [attribute: string]: unknown;
 }
 

@@ -17,6 +17,7 @@ import { LEVELS, type Level } from "./ilogger.js";
 
 type Threshold = number;
 
+/** A parsed set of YERD_LOG directives that decides which records are written. */
 export class LogFilter {
   readonly #base: Threshold;
   readonly #targets: Array<[prefix: string, threshold: Threshold]>;
@@ -24,6 +25,7 @@ export class LogFilter {
   /** target -> threshold, so the per-call decision is one Map lookup. */
   readonly #cache = new Map<string, Threshold>();
 
+  /** Parse `source` (the directive string). Throws on an unknown level; with no bare level, the base is info. */
   constructor(readonly source: string) {
     let base: Threshold = LEVELS.info;
     const targets: Array<[string, Threshold]> = [];
@@ -67,14 +69,17 @@ export class LogFilter {
   /** Whether a record at `level` for `target`, inside spans named `spans`, is written. */
   enabled(level: Level, target: string, spans?: Iterable<string>): boolean {
     const value = LEVELS[level];
-    if (value >= this.#thresholdFor(target)) return true;
+    // Inside a span with a directive, the innermost such span decides, louder
+    // or quieter than the target's level (`debug,[noisy]=warn` quiets noisy).
     if (this.#spans.size > 0 && spans) {
+      let decided: Threshold | undefined;
       for (const name of spans) {
         const spanLevel = this.#spans.get(name);
-        if (spanLevel !== undefined && value >= spanLevel) return true;
+        if (spanLevel !== undefined) decided = spanLevel;
       }
+      if (decided !== undefined) return value >= decided;
     }
-    return false;
+    return value >= this.#thresholdFor(target);
   }
 
   /** True when span directives exist (callers then need to pass span names). */
@@ -85,7 +90,7 @@ export class LogFilter {
 
 function threshold(text: string): Threshold {
   const level = text.trim().toLowerCase();
-  if (level in LEVELS) return LEVELS[level as Level | "off"];
+  if (Object.hasOwn(LEVELS, level)) return LEVELS[level as Level | "off"];
   throw new Error(`Unknown log level "${text}" in YERD_LOG (use trace, debug, info, warn, error or off)`);
 }
 

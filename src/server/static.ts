@@ -46,6 +46,7 @@ const MIME: Record<string, string> = {
   ".zip": "application/zip",
 };
 
+/** The Content-Type yerd serves for a file, by extension (case-insensitive); application/octet-stream when unknown. */
 export function mimeType(path: string): string {
   return MIME[extname(path).toLowerCase()] ?? "application/octet-stream";
 }
@@ -58,9 +59,12 @@ export function mimeType(path: string): string {
  */
 const HASHED = /[-.](?=[\w-]*[A-Za-z])(?=[\w-]*[A-Z0-9])[\w-]{8,}\.[a-z0-9]+$/;
 
+/** Options for app.static(). */
 export interface StaticOptions {
   /** Serve files whose name starts with "." (default false). */
   dotfiles?: boolean;
+  /** Serve `index.html` for a request to a directory (`/`, `/docs/`). Default true. */
+  index?: boolean;
   /** Only serve these extensions, e.g. [".css"] when pointing at a source folder. */
   extensions?: string[];
   /**
@@ -98,7 +102,11 @@ function locate(mount: StaticMount, pathname: string): string | undefined {
   } catch {
     return undefined;
   }
-  if (rest === "" || rest.includes("\0")) return undefined;
+  if (rest.includes("\0")) return undefined;
+  if (rest === "" || rest.endsWith("/")) {
+    if (mount.options.index === false) return undefined;
+    rest += "index.html";
+  }
   const segments = rest.split(/[/\\]/);
   if (segments.some((s) => s === ".." || s === ".")) return undefined;
   if (!mount.options.dotfiles && segments.some((s) => s.startsWith("."))) return undefined;

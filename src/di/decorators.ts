@@ -26,6 +26,7 @@ export interface ServiceDef {
 /** Every class decorated with @service / @hosted, in definition order. */
 export const serviceRegistry: ServiceDef[] = [];
 
+/** Forget every @service / @hosted class. Used by dev servers before re-importing the app. */
 export function resetServiceRegistry(): void {
   serviceRegistry.length = 0;
 }
@@ -44,7 +45,9 @@ export function registrationFor(def: ServiceDef): Registration {
   };
 }
 
+/** Options for @service. */
 export interface ServiceOptions {
+  /** Default "singleton". Wins over a @scoped / @transient decorator on the same class. */
   lifetime?: Lifetime;
   /** Register as the implementation of a token (or another class). */
   provides?: ServiceKey;
@@ -94,7 +97,9 @@ function lifetimeDecorator(lifetime: Lifetime) {
 
 /** Lifetime shorthands for @service and @route classes. Stack in any order. */
 export const singleton = lifetimeDecorator("singleton");
+/** Make a @service or @route class scoped: one instance per request. The default for routes. */
 export const scoped = lifetimeDecorator("scoped");
+/** Make a @service or @route class transient: a new instance every time it's resolved. */
 export const transient = lifetimeDecorator("transient");
 
 function resolveFor<T>(owner: object, key: ServiceKey<T>, optional: boolean, perOwner: ReturnType<typeof localKey<T>>): T | undefined {
@@ -187,6 +192,7 @@ export function parseDuration(value: string | number): number {
   return Number(match[1]) * UNITS[match[2]!]!;
 }
 
+/** Options for @every. */
 export interface EveryOptions {
   /** Also run once right at startup. */
   immediate?: boolean;

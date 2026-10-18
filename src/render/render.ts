@@ -34,6 +34,7 @@ function checkTag(tag: string): void {
   if (checkedTags.size < 1024) checkedTags.add(tag);
 }
 
+/** Options for renderToString() and renderToStream(). */
 export interface RenderOptions {
   /** Prepend `<!doctype html>` when the first element rendered is `<html>`. */
   document?: boolean;

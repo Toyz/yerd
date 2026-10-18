@@ -23,7 +23,9 @@ import type { Transform, Validator } from "./request.js";
 
 /** One problem found while validating, with a path like `address.city` or `tags[2]`. */
 export interface Issue {
+  /** Where the problem is: a field path, or "(root)" for the value itself. */
   path: string;
+  /** What's wrong, e.g. "Required" or "Expected an integer". */
   message: string;
 }
 
@@ -31,7 +33,9 @@ const INVALID: unique symbol = Symbol("yerd.invalid");
 
 /** How to check and convert one value. Every `is.*` decorator carries one. */
 export interface Spec<T> {
+  /** Whether a missing value is allowed. */
   readonly optional: boolean;
+  /** Check and convert `value`; on failure, push to `issues` and return the INVALID marker. */
   parse(value: unknown, path: string, issues: Issue[]): T | typeof INVALID;
 }
 
@@ -42,6 +46,10 @@ interface DtoField {
 
 export const DTO_FIELDS = createKey<DtoField[]>("dto:fields");
 
+/**
+ * A DTO class: constructible with no arguments, its fields decorated with
+ * `is.*`. Field initializers act as defaults for missing values.
+ */
 export type DtoClass<T> = new () => T;
 
 /**
@@ -56,6 +64,7 @@ export type IsDecorator<T> = (<This, V>(
   readonly spec: Spec<T>;
 };
 
+/** Options every `is.*` decorator takes. Steps run in order: type check, transform, validate. */
 export interface IsOptions<B> {
   /** Missing (or `undefined`) is allowed and leaves the field undefined, or its initializer. */
   optional?: boolean;
@@ -147,8 +156,10 @@ const NUMBER = /^-?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i;
  * URL-encoded form bodies.
  */
 export const is = {
+  /** A string, as is. No coercion from other types. */
   string: primitive<string>((v) => (typeof v === "string" ? v : INVALID), "a string"),
 
+  /** A safe integer, or a string of digits with an optional leading minus. */
   int: primitive<number>((v) => {
     if (typeof v === "number") return Number.isSafeInteger(v) ? v : INVALID;
     if (typeof v === "string" && INTEGER.test(v)) {
@@ -158,12 +169,17 @@ export const is = {
     return INVALID;
   }, "an integer"),
 
+  /** A finite number, or a decimal string (exponents allowed). */
   number: primitive<number>((v) => {
     if (typeof v === "number") return Number.isFinite(v) ? v : INVALID;
     if (typeof v === "string" && NUMBER.test(v.trim())) return Number(v);
     return INVALID;
   }, "a number"),
 
+  /**
+   * A boolean, or "true" / "1" / "on" and "false" / "0" / "off". An unchecked
+   * checkbox sends nothing, so give the field a default or `optional`.
+   */
   boolean: primitive<boolean>((v) => {
     if (typeof v === "boolean") return v;
     if (v === "true" || v === "1" || v === "on") return true;

@@ -2,6 +2,7 @@ import type { Component } from "../jsx/jsx-runtime.js";
 import type { GuardSpec } from "./guards.js";
 import { createKey } from "./keys.js";
 
+/** An HTTP method a handler can answer. "ALL" answers any method the route has no specific handler for. */
 export type Verb = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" | "ALL";
 
 export interface VerbEntry {
@@ -19,17 +20,23 @@ export interface VerbEntry {
  * ```
  */
 export interface PageMeta {
+  /** The page title; error pages set it to the error message. */
   title?: string;
+  /** The page description, typically for a meta description tag. */
   description?: string;
+  /** Anything else your layouts read. Prefer declaring named fields (see above) for type safety. */
   [key: string]: unknown;
 }
 
 /** What every layout component receives. */
 export interface LayoutProps {
+  /** The page (or the next layout in) to wrap. */
   children: import("../jsx/jsx-runtime.js").Child;
+  /** The request's merged page metadata. */
   meta: PageMeta;
 }
 
+/** Options for @route. */
 export interface RouteOptions {
   /** Name for `url()` building (later milestone). */
   name?: string;
@@ -43,6 +50,7 @@ export interface RouteOptions {
   guards?: GuardSpec[];
 }
 
+/** Options for @group. */
 export interface GroupOptions {
   /** Layout(s) wrapping every route in the group (inside outer groups' layouts), outermost first. */
   layout?: Component<LayoutProps> | Component<LayoutProps>[];
@@ -130,6 +138,7 @@ export const GROUP = createKey<GroupDef>("group");
 export const NO_LAYOUT = createKey<Set<string | symbol>>("no-layout");
 export const ACCEPTS = createKey<Map<string | symbol, string[]>>("accepts");
 
+/** Options for @prerender. */
 export interface PrerenderOptions {
   /** Concrete paths for patterns with params: a list, or a function (it may use services via resolve()). */
   paths?: readonly string[] | (() => readonly string[] | Promise<readonly string[]>);
@@ -175,6 +184,22 @@ export function resetRouteRegistry(): void {
   routeRegistry.length = 0;
 }
 
+/**
+ * Make a class a route serving `pattern`. Its @get / @post / ... methods
+ * handle the verbs, and an instance is created per request by default (see
+ * `lifetime`). Patterns take `:name` params and a trailing `*name` splat;
+ * the pattern must start with "/". Inside a group, the group's prefix comes
+ * first.
+ *
+ * ```tsx
+ * @route("/todos/:id")
+ * class TodoPage {
+ *   @param("id", { transform: toInt }) accessor id!: number;
+ *   @get show() { return <h1>todo {this.id}</h1>; }
+ *   @del remove() { return 204; }
+ * }
+ * ```
+ */
 export function route(pattern: string, options: RouteOptions = {}) {
   if (!pattern.startsWith("/")) {
     throw new TypeError(`@route pattern must start with "/": ${JSON.stringify(pattern)}`);
@@ -200,13 +225,26 @@ function verb(name: Verb) {
   };
 }
 
+/**
+ * Handle GET requests to the route's pattern with this method. Also answers
+ * HEAD (without the body) unless the route has a @head handler. Takes no
+ * arguments: one route class serves one pattern, so a second @get on the
+ * same route needs @accepts.
+ */
 export const get = verb("GET");
+/** Handle POST requests to the route's pattern with this method. */
 export const post = verb("POST");
+/** Handle PUT requests to the route's pattern with this method. */
 export const put = verb("PUT");
+/** Handle PATCH requests to the route's pattern with this method. */
 export const patch = verb("PATCH");
+/** Handle DELETE requests to the route's pattern with this method (`delete` is a reserved word). */
 export const del = verb("DELETE");
+/** Handle HEAD requests with this method. Without one, HEAD runs the @get handler and drops the body. */
 export const head = verb("HEAD");
+/** Handle OPTIONS requests to the route's pattern with this method. */
 export const options = verb("OPTIONS");
+/** Handle every method the route has no specific handler for. */
 export const all = verb("ALL");
 
 /**
@@ -221,9 +259,8 @@ export const all = verb("ALL");
  * @layout(RootLayout, MarketingLayout)          // RootLayout is the app's anyway
  * @route("/about") class About { ... }
  *
- * @route("/report") class Report {
- *   @get page() { ... }
- *   @get("/print") @layout(PrintLayout, { inherit: false }) print() { ... }
+ * @route("/report/print") class ReportPrint {
+ *   @get @layout(PrintLayout, { inherit: false }) page() { ... }
  * }
  * ```
  *

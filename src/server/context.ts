@@ -5,25 +5,37 @@ import type { PageMeta } from "../decorators/route.js";
 import type { Session } from "../session/session.js";
 import type { CookieOptions } from "./cookies.js";
 
+/** The route that matched a request, as seen on `ctx.route` and by accessor validators at boot. */
 export interface RouteInfo {
+  /** The full pattern, group prefixes included, e.g. "/admin/users/:id". */
   readonly pattern: string;
+  /** The pattern's `:param` and `*splat` names, in order. */
   readonly paramNames: readonly string[];
+  /** The route class's name, for messages. */
   readonly className: string;
 }
 
 /** What decorators, handlers and components can see about the current request. */
 export interface YerdContext {
+  /** The raw node:http request. */
   readonly request: IncomingMessage;
+  /** The request method, upper case ("GET", "POST", ...). */
   readonly method: string;
+  /** The full request URL, built from the Host header (localhost when there is none). */
   readonly url: URL;
+  /** The request path as sent, without the query string and not percent-decoded. */
   readonly path: string;
+  /** Route params by name, percent-decoded. A splat holds the rest of the path, slashes included. */
   readonly params: Readonly<Record<string, string>>;
+  /** The query string, parsed. */
   readonly query: URLSearchParams;
+  /** Request headers, lower-cased names (node:http's IncomingHttpHeaders). */
   readonly headers: IncomingHttpHeaders;
   /** Request cookies, parsed. */
   readonly cookies: Readonly<Record<string, string>>;
   /** The session (needs app.sessions(...)). */
   readonly session: Session;
+  /** The route that matched. */
   readonly route: RouteInfo;
   /** Aborts when the client disconnects or the server shuts down. Pass it to fetch, timers, streams. */
   readonly signal: AbortSignal;
@@ -66,6 +78,10 @@ export function runWithContext<T>(context: YerdContext, fn: () => T): T {
   return storage.run(context, fn);
 }
 
+/**
+ * The current request's context, from anywhere in the request's async call
+ * chain (handlers, services, components, guards). Throws outside a request.
+ */
 export function currentContext(): YerdContext {
   const context = storage.getStore();
   if (!context) {

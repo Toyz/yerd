@@ -23,7 +23,13 @@
 import type { Level } from "./ilogger.js";
 import { activeBinding, currentSpan, emit, enabledHere, withSpan } from "./span.js";
 
+/**
+ * A logger for one target (category). Get one with @logger, inject the
+ * app's with `@inject(Logger)` (target "app"), or use the exported `log`.
+ * Records go to the app's ILogger once its filter allows the level.
+ */
 export class Logger {
+  /** `target` names the category in records and filters; `bound` fields go on every record. */
   constructor(
     readonly target = "app",
     readonly bound: Readonly<Record<string, unknown>> = {},
@@ -34,6 +40,7 @@ export class Logger {
     return enabledHere(activeBinding(), level, this.target, currentSpan());
   }
 
+  /** Write an event at `level`. `error`, when given, is serialized into the record's `error`. */
   log(level: Level, message: string, fields?: Record<string, unknown>, error?: unknown): void {
     const binding = activeBinding();
     const span = currentSpan();
@@ -42,18 +49,22 @@ export class Logger {
     emit(binding, level, this.target, "event", message, all, span, error === undefined ? {} : { error });
   }
 
+  /** Write a trace-level event. */
   trace(message: string, fields?: Record<string, unknown>): void {
     this.log("trace", message, fields);
   }
 
+  /** Write a debug-level event. */
   debug(message: string, fields?: Record<string, unknown>): void {
     this.log("debug", message, fields);
   }
 
+  /** Write an info-level event. */
   info(message: string, fields?: Record<string, unknown>): void {
     this.log("info", message, fields);
   }
 
+  /** Write a warn-level event. */
   warn(message: string, fields?: Record<string, unknown>): void {
     this.log("warn", message, fields);
   }

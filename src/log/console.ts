@@ -7,7 +7,9 @@
 
 import type { ILogger, Level, LogRecord } from "./ilogger.js";
 
+/** Options for ConsoleLogger. */
 export interface ConsoleLoggerOptions {
+  /** Default: YERD_LOG_FORMAT, else pretty on a terminal outside production, else json. */
   format?: "pretty" | "json";
   /** ANSI colors in pretty mode. Default: stdout is a terminal and NO_COLOR isn't set. */
   color?: boolean;
@@ -17,12 +19,15 @@ const COLORS: Record<Level, string> = { trace: "\x1b[90m", debug: "\x1b[36m", in
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
 
+/** The default ILogger sink: writes records to stdout / stderr. See the module notes above. */
 export class ConsoleLogger implements ILogger {
+  /** The format chosen at construction. */
   readonly format: "pretty" | "json";
   readonly #color: boolean;
   #batch: string[] = [];
   #scheduled = false;
 
+  /** Reads YERD_LOG_FORMAT, NODE_ENV, NO_COLOR and whether stdout is a TTY once, here. */
   constructor(options: ConsoleLoggerOptions = {}) {
     const fromEnv = process.env.YERD_LOG_FORMAT;
     this.format =
@@ -31,6 +36,7 @@ export class ConsoleLogger implements ILogger {
     this.#color = options.color ?? (this.format === "pretty" && !!process.stdout.isTTY && !process.env.NO_COLOR);
   }
 
+  /** Format and queue a record; warn and error flush the queue and go to stderr at once. */
   write(record: LogRecord): void {
     const line = this.format === "json" ? jsonLine(record) : this.#prettyLine(record);
     if (record.level === "warn" || record.level === "error") {

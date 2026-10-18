@@ -8,7 +8,28 @@
  * instances `Name{...}`, errors `{ name, message }`.
  */
 
-const SECRET = /pass|secret|token|authorization|cookie|session|api[-_]?key/i;
+// Redacted when any word of the key (split on camelCase, _, - and spaces) is
+// one of these: `password`, `csrfToken`, `x-api-key`, `sessionId`, but not
+// `passengers` or `tokenizer`.
+const SECRET_WORDS = new Set([
+  "pass", "password", "passwd", "passphrase", "pwd", "secret", "secrets", "token", "tokens", "authorization", "auth",
+  "cookie", "cookies", "session", "sessions", "apikey", "credential", "credentials", "privatekey", "signature", "otp",
+]);
+
+function isSecretKey(key: string): boolean {
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[\s_\-.]+/);
+  for (let i = 0; i < words.length; i++) {
+    if (SECRET_WORDS.has(words[i]!)) return true;
+    // "api key", "private key" split across two words
+    if ((words[i] === "api" || words[i] === "private") && words[i + 1] === "key") return true;
+  }
+  return false;
+}
+
+const SECRET = { test: isSecretKey };
 const MAX_DEPTH = 4;
 const MAX_STRING = 256;
 const MAX_ITEMS = 20;

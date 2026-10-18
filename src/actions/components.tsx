@@ -4,12 +4,15 @@ import { raw } from "../render/escape.js";
 /** Where yerd serves its client runtime. */
 export const RUNTIME_PATH = "/_yerd/runtime.js";
 
+/** Props for <Region>. */
 export interface RegionProps {
   /** Unique on the page; how responses find the part of the page to replace. */
   id: string;
   /** Element to render. Default "div". */
   as?: string;
+  /** The region's content. */
   children?: Child;
+  /** Other attributes go on the element as given. */
   [attribute: string]: unknown;
 }
 

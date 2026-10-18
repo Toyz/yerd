@@ -13,8 +13,11 @@ import { createKey, localKey } from "./keys.js";
  * field and inside `@args(...)`.
  */
 export interface Resolver {
+  /** The decorator's name, for boot errors (AccessorOptions.name). */
   readonly name: string;
+  /** The arguments the decorator was called with, e.g. ["id", { transform: toInt }]. */
   readonly args: readonly unknown[];
+  /** The boot-time check from AccessorOptions.validate, if any. */
   readonly validate?: (route: RouteInfo, ...args: never[]) => string | void;
   /** Memoized per request: every read in one request gets the same value (or the same promise). */
   resolve(ctx: YerdContext): unknown;
@@ -31,8 +34,11 @@ export const RESOLVER: unique symbol = Symbol.for("yerd.resolver");
 
 /** Phantom marker carrying the value type a decorator resolves to, for @args. */
 declare const OUTPUT: unique symbol;
+/** Carried by every decorator createAccessor() makes: its resolver, plus its value type for @args inference. */
 export interface Resolves<Out> {
+  /** Type-only: the value the decorator resolves to. Never set at runtime. */
   readonly [OUTPUT]?: Out;
+  /** The resolver behind the decorator. */
   readonly [RESOLVER]: Resolver;
 }
 
@@ -49,6 +55,7 @@ export type AccessorDecorator<T> = (<This, V>(
   : { "accessor type does not accept the decorator's value": T }) &
   Resolves<T>;
 
+/** Options for createAccessor(). */
 export interface AccessorOptions<A extends unknown[]> {
   /** Shown in boot errors, e.g. "param". */
   name?: string;

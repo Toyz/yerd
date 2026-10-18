@@ -24,7 +24,7 @@ import { parse, type DtoClass } from "../decorators/dto.js";
 
 /** The submitted form fields, with typed getters. */
 export class ActionForm {
-  /** `files` holds uploads from a multipart form (the runtime sends file forms as multipart). */
+  /** `uploads` holds files from a multipart form (the runtime sends file forms as multipart). */
   constructor(
     readonly fields: FormFields,
     readonly uploads: FormFiles = Object.create(null) as FormFiles,
@@ -40,6 +40,7 @@ export class ActionForm {
     return (this.uploads[name] ?? []).filter((f) => f.size > 0 || f.name !== "");
   }
 
+  /** Whether the form sent a field called `name` (even an empty one). Doesn't look at uploads. */
   has(name: string): boolean {
     return this.fields[name] !== undefined;
   }
@@ -86,9 +87,13 @@ const actionFunctions = new WeakMap<Function, ActionInfo>();
 
 const BOUND: unique symbol = Symbol.for("yerd.bound-action");
 
+/** An action with its arguments attached, from bind(). Pass it as a form's `action`. */
 export interface BoundAction<A = unknown> {
+  /** Brand that marks a bind() result. */
   readonly [BOUND]: true;
+  /** The @action method. */
   readonly fn: Action<A>;
+  /** The arguments signed into the form's token and passed as the action's first parameter. */
   readonly args: A;
 }
 

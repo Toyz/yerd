@@ -10,8 +10,13 @@ export type HeaderInit = Record<string, string>;
  * `content-type` instead of going out next to it.
  */
 export class YerdResponse {
+  /** Response headers, names lowercased. */
   readonly headers: HeaderInit;
 
+  /**
+   * Usually built with res() or redirect(). Throws a TypeError for a status
+   * outside 200-599 or a header value containing CR, LF or NUL.
+   */
   constructor(
     readonly status: number,
     headers: HeaderInit,
@@ -35,8 +40,11 @@ export class YerdResponse {
   }
 }
 
+/** Options for res(). */
 export interface ResponseInit {
+  /** Default 200. Must be 200-599. */
   status?: number;
+  /** Extra headers; they replace the defaults coercion would set (names are case-insensitive). */
   headers?: HeaderInit;
   /**
    * Layout(s) for a JSX body, outermost first, innermost in the chain (inside
@@ -65,6 +73,15 @@ export function res(body?: unknown, init: ResponseInit = {}): YerdResponse {
   return new YerdResponse(init.status ?? 200, init.headers ?? {}, body, layout, cookies);
 }
 
+/**
+ * A redirect to `location`. The default 303 makes the browser follow up with
+ * a GET, which is what you want after a form POST; use 307 / 308 to keep the
+ * method. The location is sent as given, so check user-supplied targets.
+ *
+ * ```ts
+ * @post save() { ...; return redirect("/todos"); }
+ * ```
+ */
 export function redirect(location: string, status: 301 | 302 | 303 | 307 | 308 = 303): YerdResponse {
   return new YerdResponse(status, { location }, null);
 }
@@ -74,9 +91,20 @@ export function redirect(location: string, status: 301 | 302 | 303 | 307 | 308 =
  * true. With `details`, the response is JSON: `{ error: message, ...details }`.
  */
 export class HttpError extends Error {
+  /** Whether `message` (and `details`) reach the client. Default: true below 500, false for 5xx. */
   readonly expose: boolean;
+  /** Extra fields merged into the JSON error body when exposed. */
   readonly details: Record<string, unknown> | undefined;
 
+  /**
+   * `message` defaults to "HTTP <status>". An unexposed error is answered
+   * with the status text instead (and logged, when 5xx).
+   *
+   * ```ts
+   * throw new HttpError(404, "No such todo");
+   * throw new HttpError(422, "Invalid order", { details: { field: "qty" } });
+   * ```
+   */
   constructor(
     readonly status: number,
     message?: string,
@@ -97,6 +125,14 @@ export interface Bare {
   readonly node: Child;
 }
 
+/**
+ * Return JSX without any layouts, for fragments a client swaps into a page.
+ * Like @noLayout, but chosen per result.
+ *
+ * ```tsx
+ * @get row() { return bare(<TodoRow todo={this.todo} />); }
+ * ```
+ */
 export function bare(node: Child): Bare {
   return { [BARE]: true, node };
 }

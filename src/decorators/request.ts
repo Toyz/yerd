@@ -36,6 +36,7 @@ export type IsValidPipe<T, Raw = string> = T extends readonly unknown[]
 
 /** What a decorator factory returns for a pipe whose steps don't line up. Not callable, so `@` fails. */
 export interface PipeError {
+  /** The key and value are the error message TypeScript shows. */
   "transform pipeline error": "each transform must accept the previous one's output";
 }
 
@@ -279,6 +280,7 @@ export function field<const O extends OptionalFieldOptions<O> = {}>(
 
 // ── uploads ──
 
+/** Options for @file and @files. */
 export interface FileOptions {
   /** A 400 when no file was uploaded under the name. */
   required?: boolean;
@@ -417,6 +419,14 @@ export const request = createAccessor((ctx) => ctx.request, { name: "request" })
 
 const INTEGER = /^-?\d+$/;
 
+/**
+ * Parse a base-10 integer (optional leading minus, digits only). Anything
+ * else, or a value beyond Number.MAX_SAFE_INTEGER, is a 400.
+ *
+ * ```ts
+ * @param("id", { transform: toInt }) accessor id!: number;
+ * ```
+ */
 export const toInt: Transform<string, number> = (raw) => {
   if (!INTEGER.test(raw)) throw new HttpError(400, `Expected an integer, got ${JSON.stringify(raw)}`);
   const n = Number(raw);
@@ -424,20 +434,33 @@ export const toInt: Transform<string, number> = (raw) => {
   return n;
 };
 
+/** Parse any number `Number()` accepts (decimals, exponents). Blank or NaN is a 400. */
 export const toNumber: Transform<string, number> = (raw) => {
+  // Decimal notation only: Number() would also take "Infinity", "0x10" and "1e999".
   const n = Number(raw);
-  if (raw.trim() === "" || Number.isNaN(n)) throw new HttpError(400, `Expected a number, got ${JSON.stringify(raw)}`);
+  if (!/^\s*-?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?\s*$/i.test(raw) || !Number.isFinite(n)) {
+    throw new HttpError(400, `Expected a number, got ${JSON.stringify(raw)}`);
+  }
   return n;
 };
 
+/**
+ * Parse "true", "1" or "" (a bare `?flag`) as true and "false" or "0" as
+ * false; anything else is a 400. Case-sensitive.
+ */
 export const toBool: Transform<string, boolean> = (raw) => {
   if (raw === "true" || raw === "1" || raw === "") return true;
   if (raw === "false" || raw === "0") return false;
   throw new HttpError(400, `Expected a boolean, got ${JSON.stringify(raw)}`);
 };
 
+/**
+ * Strip leading and trailing whitespace. Put it first in a pipeline:
+ * `{ transform: [trim, lower, oneOf("asc", "desc")] }`.
+ */
 export const trim: Transform<string, string> = (raw) => raw.trim();
 
+/** Lower-case the value. */
 export const lower: Transform<string, string> = (raw) => raw.toLowerCase();
 
 /** Only these exact values; the output type is their union. */

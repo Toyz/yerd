@@ -17,6 +17,7 @@
 import type { Level } from "./ilogger.js";
 import { withSpan } from "./span.js";
 
+/** Options for @instrument. */
 export interface InstrumentOptions<This = any, Args extends unknown[] = any[]> {
   /** Span name. Default `Class::method`. */
   name?: string;
@@ -79,6 +80,7 @@ export function parameterNames(fn: Function): string[] {
   });
 }
 
+/** Wrap a method in a span; see the module notes above. Call it, even with no options: `@instrument()`. */
 export function instrument<This, Args extends unknown[], R>(options: InstrumentOptions<This, Args> = {}) {
   return function (method: (this: This, ...args: Args) => R, context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => R>) {
     const names = parameterNames(method);

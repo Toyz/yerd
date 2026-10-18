@@ -42,8 +42,16 @@ function isPlainData(value: unknown): boolean {
   if (typeof value === "boolean" || Array.isArray(value)) return true;
   if (typeof value !== "object" || value === null) return false;
   const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
+  if (proto === Object.prototype || proto === null) return true;
+  // Things that say how they serialize (Date, URL, anything with toJSON).
+  if (typeof (value as { toJSON?: unknown }).toJSON === "function") return true;
+  // Instances of your own classes (a validated DTO, a domain object) are their
+  // own enumerable fields. Built-ins whose data lives in internal slots would
+  // serialize as {} and are refused instead.
+  return !NOT_JSON.some((type) => value instanceof type);
 }
+
+const NOT_JSON: Function[] = [Map, Set, WeakMap, WeakSet, Promise, RegExp, Error, ArrayBuffer, DataView];
 
 function wrapInLayouts(node: Child, layouts: readonly Component<LayoutProps>[], meta: PageMeta): Child {
   let wrapped = node;
@@ -104,5 +112,10 @@ export async function coerce(value: unknown, options: CoerceOptions): Promise<Ou
     return { status: 200, headers: { "content-type": JSON_TYPE }, body: JSON.stringify(value) };
   }
 
-  throw new TypeError(`Don't know how to send ${Object.prototype.toString.call(value)} as a response`);
+  const what = value instanceof Map || value instanceof Set
+    ? `a ${value.constructor.name} (JSON can't represent it; convert it, e.g. Object.fromEntries(map) or [...set])`
+    : value instanceof Error
+      ? "an Error (throw it, or throw an HttpError, instead of returning it)"
+      : Object.prototype.toString.call(value);
+  throw new TypeError(`A handler returned ${what}, which yerd doesn't know how to send as a response`);
 }
