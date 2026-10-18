@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runtimeSource } from "../../src/client/runtime.js";
+import type { YerdClient } from "../../src/attributes/attribute.js";
 
 beforeAll(() => {
   new Function(runtimeSource())();
@@ -318,7 +319,7 @@ describe("responses", () => {
 
   it("yerd.load refuses a javascript: URL too", async () => {
     const assign = vi.spyOn(location, "assign").mockImplementation(() => {});
-    await (window as unknown as { yerd: { load(url: string, push: boolean): Promise<void> } }).yerd.load("javascript:alert(1)", true);
+    await (window as unknown as { yerd: YerdClient }).yerd.page.load("javascript:alert(1)", true);
     expect(assign).not.toHaveBeenCalled();
   });
 

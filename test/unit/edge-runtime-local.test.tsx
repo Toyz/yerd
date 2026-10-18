@@ -2,10 +2,8 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { Local, eq, not, renderToString } from "@toyz/yerd";
 import { runtimeSource } from "../../src/client/runtime.js";
+import type { YerdClient as Yerd } from "../../src/attributes/attribute.js";
 
-interface Yerd {
-  apply(html: string): number;
-}
 let yerd: Yerd;
 
 beforeAll(() => {
@@ -113,21 +111,21 @@ describe("handlers", () => {
 
   it("a handler a morph adds to an already wired element is wired", async () => {
     await mount(`<div id="r" data-yx-region>${scope({ n: 0, h: 0 }, `<button id="b" data-yx-on-click="() => s.n++">x</button><b id="n" data-yx-text="n">0</b><b id="h" data-yx-text="h">0</b>`)}</div>`);
-    yerd.apply(`<div id="r" data-yx-region>${scope({ n: 0, h: 0 }, `<button id="b" data-yx-on-click="() => s.n++" data-yx-on-mouseover="() => s.h++">x</button><b id="n" data-yx-text="n">0</b><b id="h" data-yx-text="h">0</b>`)}</div>`);
+    yerd.page.apply(`<div id="r" data-yx-region>${scope({ n: 0, h: 0 }, `<button id="b" data-yx-on-click="() => s.n++" data-yx-on-mouseover="() => s.h++">x</button><b id="n" data-yx-text="n">0</b><b id="h" data-yx-text="h">0</b>`)}</div>`);
     $("#b").dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
     expect($("#h").textContent).toBe("1");
   });
 
   it("a handler a morph changed runs as it is now", async () => {
     await mount(`<div id="r" data-yx-region>${scope({ n: 0 }, `<button id="b" data-yx-on-click="() => (s.n = 1)">x</button><b data-yx-text="n">0</b>`)}</div>`);
-    yerd.apply(`<div id="r" data-yx-region>${scope({ n: 0 }, `<button id="b" data-yx-on-click="() => (s.n = 2)">x</button><b data-yx-text="n">0</b>`)}</div>`);
+    yerd.page.apply(`<div id="r" data-yx-region>${scope({ n: 0 }, `<button id="b" data-yx-on-click="() => (s.n = 2)">x</button><b data-yx-text="n">0</b>`)}</div>`);
     $("#b").click();
     expect(texts("b")).toEqual(["2"]);
   });
 
   it("a handler a morph removed stops running", async () => {
     await mount(`<div id="r" data-yx-region>${scope({ n: 0 }, `<button id="b" data-yx-on-click="() => s.n++">x</button><b data-yx-text="n">0</b>`)}</div>`);
-    yerd.apply(`<div id="r" data-yx-region>${scope({ n: 0 }, `<button id="b">x</button><b data-yx-text="n">0</b>`)}</div>`);
+    yerd.page.apply(`<div id="r" data-yx-region>${scope({ n: 0 }, `<button id="b">x</button><b data-yx-text="n">0</b>`)}</div>`);
     $("#b").click();
     expect(texts("b")).toEqual(["0"]);
   });
@@ -238,7 +236,7 @@ describe("nesting and morphs", () => {
 
   it("a scope a morph brings in is started", async () => {
     await mount('<div id="r" data-yx-region></div>');
-    yerd.apply(`<div id="r" data-yx-region>${scope({ n: 3 }, `<button id="b" data-yx-on-click="() => s.n++">x</button><b data-yx-text="n">3</b>`)}</div>`);
+    yerd.page.apply(`<div id="r" data-yx-region>${scope({ n: 3 }, `<button id="b" data-yx-on-click="() => s.n++">x</button><b data-yx-text="n">3</b>`)}</div>`);
     $("#b").click();
     expect(texts("b")).toEqual(["4"]);
   });
@@ -247,13 +245,13 @@ describe("nesting and morphs", () => {
     await mount(`<div id="r" data-yx-region>${scope({ n: 0 }, `<button id="b" data-yx-on-click="() => s.n++">x</button><b data-yx-text="n">0</b>`)}</div>`);
     $("#b").click();
     $("#b").click();
-    yerd.apply(`<div id="r" data-yx-region>${scope({ n: 0 }, `<button id="b" data-yx-on-click="() => s.n++">x</button><b data-yx-text="n">0</b><i data-yx-text="n">0</i>`)}</div>`);
+    yerd.page.apply(`<div id="r" data-yx-region>${scope({ n: 0 }, `<button id="b" data-yx-on-click="() => s.n++">x</button><b data-yx-text="n">0</b><i data-yx-text="n">0</i>`)}</div>`);
     expect([$("b").textContent, $("i").textContent]).toEqual(["2", "2"]);
   });
 
   it("elements a morph adds inside a scope are wired", async () => {
     await mount(`<div id="r" data-yx-region>${scope({ n: 0 }, `<b data-yx-text="n">0</b>`)}</div>`);
-    yerd.apply(`<div id="r" data-yx-region>${scope({ n: 0 }, `<b data-yx-text="n">0</b><button id="b" data-yx-on-click="() => s.n++">x</button>`)}</div>`);
+    yerd.page.apply(`<div id="r" data-yx-region>${scope({ n: 0 }, `<b data-yx-text="n">0</b><button id="b" data-yx-on-click="() => s.n++">x</button>`)}</div>`);
     $("#b").click();
     expect(texts("b")).toEqual(["1"]);
   });

@@ -1,11 +1,8 @@
 // @vitest-environment happy-dom
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runtimeSource } from "../../src/client/runtime.js";
+import type { YerdClient as Yerd } from "../../src/attributes/attribute.js";
 
-interface Yerd {
-  now(): number;
-  clock(): Promise<{ now: number; offset: number; rtt: number }>;
-}
 
 /** This page's clock (performance.timeOrigin + performance.now()), moved by hand. */
 let local = 0;
@@ -85,13 +82,13 @@ describe("the server clock", () => {
   });
 
   it("measures the offset with a few round trips, once", async () => {
-    const [a, b] = await Promise.all([yerd.clock(), yerd.clock()]);
+    const [a, b] = await Promise.all([yerd.clock.sync(), yerd.clock.sync()]);
     expect(clockCalls).toBe(4);
     expect(a.offset).toBe(AHEAD);
     expect(a.rtt).toBe(0);
     expect(b).toEqual(a);
-    expect(yerd.now()).toBe(server());
-    await yerd.clock();
+    expect(yerd.clock.now()).toBe(server());
+    await yerd.clock.sync();
     expect(clockCalls).toBe(4);
   });
 

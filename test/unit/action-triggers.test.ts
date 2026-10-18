@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runtimeSource } from "../../src/client/runtime.js";
+import type { YerdClient } from "../../src/attributes/attribute.js";
 
 let observed: Array<{ el: Element; fire: () => void }> = [];
 
@@ -437,7 +438,7 @@ describe("element actions", () => {
         return html(`<html><head><title>t</title></head><body><nav id="who">${signedIn ? "ada" : "guest"}</nav></body></html>`);
       }));
       show(`<nav id="who">guest</nav><form id="f" action="/login" method="post" data-yx><button>Sign in</button></form>`);
-      (window as unknown as { yerd: { prefetch(url: string): void } }).yerd.prefetch("/home");
+      (window as unknown as { yerd: YerdClient }).yerd.net.prefetch("/home");
       await flush();
       document.querySelector<HTMLButtonElement>("#f button")!.click();
       await flush();

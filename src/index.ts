@@ -60,7 +60,7 @@ export { instrument, type InstrumentOptions } from "./log/instrument.js";
 export {
   attribute, resetAttributeRegistry,
   type AttributeDef, type AttributeOptions, type AttributeHandle, type ClientSetup, type RenderAttribute,
-  type YerdClient, type PrefetchValue, type PrefetchMode,
+  type YerdClient, type PageApi, type NetApi, type ClockApi, type ClockReading, type PrefetchValue, type PrefetchMode,
 } from "./attributes/attribute.js";
 export type {
   CustomAttributes, GlobalAttributes, VoidAttributes, CSSProperties, EventHandler, ActionTrigger, ActionValue, FormActionValue, InputType, Nullable,

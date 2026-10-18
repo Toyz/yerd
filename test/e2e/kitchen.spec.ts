@@ -554,17 +554,17 @@ test("rave: two tabs dance on one beat, and a cue plays on both at the same mome
   await expect(one.getByRole("heading", { name: "Gnome rave" })).toBeVisible();
 
   // Same machine: the measured offset is about nothing, over a quick round trip.
-  const clock = await one.evaluate(() => (window as unknown as { yerd: { clock(): Promise<{ offset: number; rtt: number }> } }).yerd.clock());
+  const clock = await one.evaluate(() => (window as unknown as { yerd: { clock: { sync(): Promise<{ offset: number; rtt: number }> } } }).yerd.clock.sync());
   expect(Math.abs(clock.offset)).toBeLessThan(250);
   expect(clock.rtt).toBeLessThan(1000);
 
   // `sync`: each page's first gnome is at the same point of its beat, read against the server's clock.
   const phase = (page: Page) =>
     page.evaluate(() => {
-      const yerd = (window as unknown as { yerd: { now(): number } }).yerd;
+      const yerd = (window as unknown as { yerd: { clock: { now(): number } } }).yerd;
       const animation = document.querySelector("[data-yx-sync] svg")!.parentElement!.getAnimations()[0]!;
       const period = 1400;
-      return (((Number(animation.currentTime) - yerd.now()) % period) + period) % period;
+      return (((Number(animation.currentTime) - yerd.clock.now()) % period) + period) % period;
     });
   await expect.poll(async () => Math.min(await phase(one), 1400 - (await phase(one)))).toBeLessThan(40);
   await expect.poll(async () => Math.min(await phase(two), 1400 - (await phase(two)))).toBeLessThan(40);
@@ -578,7 +578,7 @@ test("rave: two tabs dance on one beat, and a cue plays on both at the same mome
             "yx:cue",
             (event) => {
               const { name, at, late } = (event as CustomEvent<{ name: string; at: number; late: number }>).detail;
-              resolve({ name, late, drift: (window as unknown as { yerd: { now(): number } }).yerd.now() - at });
+              resolve({ name, late, drift: (window as unknown as { yerd: { clock: { now(): number } } }).yerd.clock.now() - at });
             },
             { once: true },
           );

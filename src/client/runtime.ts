@@ -1616,13 +1616,18 @@ export function yerdRuntime(): void {
     }
     return clock.ready;
   }
-  /** The server's clock: measured once, then shared by `sync`, cues and yerd.clock(). */
+  /** The server's clock: measured once, then shared by `sync`, cues and yerd.clock.sync(). */
   function serverClock(): Promise<{ now: number; offset: number; rtt: number }> {
     return clockReady().then(() => ({ now: serverNow(), offset: clock.offset, rtt: clock.rtt }));
   }
 
   // Before any attribute connects: client halves receive it.
-  const api = { morph, apply, refresh, load, prefetch, fetch: cachedFetch, attribute, auto, now: serverNow, clock: serverClock };
+  const api = {
+    page: { refresh, load, apply, morph },
+    net: { prefetch, fetch: cachedFetch },
+    clock: { now: serverNow, sync: serverClock },
+    attribute,
+  };
   (window as Window & { yerd?: unknown }).yerd = api;
 
   // Built in: prefetch. data-yx-prefetch is the mode (intent, visible, load);

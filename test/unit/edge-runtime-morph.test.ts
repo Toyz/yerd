@@ -1,11 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runtimeSource } from "../../src/client/runtime.js";
+import type { YerdClient as Yerd } from "../../src/attributes/attribute.js";
 
-interface Yerd {
-  morph(from: Node, to: Node): void;
-  apply(html: string): number;
-}
 
 let yerd: Yerd;
 
@@ -30,7 +27,7 @@ function el(html: string): Element {
 function morph(before: string, after: string): Element {
   document.body.innerHTML = before;
   const root = document.body.firstElementChild!;
-  yerd.morph(root, el(after));
+  yerd.page.morph(root, el(after));
   return document.body.firstElementChild!;
 }
 
@@ -38,7 +35,7 @@ function morph(before: string, after: string): Element {
 function track(before: string, after: string, selector = "li"): string[] {
   document.body.innerHTML = before;
   const old = new Set(Array.from(document.querySelectorAll(selector)));
-  yerd.morph(document.body.firstElementChild!, el(after));
+  yerd.page.morph(document.body.firstElementChild!, el(after));
   return Array.from(document.querySelectorAll(selector), (n) => `${n.textContent}${old.has(n) ? "*" : ""}`);
 }
 
@@ -94,7 +91,7 @@ describe("keyed children", () => {
   it("a keyed node that changes tag is replaced, not morphed across kinds", () => {
     document.body.innerHTML = '<div id="r"><p id="x">p</p></div>';
     const p = document.getElementById("x");
-    yerd.morph(document.body.firstElementChild!, el('<div id="r"><section id="x">s</section></div>'));
+    yerd.page.morph(document.body.firstElementChild!, el('<div id="r"><section id="x">s</section></div>'));
     // Swapped in whole (and, being matched by key, without the data-yx-new mark).
     expect(document.body.firstElementChild!.innerHTML).toBe('<section id="x">s</section>');
     expect(p!.isConnected).toBe(false);
@@ -124,7 +121,7 @@ describe("text, comments and whitespace", () => {
   it("keeps the same text node when only its text changes", () => {
     document.body.innerHTML = "<p id='r'>a</p>";
     const text = document.body.firstElementChild!.firstChild;
-    yerd.morph(document.body.firstElementChild!, el("<p id='r'>b</p>"));
+    yerd.page.morph(document.body.firstElementChild!, el("<p id='r'>b</p>"));
     expect(document.body.firstElementChild!.firstChild).toBe(text);
   });
 });
@@ -159,7 +156,7 @@ describe("form state", () => {
     input.focus();
     input.value = "hello world";
     input.setSelectionRange(3, 5);
-    yerd.morph(document.getElementById("r")!, el('<div id="r"><input id="i" value="changed"></div>'));
+    yerd.page.morph(document.getElementById("r")!, el('<div id="r"><input id="i" value="changed"></div>'));
     expect(input.value).toBe("hello world");
     expect([input.selectionStart, input.selectionEnd]).toEqual([3, 5]);
     expect(input.getAttribute("value")).toBe("changed");
@@ -180,7 +177,7 @@ describe("form state", () => {
     const t = document.getElementById("t") as HTMLTextAreaElement;
     t.focus();
     t.value = "typing";
-    yerd.morph(document.getElementById("r")!, el('<div id="r"><textarea id="t">new</textarea></div>'));
+    yerd.page.morph(document.getElementById("r")!, el('<div id="r"><textarea id="t">new</textarea></div>'));
     expect(t.value).toBe("typing");
     expect(t.defaultValue).toBe("new");
   });
@@ -218,11 +215,11 @@ describe("form state", () => {
     const s = document.getElementById("s") as HTMLSelectElement;
     s.focus();
     s.value = "b";
-    yerd.morph(document.getElementById("r")!, el('<div id="r"><select id="s"><option selected>a</option><option>b</option></select></div>'));
+    yerd.page.morph(document.getElementById("r")!, el('<div id="r"><select id="s"><option selected>a</option><option>b</option></select></div>'));
     expect(s.value).toBe("b");
     // Once it's blurred, the next morph gives it the server's choice.
     s.blur();
-    yerd.morph(document.getElementById("r")!, el('<div id="r"><select id="s"><option selected>a</option><option>b</option></select></div>'));
+    yerd.page.morph(document.getElementById("r")!, el('<div id="r"><select id="s"><option selected>a</option><option>b</option></select></div>'));
     expect(s.value).toBe("a");
   });
 
@@ -232,7 +229,7 @@ describe("form state", () => {
     s.focus();
     s.options[0]!.selected = true;
     s.options[2]!.selected = true;
-    yerd.morph(document.getElementById("r")!, el('<div id="r"><select id="s" multiple><option>a</option><option selected>b</option><option>c</option></select></div>'));
+    yerd.page.morph(document.getElementById("r")!, el('<div id="r"><select id="s" multiple><option>a</option><option selected>b</option><option>c</option></select></div>'));
     expect(Array.from(s.options, (o) => o.selected)).toEqual([true, false, true]);
   });
 
@@ -241,7 +238,7 @@ describe("form state", () => {
     const input = document.getElementById("f") as HTMLInputElement;
     const file = new File(["x"], "x.txt");
     input.files = [file] as unknown as FileList;
-    yerd.morph(document.getElementById("r")!, el('<div id="r"><input type="file" id="f" accept=".txt"></div>'));
+    yerd.page.morph(document.getElementById("r")!, el('<div id="r"><input type="file" id="f" accept=".txt"></div>'));
     expect(input.files![0]).toBe(file);
     expect(input.getAttribute("accept")).toBe(".txt");
   });
@@ -249,7 +246,7 @@ describe("form state", () => {
   it("an input that changes type is patched in place", () => {
     document.body.innerHTML = '<div id="r"><input id="i" type="text" value="x"></div>';
     const input = document.getElementById("i") as HTMLInputElement;
-    yerd.morph(document.getElementById("r")!, el('<div id="r"><input id="i" type="checkbox" checked></div>'));
+    yerd.page.morph(document.getElementById("r")!, el('<div id="r"><input id="i" type="checkbox" checked></div>'));
     expect(document.getElementById("i")).toBe(input);
     expect(input.type).toBe("checkbox");
     expect(input.checked).toBe(true);
@@ -260,14 +257,14 @@ describe("details, keep and nesting", () => {
   it("opens a <details> the server sends open; never closes one the user opened", () => {
     const root = morph('<div id="r"><details><summary>s</summary></details></div>', '<div id="r"><details open><summary>s</summary></details></div>');
     expect((root.querySelector("details") as HTMLDetailsElement).open).toBe(true);
-    yerd.morph(root, el('<div id="r"><details><summary>s</summary></details></div>'));
+    yerd.page.morph(root, el('<div id="r"><details><summary>s</summary></details></div>'));
     expect((root.querySelector("details") as HTMLDetailsElement).open).toBe(true);
   });
 
   it("data-yx-keep leaves the element and its children alone", () => {
     document.body.innerHTML = '<div id="r"><canvas id="c" data-yx-keep width="5"><b>own</b></canvas><p>a</p></div>';
     const canvas = document.getElementById("c")!;
-    yerd.morph(document.getElementById("r")!, el('<div id="r"><canvas id="c" data-yx-keep width="9"></canvas><p>b</p></div>'));
+    yerd.page.morph(document.getElementById("r")!, el('<div id="r"><canvas id="c" data-yx-keep width="9"></canvas><p>b</p></div>'));
     expect(document.getElementById("c")).toBe(canvas);
     expect(canvas.outerHTML).toBe('<canvas id="c" data-yx-keep="" width="5"><b>own</b></canvas>');
     expect(document.querySelector("p")!.textContent).toBe("b");
@@ -278,7 +275,7 @@ describe("details, keep and nesting", () => {
     const nest = (leaf: string) => "<div>".repeat(depth) + leaf + "</div>".repeat(depth);
     document.body.innerHTML = `<section id="r">${nest("<i>a</i>")}</section>`;
     const leaf = document.querySelector("i")!;
-    yerd.morph(document.getElementById("r")!, el(`<section id="r">${nest("<i>b</i>")}</section>`));
+    yerd.page.morph(document.getElementById("r")!, el(`<section id="r">${nest("<i>b</i>")}</section>`));
     expect(document.querySelector("i")).toBe(leaf);
     expect(leaf.textContent).toBe("b");
   });
@@ -286,7 +283,7 @@ describe("details, keep and nesting", () => {
   it("morphing different node kinds at the root replaces the node", () => {
     document.body.innerHTML = '<div id="w"><p id="r">x</p></div>';
     const replacement = el('<span id="r">y</span>');
-    yerd.morph(document.getElementById("r")!, replacement);
+    yerd.page.morph(document.getElementById("r")!, replacement);
     expect(document.getElementById("w")!.innerHTML).toBe('<span id="r">y</span>');
   });
 });
@@ -294,25 +291,25 @@ describe("details, keep and nesting", () => {
 describe("apply", () => {
   it("regions the page doesn't have are skipped and not counted", () => {
     document.body.innerHTML = '<div id="a" data-yx-region>1</div>';
-    expect(yerd.apply('<div id="a" data-yx-region>2</div><div id="zzz" data-yx-region>x</div>')).toBe(1);
+    expect(yerd.page.apply('<div id="a" data-yx-region>2</div><div id="zzz" data-yx-region>x</div>')).toBe(1);
     expect(document.getElementById("zzz")).toBeNull();
   });
 
   it("a region without an id is skipped", () => {
     document.body.innerHTML = '<div id="a" data-yx-region>1</div>';
-    expect(yerd.apply("<div data-yx-region>2</div>")).toBe(0);
+    expect(yerd.page.apply("<div data-yx-region>2</div>")).toBe(0);
   });
 
   it("only data-yx-region elements count: other ids in the response don't touch the page", () => {
     document.body.innerHTML = '<p id="p">keep</p><div id="a" data-yx-region>1</div>';
-    yerd.apply('<p id="p">changed</p><div id="a" data-yx-region>2</div>');
+    yerd.page.apply('<p id="p">changed</p><div id="a" data-yx-region>2</div>');
     expect(document.getElementById("p")!.textContent).toBe("keep");
   });
 
   it("nested regions: the outer morph brings the inner along, and the inner is applied again", () => {
     document.body.innerHTML = '<div id="outer" data-yx-region><div id="inner" data-yx-region>1</div></div>';
     const inner = document.getElementById("inner")!;
-    expect(yerd.apply('<div id="outer" data-yx-region>o<div id="inner" data-yx-region>2</div></div>')).toBe(2);
+    expect(yerd.page.apply('<div id="outer" data-yx-region>o<div id="inner" data-yx-region>2</div></div>')).toBe(2);
     expect(document.getElementById("inner")).toBe(inner);
     expect(document.getElementById("outer")!.innerHTML).toBe('o<div id="inner" data-yx-region="">2</div>');
   });
@@ -320,9 +317,9 @@ describe("apply", () => {
   it("updates the title only when the response has a <head> title", () => {
     document.title = "before";
     document.body.innerHTML = '<div id="a" data-yx-region>1</div>';
-    yerd.apply('<title>body title</title><div id="a" data-yx-region>2</div>');
+    yerd.page.apply('<title>body title</title><div id="a" data-yx-region>2</div>');
     expect(document.title).toBe("before");
-    yerd.apply('<html><head><title>New &amp; shiny</title></head><body><div id="a" data-yx-region>3</div></body></html>');
+    yerd.page.apply('<html><head><title>New &amp; shiny</title></head><body><div id="a" data-yx-region>3</div></body></html>');
     expect(document.title).toBe("New & shiny");
   });
 
@@ -331,8 +328,8 @@ describe("apply", () => {
     const counts: number[] = [];
     const listen = (e: Event) => counts.push((e as CustomEvent<{ regions: number }>).detail.regions);
     document.addEventListener("yx:applied", listen);
-    yerd.apply('<div id="a" data-yx-region>2</div>');
-    yerd.apply("<p>nothing</p>");
+    yerd.page.apply('<div id="a" data-yx-region>2</div>');
+    yerd.page.apply("<p>nothing</p>");
     document.removeEventListener("yx:applied", listen);
     expect(counts).toEqual([1, 0]);
   });
@@ -340,39 +337,39 @@ describe("apply", () => {
   it("an appending region updates children it already has and adds the rest at the end", () => {
     document.body.innerHTML = '<ul id="f" data-yx-region><li data-key="1">1</li><li data-key="2">2</li></ul>';
     const one = document.querySelector("li")!;
-    yerd.apply('<ul id="f" data-yx-region data-yx-append><li data-key="1">1!</li><li data-key="3">3</li></ul>');
+    yerd.page.apply('<ul id="f" data-yx-region data-yx-append><li data-key="1">1!</li><li data-key="3">3</li></ul>');
     expect(document.getElementById("f")!.innerHTML).toBe('<li data-key="1">1!</li><li data-key="2">2</li><li data-key="3" data-yx-new="">3</li>');
     expect(document.querySelector("li")).toBe(one);
   });
 
   it("an appending region keeps the target's own attributes", () => {
     document.body.innerHTML = '<ul id="f" class="feed" data-yx-region></ul>';
-    yerd.apply('<ul id="f" data-yx-region data-yx-append class="other"><li>x</li></ul>');
+    yerd.page.apply('<ul id="f" data-yx-region data-yx-append class="other"><li>x</li></ul>');
     expect(document.getElementById("f")!.className).toBe("feed");
   });
 
   it("a prepending region puts new children first, in their order", () => {
     document.body.innerHTML = '<ul id="f" data-yx-region><li data-key="3">3</li></ul>';
-    yerd.apply('<ul id="f" data-yx-region data-yx-prepend><li data-key="1">1</li><li data-key="2">2</li><li data-key="3">3!</li></ul>');
+    yerd.page.apply('<ul id="f" data-yx-region data-yx-prepend><li data-key="1">1</li><li data-key="2">2</li><li data-key="3">3!</li></ul>');
     expect(Array.from(document.querySelectorAll("li"), (li) => li.textContent)).toEqual(["1", "2", "3!"]);
   });
 
   it("an empty appending region changes nothing", () => {
     document.body.innerHTML = '<ul id="f" data-yx-region><li>1</li></ul>';
-    expect(yerd.apply('<ul id="f" data-yx-region data-yx-append></ul>')).toBe(1);
+    expect(yerd.page.apply('<ul id="f" data-yx-region data-yx-append></ul>')).toBe(1);
     expect(document.getElementById("f")!.innerHTML).toBe("<li>1</li>");
   });
 
   it("a <script> in a response region is inserted inert", () => {
     (window as unknown as { pwned?: boolean }).pwned = false;
     document.body.innerHTML = '<div id="a" data-yx-region></div>';
-    yerd.apply('<div id="a" data-yx-region><script>window.pwned = true</script></div>');
+    yerd.page.apply('<div id="a" data-yx-region><script>window.pwned = true</script></div>');
     expect((window as unknown as { pwned?: boolean }).pwned).toBe(false);
   });
 
   it("an <img onerror> in a response is the server's markup, inserted as an element (no string HTML is built)", () => {
     document.body.innerHTML = '<div id="a" data-yx-region></div>';
-    yerd.apply('<div id="a" data-yx-region>&lt;img src=x onerror=alert(1)&gt;</div>');
+    yerd.page.apply('<div id="a" data-yx-region>&lt;img src=x onerror=alert(1)&gt;</div>');
     expect(document.querySelector("#a img")).toBeNull();
     expect(document.getElementById("a")!.textContent).toBe("<img src=x onerror=alert(1)>");
   });

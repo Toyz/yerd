@@ -2,12 +2,8 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runtimeSource } from "../../src/client/runtime.js";
 import { attribute, attributesSource } from "../../src/attributes/attribute.js";
+import type { YerdClient as Yerd } from "../../src/attributes/attribute.js";
 
-interface Yerd {
-  load(url: string, push: boolean): Promise<void>;
-  prefetch(url: string, as?: "page" | "json"): void;
-  fetch(url: string, init?: RequestInit): Promise<Response>;
-}
 
 // Defined like an app would, then shipped as text with the runtime.
 attribute("shout", {
@@ -96,7 +92,7 @@ describe("prefetch", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     const [, init] = fetch.mock.calls[0]!;
     expect((init!.headers as Record<string, string>)["yx-prefetch"]).toBe("1");
-    await yerd.load("/next", true);
+    await yerd.page.load("/next", true);
     // The navigation was answered from the prefetch: still one request.
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(document.querySelector("main")?.textContent).toBe("next");
@@ -112,9 +108,9 @@ describe("prefetch", () => {
 
   it("answers yerd.fetch from a fresh JSON prefetch", async () => {
     const fetch = stubFetch('{"n":1}', "application/json");
-    yerd.prefetch("/api/stats", "json");
+    yerd.net.prefetch("/api/stats", "json");
     await flush();
-    const response = await yerd.fetch("/api/stats");
+    const response = await yerd.net.fetch("/api/stats");
     expect(await response.json()).toEqual({ n: 1 });
     expect(fetch).toHaveBeenCalledTimes(1);
   });

@@ -1,13 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runtimeSource } from "../../src/client/runtime.js";
+import type { YerdClient as Yerd } from "../../src/attributes/attribute.js";
 
-interface Yerd {
-  load(url: string, push: boolean): Promise<void>;
-  prefetch(url: string, as?: "page" | "json"): void;
-  fetch(url: string, init?: RequestInit): Promise<Response>;
-  auto: boolean;
-}
 
 let yerd: Yerd;
 
@@ -147,14 +142,14 @@ describe("which links boost", () => {
   it("a percent-encoded fragment finds its element", async () => {
     stubFetch(() => page('<h2 id="café menu">s</h2>'));
     const scroll = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
-    await yerd.load("/menu#caf%C3%A9%20menu", true);
+    await yerd.page.load("/menu#caf%C3%A9%20menu", true);
     expect(scroll.mock.instances[0]).toBe(document.getElementById("café menu"));
   });
 
   it("a broken percent-encoding in the fragment doesn't throw", async () => {
     stubFetch(() => page("<p>x</p>"));
     const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
-    await yerd.load("/menu#100%", true);
+    await yerd.page.load("/menu#100%", true);
     expect(scrollTo).toHaveBeenCalledWith(0, 0);
   });
 });
@@ -162,7 +157,7 @@ describe("which links boost", () => {
 describe("navigation", () => {
   it("pushes the landed URL (after redirects), with the asked-for fragment", async () => {
     stubFetch(() => page("<p>landed</p>", { url: `${location.origin}/final?x=1` }));
-    await yerd.load("/start-here#frag", true);
+    await yerd.page.load("/start-here#frag", true);
     expect(location.pathname + location.search + location.hash).toBe("/final?x=1#frag");
   });
 
@@ -170,7 +165,7 @@ describe("navigation", () => {
     stubFetch(() => page("<p>evil</p>", { url: "https://other.test/landing" }));
     const assign = vi.spyOn(location, "assign").mockImplementation(() => {});
     document.body.innerHTML = '<p id="keep">k</p>';
-    await yerd.load("/go", true);
+    await yerd.page.load("/go", true);
     expect(assign).toHaveBeenCalledWith(`${location.origin}/go`);
     expect($("keep")).not.toBeNull();
   });
@@ -182,13 +177,13 @@ describe("navigation", () => {
   ])("a response that isn't HTML (%s) is left to a real navigation", async (_name, response) => {
     stubFetch(() => response);
     const assign = vi.spyOn(location, "assign").mockImplementation(() => {});
-    await yerd.load("/file", true);
+    await yerd.page.load("/file", true);
     expect(assign).toHaveBeenCalledWith(`${location.origin}/file`);
   });
 
   it("an error page is still a page: it's shown", async () => {
     stubFetch(() => page('<h1 id="e">Not found</h1>', { status: 404 }));
-    await yerd.load("/missing", true);
+    await yerd.page.load("/missing", true);
     expect($("e").textContent).toBe("Not found");
     expect(location.pathname).toBe("/missing");
   });
@@ -198,7 +193,7 @@ describe("navigation", () => {
       throw new TypeError("Failed to fetch");
     });
     const assign = vi.spyOn(location, "assign").mockImplementation(() => {});
-    await yerd.load("/down", true);
+    await yerd.page.load("/down", true);
     expect(assign).toHaveBeenCalledWith(`${location.origin}/down`);
     expect(document.documentElement.hasAttribute("aria-busy")).toBe(false);
   });
@@ -206,7 +201,7 @@ describe("navigation", () => {
   it("marks the document busy while loading", async () => {
     let release!: () => void;
     stubFetch(() => new Promise<Response>((resolve) => (release = () => resolve(page("<p>x</p>")))));
-    const loading = yerd.load("/slow", true);
+    const loading = yerd.page.load("/slow", true);
     await flush();
     expect(document.documentElement.getAttribute("aria-busy")).toBe("true");
     release();
@@ -216,7 +211,7 @@ describe("navigation", () => {
 
   it("updates the title and focuses [autofocus]", async () => {
     stubFetch(() => page('<input id="f" autofocus>', { title: "Second &amp; more" }));
-    await yerd.load("/second", true);
+    await yerd.page.load("/second", true);
     expect(document.title).toBe("Second & more");
     expect(document.activeElement).toBe($("f"));
   });
@@ -226,7 +221,7 @@ describe("navigation", () => {
     const seen: number[] = [];
     const listen = (e: Event) => seen.push((e as CustomEvent<{ regions: number }>).detail.regions);
     document.addEventListener("yx:applied", listen);
-    await yerd.load("/x", true);
+    await yerd.page.load("/x", true);
     document.removeEventListener("yx:applied", listen);
     expect(seen).toEqual([-1]);
   });
@@ -235,7 +230,7 @@ describe("navigation", () => {
     stubFetch(() => page("<p>x</p>"));
     const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
     Object.defineProperty(window, "scrollY", { value: 420, configurable: true });
-    await yerd.load("/next", true);
+    await yerd.page.load("/next", true);
     Object.defineProperty(window, "scrollY", { value: 0, configurable: true });
     // Back: the browser restores the entry and its state, then fires popstate.
     history.back();
@@ -271,25 +266,25 @@ describe("navigation", () => {
 describe("prefetch cache", () => {
   it("a page prefetch is used once by the next navigation", async () => {
     const calls = stubFetch(() => page("<p>p</p>"));
-    yerd.prefetch("/warm");
+    yerd.net.prefetch("/warm");
     expect(calls[0]!.headers).toEqual({ "yx-boost": "1", "yx-prefetch": "1", accept: "text/html" });
-    await yerd.load("/warm", true);
+    await yerd.page.load("/warm", true);
     expect(calls).toHaveLength(1);
-    await yerd.load("/warm", true);
+    await yerd.page.load("/warm", true);
     expect(calls).toHaveLength(2);
   });
 
   it("the fragment doesn't matter to the cache", async () => {
     const calls = stubFetch(() => page("<p>p</p>"));
-    yerd.prefetch("/frag#a");
-    await yerd.load("/frag#b", true);
+    yerd.net.prefetch("/frag#a");
+    await yerd.page.load("/frag#b", true);
     expect(calls).toHaveLength(1);
   });
 
   it("a second prefetch of a fresh entry doesn't fetch again", () => {
     const calls = stubFetch(() => page("<p>p</p>"));
-    yerd.prefetch("/twice");
-    yerd.prefetch("/twice");
+    yerd.net.prefetch("/twice");
+    yerd.net.prefetch("/twice");
     expect(calls).toHaveLength(1);
   });
 
@@ -297,9 +292,9 @@ describe("prefetch cache", () => {
     const calls = stubFetch(() => page("<p>p</p>"));
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    yerd.prefetch("/old");
+    yerd.net.prefetch("/old");
     clock.mockReturnValue(now + 15_001);
-    await yerd.load("/old", true);
+    await yerd.page.load("/old", true);
     expect(calls).toHaveLength(2);
     expect(calls[1]!.headers["yx-prefetch"]).toBeUndefined();
   });
@@ -307,16 +302,16 @@ describe("prefetch cache", () => {
   it("a failed prefetch isn't used; the navigation fetches", async () => {
     let n = 0;
     const calls = stubFetch(() => (++n === 1 ? page("oops", { status: 500 }) : page('<p id="ok">ok</p>')));
-    yerd.prefetch("/flaky");
+    yerd.net.prefetch("/flaky");
     await flush();
-    await yerd.load("/flaky", true);
+    await yerd.page.load("/flaky", true);
     expect(calls).toHaveLength(2);
     expect($("ok")).not.toBeNull();
   });
 
   it("other origins aren't prefetched", () => {
     const calls = stubFetch();
-    yerd.prefetch("https://other.test/x");
+    yerd.net.prefetch("https://other.test/x");
     expect(calls).toEqual([]);
   });
 
@@ -328,7 +323,7 @@ describe("prefetch cache", () => {
     const calls = stubFetch();
     Object.defineProperty(navigator, "connection", { value: connection, configurable: true });
     try {
-      yerd.prefetch("/x-conn");
+      yerd.net.prefetch("/x-conn");
     } finally {
       delete (navigator as { connection?: unknown }).connection;
     }
@@ -337,43 +332,43 @@ describe("prefetch cache", () => {
 
   it("an action empties the cache", async () => {
     const calls = stubFetch((call) => (call.method === "POST" ? new Response('<p id="r" data-yx-region>r</p>', { headers: { "content-type": "text/html" } }) : page("<p>p</p>")));
-    yerd.prefetch("/after-action");
+    yerd.net.prefetch("/after-action");
     document.body.innerHTML = '<p id="r" data-yx-region></p><form data-yx method="post" action="/act"><button>go</button></form>';
     $("r").nextElementSibling!.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
     await flush();
-    await yerd.load("/after-action", true);
+    await yerd.page.load("/after-action", true);
     expect(calls.map((c) => c.method)).toEqual(["GET", "POST", "GET"]);
   });
 
   it("holds at most 30 entries, dropping the oldest", async () => {
     const calls = stubFetch(() => page("<p>p</p>"));
-    for (let i = 0; i < 31; i++) yerd.prefetch(`/many/${i}`);
+    for (let i = 0; i < 31; i++) yerd.net.prefetch(`/many/${i}`);
     expect(calls).toHaveLength(31);
-    await yerd.load("/many/0", true);
+    await yerd.page.load("/many/0", true);
     expect(calls).toHaveLength(32);
-    await yerd.load("/many/30", true);
+    await yerd.page.load("/many/30", true);
     expect(calls).toHaveLength(32);
   });
 
   it("yerd.fetch answers from a fresh JSON prefetch, for GETs only", async () => {
     const calls = stubFetch(() => new Response('{"n":1}', { headers: { "content-type": "application/json" } }));
-    yerd.prefetch("/api/stats", "json");
+    yerd.net.prefetch("/api/stats", "json");
     expect(calls[0]!.headers).toEqual({ "yx-prefetch": "1", accept: "application/json" });
-    const hit = await yerd.fetch("/api/stats");
+    const hit = await yerd.net.fetch("/api/stats");
     expect(await hit.json()).toEqual({ n: 1 });
     expect(hit.headers.get("content-type")).toBe("application/json");
     expect(calls).toHaveLength(1);
     // JSON entries can be used again while fresh.
-    await yerd.fetch("/api/stats", { method: "get" });
+    await yerd.net.fetch("/api/stats", { method: "get" });
     expect(calls).toHaveLength(1);
-    await yerd.fetch("/api/stats", { method: "POST" });
+    await yerd.net.fetch("/api/stats", { method: "POST" });
     expect(calls).toHaveLength(2);
   });
 
   it("a page prefetch doesn't answer yerd.fetch, and a JSON one doesn't feed navigation", async () => {
     const calls = stubFetch(() => page("<p>p</p>"));
-    yerd.prefetch("/both");
-    await yerd.fetch("/both");
+    yerd.net.prefetch("/both");
+    await yerd.net.fetch("/both");
     expect(calls).toHaveLength(2);
   });
 

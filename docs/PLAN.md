@@ -869,7 +869,7 @@ one async context per request (`/plain` 80k to 113k req/s, the JSX page
 `/_yerd/runtime.js`, connected by a MutationObserver, typed through
 `CustomAttributes`) and the built-in `prefetch` prop (intent / visible / load,
 runtime cache for boosted links, `<link rel=prefetch>` otherwise, JSON
-prefetch answered by `yerd.fetch()`); see DYNAMICS.md. CSRF: every unsafe
+prefetch answered by `yerd.net.fetch()`); see DYNAMICS.md. CSRF: every unsafe
 method checked by Sec-Fetch-Site, Origin, then Referer (`csrf`,
 `trustedOrigins`, `trustProxy`), action tokens with an expiry (`actionTtl`)
 and a per-session nonce hash, the last `_yx` wins so `formaction={action}`

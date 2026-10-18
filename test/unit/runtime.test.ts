@@ -1,13 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runtimeSource } from "../../src/client/runtime.js";
+import type { YerdClient as Yerd } from "../../src/attributes/attribute.js";
 
-interface Yerd {
-  morph(from: Node, to: Node): void;
-  apply(html: string): number;
-  refresh(): Promise<void>;
-  load(url: string, push: boolean): Promise<void>;
-}
 
 let yerd: Yerd;
 
@@ -61,7 +56,7 @@ describe("morph", () => {
   it("patches text and attributes in place", () => {
     document.body.innerHTML = '<div id="a" class="old" title="x"><span>one</span></div>';
     const span = document.querySelector("span")!;
-    yerd.morph(document.getElementById("a")!, el('<div id="a" class="new"><span>two</span></div>'));
+    yerd.page.morph(document.getElementById("a")!, el('<div id="a" class="new"><span>two</span></div>'));
     const div = document.getElementById("a")!;
     expect(div.outerHTML).toBe('<div id="a" class="new"><span>two</span></div>');
     expect(document.querySelector("span")).toBe(span);
@@ -70,7 +65,7 @@ describe("morph", () => {
   it("reorders keyed children without recreating them", () => {
     document.body.innerHTML = '<ul id="l"><li data-key="1">1</li><li data-key="2">2</li><li data-key="3">3</li></ul>';
     const [one, two, three] = Array.from(document.querySelectorAll("li"));
-    yerd.morph(document.getElementById("l")!, el('<ul id="l"><li data-key="3">3</li><li data-key="1">1!</li></ul>'));
+    yerd.page.morph(document.getElementById("l")!, el('<ul id="l"><li data-key="3">3</li><li data-key="1">1!</li></ul>'));
     const after = Array.from(document.querySelectorAll("li"));
     expect(after.map((li) => li.textContent)).toEqual(["3", "1!"]);
     expect(after[0]).toBe(three);
@@ -80,17 +75,17 @@ describe("morph", () => {
 
   it("inserts and removes unkeyed children", () => {
     document.body.innerHTML = '<div id="d"><p>a</p><p>b</p><p>c</p></div>';
-    yerd.morph(document.getElementById("d")!, el('<div id="d"><p>a</p><em>new</em></div>'));
+    yerd.page.morph(document.getElementById("d")!, el('<div id="d"><p>a</p><em>new</em></div>'));
     expect(document.getElementById("d")!.innerHTML).toBe('<p>a</p><em data-yx-new="">new</em>');
   });
 
   it("marks only inserted elements with data-yx-new, and drops the mark on the next morph", () => {
     document.body.innerHTML = '<ul id="n"><li data-key="a">a</li></ul>';
-    yerd.morph(document.getElementById("n")!, el('<ul id="n"><li data-key="a">a</li><li data-key="b">b</li></ul>'));
+    yerd.page.morph(document.getElementById("n")!, el('<ul id="n"><li data-key="a">a</li><li data-key="b">b</li></ul>'));
     const [a, b] = Array.from(document.querySelectorAll("li"));
     expect(a!.hasAttribute("data-yx-new")).toBe(false);
     expect(b!.hasAttribute("data-yx-new")).toBe(true);
-    yerd.morph(document.getElementById("n")!, el('<ul id="n"><li data-key="a">a</li><li data-key="b">b!</li></ul>'));
+    yerd.page.morph(document.getElementById("n")!, el('<ul id="n"><li data-key="a">a</li><li data-key="b">b!</li></ul>'));
     expect(b!.hasAttribute("data-yx-new")).toBe(false);
   });
 
@@ -99,7 +94,7 @@ describe("morph", () => {
     const input = document.querySelector("input")!;
     input.focus();
     input.value = "typing...";
-    yerd.morph(document.getElementById("f")!, el('<form id="f" class="busy"><input name="t" value="server"></form>'));
+    yerd.page.morph(document.getElementById("f")!, el('<form id="f" class="busy"><input name="t" value="server"></form>'));
     expect(document.querySelector("input")).toBe(input);
     expect(input.value).toBe("typing...");
     expect(document.activeElement).toBe(input);
@@ -107,7 +102,7 @@ describe("morph", () => {
 
   it("syncs checkboxes and unfocused values from the server", () => {
     document.body.innerHTML = '<div id="c"><input type="checkbox"><input name="n" value="1"></div>';
-    yerd.morph(document.getElementById("c")!, el('<div id="c"><input type="checkbox" checked><input name="n" value="2"></div>'));
+    yerd.page.morph(document.getElementById("c")!, el('<div id="c"><input type="checkbox" checked><input name="n" value="2"></div>'));
     const [box, text] = Array.from(document.querySelectorAll("input"));
     expect(box!.checked).toBe(true);
     expect(text!.value).toBe("2");
@@ -116,7 +111,7 @@ describe("morph", () => {
   it("leaves an open <details> open", () => {
     document.body.innerHTML = '<div id="w"><details><summary>s</summary>x</details></div>';
     document.querySelector("details")!.open = true;
-    yerd.morph(document.getElementById("w")!, el('<div id="w"><details><summary>s</summary>y</details></div>'));
+    yerd.page.morph(document.getElementById("w")!, el('<div id="w"><details><summary>s</summary>y</details></div>'));
     expect(document.querySelector("details")!.open).toBe(true);
   });
 });
@@ -124,7 +119,7 @@ describe("morph", () => {
 describe("apply", () => {
   it("morphs every region in a response into the page by id", () => {
     document.body.innerHTML = '<header><span id="count" data-yx-region>1 left</span></header><ul id="list" data-yx-region><li>a</li></ul><p id="other">untouched</p>';
-    const n = yerd.apply('<ul id="list" data-yx-region><li>a</li><li>b</li></ul><span id="count" data-yx-region>2 left</span><p id="other">changed?</p>');
+    const n = yerd.page.apply('<ul id="list" data-yx-region><li>a</li><li>b</li></ul><span id="count" data-yx-region>2 left</span><p id="other">changed?</p>');
     expect(n).toBe(2);
     expect(document.getElementById("count")!.textContent).toBe("2 left");
     expect(document.querySelectorAll("#list li")).toHaveLength(2);
@@ -140,11 +135,11 @@ describe("morph and user input", () => {
     a!.value = "typed";
     b!.value = "typed";
     c.value = "typed";
-    yerd.morph(document.getElementById("u")!, el('<div id="u"><input name="a" value="x"><input name="b" value="y"><textarea name="c">x</textarea></div>'));
+    yerd.page.morph(document.getElementById("u")!, el('<div id="u"><input name="a" value="x"><input name="b" value="y"><textarea name="c">x</textarea></div>'));
     expect(a!.value).toBe("typed");
     expect(b!.value).toBe("y");
     expect(c.value).toBe("typed");
-    yerd.morph(document.getElementById("u")!, el('<div id="u"><input name="a" value="x"><input name="b" value="y"><textarea name="c">z</textarea></div>'));
+    yerd.page.morph(document.getElementById("u")!, el('<div id="u"><input name="a" value="x"><input name="b" value="y"><textarea name="c">z</textarea></div>'));
     expect(c.value).toBe("z");
     expect(c.defaultValue).toBe("z");
   });
@@ -154,13 +149,13 @@ describe("morph and user input", () => {
     const input = document.querySelector("input")!;
     const file = new File(["hi"], "hi.txt");
     input.files = [file] as unknown as FileList;
-    yerd.morph(document.getElementById("f")!, el('<div id="f" class="x"><input type="file" name="up"></div>'));
+    yerd.page.morph(document.getElementById("f")!, el('<div id="f" class="x"><input type="file" name="up"></div>'));
     expect(input.files[0]).toBe(file);
   });
 
   it("syncs a multiple select per option, after its options are patched", () => {
     document.body.innerHTML = '<div id="s"><select multiple name="m"><option value="1">1</option><option value="2">2</option></select></div>';
-    yerd.morph(
+    yerd.page.morph(
       document.getElementById("s")!,
       el('<div id="s"><select multiple name="m"><option value="1" selected>1</option><option value="2">2</option><option value="3" selected>3</option></select></div>'),
     );
@@ -279,7 +274,7 @@ describe("boosted navigation", () => {
   it("scrolls to the fragment after loading /page#frag", async () => {
     stubFetch(() => html('<html><body><p>top</p><h2 id="frag">here</h2></body></html>'));
     const scroll = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
-    await yerd.load("/page#frag", true);
+    await yerd.page.load("/page#frag", true);
     expect(location.pathname).toBe("/page");
     expect(location.hash).toBe("#frag");
     expect(scroll).toHaveBeenCalledTimes(1);
@@ -298,8 +293,8 @@ describe("boosted navigation", () => {
       return html("<body><p>B</p></body>");
     });
     const assign = vi.spyOn(location, "assign").mockImplementation(() => {});
-    const a = yerd.load("/a", true);
-    const b = yerd.load("/b", true);
+    const a = yerd.page.load("/a", true);
+    const b = yerd.page.load("/b", true);
     await b;
     releaseA();
     await a;
@@ -317,8 +312,8 @@ describe("boosted navigation", () => {
       return html('<body><div id="r" data-yx-region>fresh</div></body>');
     });
     document.body.innerHTML = '<div id="r" data-yx-region>old</div>';
-    const refresh = yerd.refresh();
-    await yerd.load("/next", true);
+    const refresh = yerd.page.refresh();
+    await yerd.page.load("/next", true);
     releaseRefresh();
     await refresh;
     expect(document.getElementById("r")!.textContent).toBe("fresh");
@@ -340,7 +335,7 @@ describe("boosted navigation", () => {
   it("refuses to morph in a cross-origin page", async () => {
     const fetch = stubFetch();
     const assign = vi.spyOn(location, "assign").mockImplementation(() => {});
-    await yerd.load("https://elsewhere.example/x", true);
+    await yerd.page.load("https://elsewhere.example/x", true);
     expect(fetch).not.toHaveBeenCalled();
     expect(assign).toHaveBeenCalledWith("https://elsewhere.example/x");
   });
@@ -355,22 +350,22 @@ describe("dynamic parts", () => {
     });
     const skeleton = '<div id="d" data-yx-region data-yx-defer>loading</div>';
     document.body.innerHTML = '<div id="d" data-yx-region>x</div>';
-    yerd.apply(skeleton);
+    yerd.page.apply(skeleton);
     await flush();
     expect(document.getElementById("d")!.textContent).toBe("real");
     expect(document.getElementById("d")!.hasAttribute("data-yx-defer")).toBe(false);
 
     // A refresh (or Back) morphs the skeleton back in: fill it again.
-    yerd.apply(skeleton);
+    yerd.page.apply(skeleton);
     await flush();
     expect(document.getElementById("d")!.textContent).toBe("real");
     expect(fetch).toHaveBeenCalledTimes(2);
 
     // The server answers with the skeleton: one request, then no more.
     real = false;
-    yerd.apply(skeleton);
+    yerd.page.apply(skeleton);
     await flush();
-    yerd.apply(skeleton);
+    yerd.page.apply(skeleton);
     await flush();
     expect(fetch).toHaveBeenCalledTimes(3);
   });
@@ -398,14 +393,14 @@ describe("live", () => {
     vi.stubGlobal("EventSource", FakeSource);
     stubFetch();
     document.body.innerHTML = '<div id="l" data-yx-region><span data-yx-live="/live/a"></span></div>';
-    yerd.apply("");
+    yerd.page.apply("");
     expect(FakeSource.all.map((s) => s.url)).toEqual(["/live/a"]);
-    yerd.apply('<div id="l" data-yx-region></div>');
+    yerd.page.apply('<div id="l" data-yx-region></div>');
     expect(FakeSource.all[0]!.closed).toBe(true);
     // Back on the page: a new source.
-    yerd.apply('<div id="l" data-yx-region><span data-yx-live="/live/a"></span></div>');
+    yerd.page.apply('<div id="l" data-yx-region><span data-yx-live="/live/a"></span></div>');
     expect(FakeSource.all).toHaveLength(2);
-    yerd.apply('<div id="l" data-yx-region></div>');
+    yerd.page.apply('<div id="l" data-yx-region></div>');
   });
 
   it("refreshes after a reconnect and reopens a source the browser gave up on", async () => {
@@ -413,7 +408,7 @@ describe("live", () => {
     vi.stubGlobal("EventSource", FakeSource);
     const fetch = stubFetch();
     document.body.innerHTML = '<div id="l" data-yx-region><span data-yx-live="/live/b"></span></div>';
-    yerd.apply("");
+    yerd.page.apply("");
     const source = FakeSource.all[0]!;
     source.onopen!();
     expect(fetch).not.toHaveBeenCalled();
@@ -429,7 +424,7 @@ describe("live", () => {
     vi.advanceTimersByTime(1000);
     expect(FakeSource.all).toHaveLength(2);
     vi.useRealTimers();
-    yerd.apply('<div id="l" data-yx-region></div>');
+    yerd.page.apply('<div id="l" data-yx-region></div>');
     expect(FakeSource.all[1]!.closed).toBe(true);
   });
 });

@@ -2,13 +2,9 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runtimeSource } from "../../src/client/runtime.js";
 import { attribute, attributesSource, customAttribute, resetAttributeRegistry } from "../../src/attributes/attribute.js";
+import type { YerdClient as Yerd } from "../../src/attributes/attribute.js";
 
 type Handle = void | (() => void) | { update?(value: string): void; disconnect?(): void };
-interface Yerd {
-  attribute(name: string, setup: (el: HTMLElement, value: string, api: unknown) => Handle): void;
-  morph(from: Node, to: Node): void;
-  apply(html: string): number;
-}
 
 let yerd: Yerd;
 
@@ -166,7 +162,7 @@ describe("client halves", () => {
     document.body.innerHTML = `<ul id="l"><li id="i1" data-key="1" ${name}="a"></li><li id="i2" data-key="2" ${name}="b"></li></ul>`;
     await flush();
     events.length = 0;
-    yerd.morph($("l"), el(`<ul id="l"><li id="i2" data-key="2" ${name}="b"></li><li id="i1" data-key="1" ${name}="a2"></li></ul>`));
+    yerd.page.morph($("l"), el(`<ul id="l"><li id="i2" data-key="2" ${name}="b"></li><li id="i1" data-key="1" ${name}="a2"></li></ul>`));
     await flush();
     expect(events).toEqual(["update i1=a2"]);
   });
@@ -175,7 +171,7 @@ describe("client halves", () => {
     const { name, events } = tracked();
     document.body.innerHTML = `<div id="w"><p id="s" ${name}="1"></p></div>`;
     await flush();
-    yerd.morph($("w"), el(`<div id="w"><section id="s" ${name}="1"></section></div>`));
+    yerd.page.morph($("w"), el(`<div id="w"><section id="s" ${name}="1"></section></div>`));
     await flush();
     // The new one connects first: removals are swept after the batch's additions.
     expect(events).toEqual(["connect s=1", "connect s=1", "disconnect s"]);
@@ -218,7 +214,7 @@ describe("client halves", () => {
     const { name, events } = tracked();
     document.body.innerHTML = '<div id="r" data-yx-region></div>';
     await flush();
-    yerd.apply(`<div id="r" data-yx-region><b id="n" ${name}="new"></b></div>`);
+    yerd.page.apply(`<div id="r" data-yx-region><b id="n" ${name}="new"></b></div>`);
     await flush();
     expect(events).toEqual(["connect n=new"]);
   });

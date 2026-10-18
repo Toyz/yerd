@@ -282,7 +282,7 @@ A built-in attribute that warms the next page before the click:
 - **Ordinary links** get a `<link rel="prefetch">` (once per URL), which the
   browser's own navigation picks up.
 - **JSON:** `{ url, as: "json" }` on any element fetches with
-  `accept: application/json` into the cache, and `yerd.fetch(url)` answers
+  `accept: application/json` into the cache, and `yerd.net.fetch(url)` answers
   from it while it's fresh.
 - Every runtime prefetch carries `yx-prefetch: 1`, is a same-origin GET (so
   handlers must already be free of side effects), and is skipped when

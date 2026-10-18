@@ -51,44 +51,16 @@
 export type AttributeHandle = void | (() => void) | { update?(value: string): void; disconnect?(): void };
 
 /**
- * The runtime API a client half receives as its third argument (window.yerd).
- *
- * ```ts
- * export const poll = attribute("poll", {
- *   client(_el, value, yerd) {
- *     const timer = setInterval(() => yerd.refresh(), Number(value) * 1000);
- *     return () => clearInterval(timer);
- *   },
- * });
- *
- * // <div poll={30} hidden />: refresh the page's Regions every 30 seconds
- * ```
+ * Updating the page from client code: what a Region update, a boosted link
+ * and a live refresh do, on demand.
  */
-export interface YerdClient {
-  /**
-   * Morph `to` into `from`: patch `from` in place until it matches `to`, the
-   * way a Region update does (elements matched by id or key keep their focus,
-   * scroll and input state).
-   */
-  morph(from: Node, to: Node): void;
-  /**
-   * Apply the Regions in an HTML string to the page; returns how many matched.
-   *
-   * ```ts
-   * client(_el, url, yerd) {
-   *   const source = new EventSource(url);
-   *   source.addEventListener("message", (e) => yerd.apply(e.data));
-   *   return () => source.close();
-   * }
-   * ```
-   */
-  apply(html: string): number;
+export interface PageApi {
   /**
    * Re-fetch the current page and morph its Regions.
    *
    * ```ts
    * client(el, _value, yerd) {
-   *   el.addEventListener("click", () => yerd.refresh());
+   *   el.addEventListener("click", () => yerd.page.refresh());
    * }
    * ```
    */
@@ -98,61 +70,134 @@ export interface YerdClient {
    *
    * ```ts
    * client(el, url, yerd) {
-   *   el.addEventListener("click", () => yerd.load(url, true));
+   *   el.addEventListener("click", () => yerd.page.load(url, true));
    * }
    * ```
    */
   load(url: string, push: boolean): Promise<void>;
   /**
-   * Warm the runtime's short-lived cache with a page (for boosted navigation) or a JSON response.
+   * Apply the Regions in an HTML string to the page; returns how many matched.
+   *
+   * ```ts
+   * client(_el, url, yerd) {
+   *   const source = new EventSource(url);
+   *   source.addEventListener("message", (e) => yerd.page.apply(e.data));
+   *   return () => source.close();
+   * }
+   * ```
+   */
+  apply(html: string): number;
+  /**
+   * Patch `from` in place until it matches `to`, the way a Region update
+   * does (elements matched by id or key keep their focus, scroll and input
+   * state).
+   *
+   * ```ts
+   * client(el, _value, yerd) {
+   *   const next = el.cloneNode(true) as HTMLElement;
+   *   next.querySelector("li")?.remove();
+   *   yerd.page.morph(el, next);
+   * }
+   * ```
+   */
+  morph(from: Node, to: Node): void;
+}
+
+/** The runtime's short-lived cache of pages and JSON, the one boosted navigation reads. */
+export interface NetApi {
+  /**
+   * Warm the cache with a page (for boosted navigation) or a JSON response.
    *
    * ```ts
    * client(el, url, yerd) {
-   *   el.addEventListener("pointerenter", () => yerd.prefetch(url));
+   *   el.addEventListener("pointerenter", () => yerd.net.prefetch(url));
    * }
    * ```
    */
   prefetch(url: string, as?: "page" | "json"): void;
   /**
-   * fetch(), answered from the prefetch cache when a fresh JSON prefetch of the same URL exists.
+   * fetch(), answered from the cache when a fresh JSON prefetch of the same URL exists.
    *
    * ```ts
    * client(el, url, yerd) {
-   *   yerd.fetch(url).then(async (res) => {
+   *   yerd.net.fetch(url).then(async (res) => {
    *     el.textContent = String(((await res.json()) as { visits: number }).visits);
    *   });
    * }
    * ```
    */
   fetch(url: string, init?: RequestInit): Promise<Response>;
-  /** Register a client attribute at runtime. */
-  attribute(name: string, setup: ClientSetup): void;
+}
+
+/** What ClockApi.sync() measured. */
+export interface ClockReading {
+  /** The server's time when the promise settled, in ms (its `Date.now()`). */
+  now: number;
+  /** Server time minus this page's time, in ms. */
+  offset: number;
+  /** The round trip the measurement was made over, in ms. */
+  rtt: number;
+}
+
+/** The server's clock, as this page measured it: what `sync` and cues are timed by. */
+export interface ClockApi {
   /**
    * The server's time now, in ms (its `Date.now()`), as best this page can
-   * tell: what `sync` and cues are timed by. Until the clock has been
-   * measured (see clock()), it's this page's own.
+   * tell. Until the clock has been measured (see sync()), it's this page's own.
    *
    * ```ts
    * client(el, _value, yerd) {
-   *   const tick = setInterval(() => (el.textContent = new Date(yerd.now()).toLocaleTimeString()), 1000);
+   *   const tick = setInterval(() => (el.textContent = new Date(yerd.clock.now()).toLocaleTimeString()), 1000);
    *   return () => clearInterval(tick);
    * }
    * ```
    */
   now(): number;
   /**
-   * Measure the server's clock (once per page; later calls share it) and
-   * resolve with its time, this page's offset from it, and the round trip
-   * the measurement was made over, in ms.
+   * Measure the server's clock (once per page; later calls share it).
    *
    * ```ts
    * client(el, value, yerd) {
    *   const at = Number(value); // a server timestamp
-   *   void yerd.clock().then(({ now }) => setTimeout(() => el.classList.add("go"), at - now));
+   *   void yerd.clock.sync().then(({ now }) => setTimeout(() => el.classList.add("go"), at - now));
    * }
    * ```
    */
-  clock(): Promise<{ now: number; offset: number; rtt: number }>;
+  sync(): Promise<ClockReading>;
+}
+
+/**
+ * The runtime API (window.yerd), which a client half also receives as its
+ * third argument, grouped by job: `page` updates the page, `net` is the
+ * prefetch cache, `clock` is the server's time.
+ *
+ * ```ts
+ * export const poll = attribute("poll", {
+ *   client(_el, value, yerd) {
+ *     const timer = setInterval(() => yerd.page.refresh(), Number(value) * 1000);
+ *     return () => clearInterval(timer);
+ *   },
+ * });
+ *
+ * // <div poll={30} hidden />: refresh the page's Regions every 30 seconds
+ * ```
+ */
+export interface YerdClient {
+  /** Refresh, navigate, apply Regions, morph. See PageApi. */
+  readonly page: PageApi;
+  /** Prefetch and the cached fetch. See NetApi. */
+  readonly net: NetApi;
+  /** The server's clock. See ClockApi. */
+  readonly clock: ClockApi;
+  /**
+   * Register a client attribute's setup at runtime (attribute() on the
+   * server does this for you).
+   *
+   * ```ts
+   * yerd.attribute("data-shout", (el, value) => void (el.textContent = value.toUpperCase()));
+   * ```
+   */
+  attribute(name: string, setup: ClientSetup): void;
 }
 
 /**
@@ -310,7 +355,7 @@ export type PrefetchMode = "intent" | "visible" | "load";
  * as soon as the page loads ("load"). Inside data-yx-boost the page goes into
  * the runtime's cache and the boosted navigation uses it; elsewhere the
  * browser's own <link rel="prefetch"> does it. On any element,
- * `{ url, as: "json" }` warms an API response that `yerd.fetch(url)` then
+ * `{ url, as: "json" }` warms an API response that `yerd.net.fetch(url)` then
  * answers from the cache.
  *
  * ```tsx

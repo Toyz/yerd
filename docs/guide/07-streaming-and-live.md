@@ -343,7 +343,7 @@ export const horn = attribute<boolean>("horn", {
 });
 ```
 
-The same clock is available to your own client code: `yerd.now()` is the server's time, and `yerd.clock()` measures it and resolves with `{ now, offset, rtt }`.
+The same clock is available to your own client code: `yerd.clock.now()` is the server's time, and `yerd.clock.sync()` measures it and resolves with `{ now, offset, rtt }`.
 
 ### Public and private rooms
 
