@@ -38,14 +38,17 @@
  * @session(Cart) accessor cart!: Session<Cart>; // this.cart.add("socks")
  * ```
  *
- * For keys every route shares, augment `SessionData` instead: plain
- * `Session` and `currentContext().session` are typed by it.
+ * Code handed the plain session (auth hooks, components, functions) takes
+ * the same views with `as()`:
  *
  * ```ts
- * declare module "@toyz/yerd" {
- *   interface SessionData { theme?: "light" | "dark" }
- * }
+ * const cart = currentContext().session.as(Cart); // like @session(Cart)
+ * const prefs = currentContext().session.as<{ theme?: "light" | "dark" }>();
  * ```
+ *
+ * Optionally, keys every route shares can go on the app-wide `SessionData`
+ * interface, which types plain `Session`. Worth it for one or two truly
+ * global keys; for anything with behavior, a shape class reads better.
  *
  * Stores: CookieStore (the default; the data lives in the cookie, sealed
  * with AES-256-GCM, ~4KB), MemoryStore (data in this process, the cookie
@@ -70,9 +73,10 @@
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from "node:crypto";
 
 /**
- * The app-wide session shape. Augment it for keys every route shares; plain
- * `Session` (no type argument) and `currentContext().session` are typed by
- * it. `Session<T>` types one route's view instead.
+ * The app-wide session shape, optional: plain `Session` (no type argument)
+ * and `currentContext().session` are typed by it. Prefer `Session<T>` views
+ * and shape classes (`session.as(Cart)` where you only have the plain
+ * session); augment this for a key or two every route genuinely shares.
  *
  * ```ts
  * declare module "@toyz/yerd" {

@@ -99,13 +99,14 @@ export interface AuthOptions<User> {
   /**
    * Runs in login(), after the session id is rotated and the user is stored:
    * merge what a guest collected into the user's own data (a cart, recently
-   * viewed), or load their saved state into the session. May be async; then
-   * `await auth.login(user)`.
+   * viewed), or load their saved state into the session. It gets the plain
+   * session; `session.as(Cart)` is the typed view a route gets from
+   * `@session(Cart)`. May be async; then `await auth.login(user)`.
    *
    * ```ts
    * onLogin: async (user, session) => {
-   *   const saved = await carts.load(user.id);
-   *   session.set("cart", mergeCarts(saved, session.get("cart")));
+   *   const cart = session.as(Cart);
+   *   cart.lines = mergeLines(await savedCarts.load(user.id), cart.lines);
    * },
    * ```
    */
@@ -117,7 +118,7 @@ export interface AuthOptions<User> {
    *
    * ```ts
    * onLogout: async (user, session) => {
-   *   if (user) await carts.save(user.id, session.get("cart") ?? []);
+   *   if (user) await savedCarts.save(user.id, session.as(Cart).lines);
    * },
    * ```
    */

@@ -102,6 +102,8 @@ export interface VerbDecorator {
   // context) from matching the test form.
   (when: (ctx: YerdContext) => unknown, _?: never): (method: Function, context: ClassMethodDecoratorContext) => void;
   (guard: GuardRef, _?: never): (method: Function, context: ClassMethodDecoratorContext) => void;
+  // A value typed as the When union (either of the above), kept in a variable or passed around.
+  (when: When, _?: never): (method: Function, context: ClassMethodDecoratorContext) => void;
   (method: Function, context: ClassMethodDecoratorContext): void;
 }
 

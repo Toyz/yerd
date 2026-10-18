@@ -109,3 +109,19 @@ export class Bodies {
     return thing;
   }
 }
+
+// A test typed as the exported When union can be passed to a verb.
+import { get as verbGet, isBot as botTest, route as routeDecorator, type When } from "@toyz/yerd";
+const crawlers: When = botTest;
+@routeDecorator("/when-typed")
+export class WhenTyped {
+  @verbGet(crawlers) seo() {
+    return "for crawlers";
+  }
+  @verbGet(async (ctx) => ctx.query.has("beta")) beta() {
+    return "beta";
+  }
+  @verbGet page() {
+    return "everyone";
+  }
+}

@@ -98,11 +98,12 @@ export interface YerdContext {
    */
   readonly cookies: Readonly<Record<string, string>>;
   /**
-   * The session (needs app.sessions(...)). Typed by the SessionData
-   * interface; in a route, `@session accessor session!: Session<T>` types it per class.
+   * The session (needs app.sessions(...)), typed by the app-wide SessionData.
+   * Take a typed view with `as()`; in a route, `@session accessor session!: Session<T>`.
    *
    * ```ts
    * const notice = ctx.session.flash("notice") as string | undefined;
+   * const cart = ctx.session.as(Cart); // the view @session(Cart) gives
    * ```
    */
   readonly session: Session;
