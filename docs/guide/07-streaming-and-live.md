@@ -1,186 +1,69 @@
 # Streaming and live
 
-Responses that keep going: streamed bodies, NDJSON and Server-Sent Events, streamed uploads, channels, synced animation, disconnects and shutdown.
-
-## Return an async iterable
-
-Return any async iterable (usually an async generator) and yerd streams each chunk as it's produced.
-
-```ts
-import { get, route } from "@toyz/yerd";
-
-@route("/export.csv")
-export class Export {
-  @get async *csv() {
-    yield "id,name\n";
-    for (let id = 1; id <= 100_000; id++) yield `${id},user ${id}\n`;
-  }
-}
-```
-
-- Strings and bytes go out as they are; anything else is stringified.
-- It's sent as `text/plain`, headers with the first chunk. Set your own type with `res(stream, { headers: { "content-type": "text/csv" } })` (see [responses](04-responses.md)).
-- For a feed that may sit quiet, use `@ndjson` or `@sse`: they send headers right away.
-- HTML pages stream too (see [pages and layouts](05-pages-and-layouts.md#components)).
-
-## NDJSON
-
-[@ndjson](api:yerd.ndjson) on a generator method sends one JSON value per line.
-
-```ts
-import { get, ndjson, route } from "@toyz/yerd";
-
-@route("/rows.ndjson")
-export class Rows {
-  @get @ndjson async *list() {
-    for (let id = 1; id <= 3; id++) yield { id };
-  }
-}
-```
-
-```sh
-$ curl -N localhost:3000/rows.ndjson
-{"id":1}
-{"id":2}
-{"id":3}
-```
-
-Pass options as `@ndjson({ heartbeat: 15_000 })`, or return `ndjson(source, options)` from an ordinary method:
-
-| Option | Default | Does |
-|---|---|---|
-| `heartbeat` | `0` (off) | writes an empty line every N ms while the source is quiet, so proxies keep the connection open; or `{ every, send }` for a line of your own ([custom heartbeats](#custom-heartbeats)) |
-| `errorLine` | `true` | if the source throws mid-stream, writes a last line `{"error": "..."}` before closing |
+Every open product page shows the stock as it drops: a Server-Sent Events feed per product, fed by a channel.
 
 ## Server-Sent Events
 
-[@sse](api:yerd.sse) works the same way over `text/event-stream`, which browsers read with `EventSource`.
+The product page listens on a feed with `data-yx-live` ([Interactivity](06-interactivity.md#live-refresh)). The feed is an [@sse](api:yerd.sse) route whose handler returns the product channel's subscription:
 
 ```ts
-import { event, get, route, sse } from "@toyz/yerd";
-
-@route("/events")
-export class Events {
-  @get @sse async *feed() {
-    yield "hello";                                             // data: hello
-    yield { online: 3 };                                       // data: {"online":3}
-    yield event({ event: "user", id: "7", data: { name: "ada" } });
-  }
-}
-```
-
-```ts
-// in the browser
-const source = new EventSource("/events");
-source.onmessage = (e) => console.log(e.data);                 // unnamed messages
-source.addEventListener("user", (e) => console.log(e.data));   // event: user
-```
-
-| Option | Default | Does |
-|---|---|---|
-| `heartbeat` | `15000` | sends a `: ping` comment every N ms while quiet; or `{ every, send }` for an event of your own ([custom heartbeats](#custom-heartbeats)) |
-| `retry` | none | sends a reconnect delay hint (ms) once at the start |
-| `errorEvent` | `true` | if the source throws, sends `event: error` with the message before closing |
-
-- Plain values become `data:` (non-strings as JSON); [event](api:yerd.event) sends a named event, and also takes `id`, `retry` and `comment`.
-- To refresh a page's Regions on every message, point `data-yx-live` at an SSE route (see [interactivity](06-interactivity.md#live-refresh)).
-
-### Custom heartbeats
-
-Give the heartbeat a body with `{ every, send }` when clients should see it (to show "live", detect a stall, or carry a server time); the plain beat is invisible.
-
-```tsx
-import { event, get, ndjson, route, sse } from "@toyz/yerd";
-
-@route("/live")
-export class Live {
-  // The same body every time.
-  @get @sse({ heartbeat: { every: 20_000, send: event({ event: "ping" }) } }) feed() { ... }
-
-  // A function makes each beat from its count, idle time and open time.
-  @get stats() {
-    return ndjson(this.updates(), {
-      heartbeat: { every: 10_000, send: ({ count, idleMs }) => ({ type: "keepalive", count, idleMs }) },
-    });
-  }
-}
-```
-
-```js
-// In the browser: a named heartbeat event, and a timer that notices when beats stop.
-const source = new EventSource("/live");
-let lastBeat = Date.now();
-source.addEventListener("ping", () => (lastBeat = Date.now()));
-setInterval(() => document.body.classList.toggle("stalled", Date.now() - lastBeat > 45_000), 5_000);
-```
-
-- `send` is written like any stream item: for SSE an `event()` or a plain message, for NDJSON a JSON line.
-- The function may return `undefined` for a plain beat.
-- `idleMs` is the time since the last real item; `openMs` since the stream started.
-- Beats only go out while the source is quiet.
-- A bad interval (negative, `NaN`) is refused when the stream is created.
-
-### Errors mid-stream
-
-Once a stream has started its status is sent, so a thrown error becomes the last line or event. An [YerdError](api:yerd.YerdError)'s message is shown as is; anything else is logged and sent as `Internal Server Error`.
-
-## Streamed request bodies
-
-[ndjsonBody](api:yerd.ndjsonBody) reads an NDJSON upload line by line as it arrives, optionally validating each line with a DTO.
-
-```ts
-import { args, is, ndjsonBody, post, route } from "@toyz/yerd";
-
-class Row {
-  @is.int() id!: number;
-  @is.string() name!: string;
-}
-
-@route("/import")
-export class Import {
-  @post
-  @args(ndjsonBody(Row))
-  async run(rows: AsyncIterable<Row>) {
-    let count = 0;
-    for await (const row of rows) count += row.id > 0 ? 1 : 0;
-    return { imported: count };
-  }
-}
-```
-
-- Only each line is size-limited, not the whole upload.
-- A bad line ends the request with a 400 naming it (`Line 2 is not valid JSON`, or `Line 2 failed validation` plus the issues).
-- Without a DTO, lines are `unknown`. The same stream is `currentContext().lines()`.
-- A body can be read whole or streamed, not both.
-
-## Channels
-
-[Channels](api:yerd.Channels) is a built-in pub/sub hub: publish to a name from anywhere, subscribe from a stream route. Name channels with [channel](api:yerd.channel)`<T>()` to type-check messages.
-
-```ts
-import { Channels, channel, get, inject, route, service, signal, sse } from "@toyz/yerd";
-
-interface ChatMessage { from: string; text: string }
-
-// A family of channels: one per room.
-export const room = (id: string) => channel<ChatMessage>(`room:${id}`);
-
-@service
-export class Chat {
+// src/routes/products.tsx
+/** The product page's live feed: a message per stock change. No session needed for a stream. */
+@route("/products/:id/stock", { session: false })
+export class StockFeed {
+  @inject(Catalog) accessor catalog!: Catalog;
   @inject(Channels) accessor channels!: Channels;
-
-  async say(roomId: string, message: ChatMessage) {
-    await this.channels.publish(room(roomId), message); // type-checked
-  }
-}
-
-@route("/rooms/lobby/events")
-export class LobbyEvents {
-  @inject(Channels) accessor channels!: Channels;
+  @param("id", { transform: toInt }) accessor id!: number;
   @signal accessor stop!: AbortSignal;
 
   @get @sse feed() {
-    return this.channels.subscribe(room("lobby"), this.stop);
+    this.catalog.find(this.id); // a 404 before the stream starts
+    return this.channels.subscribe(stockChannel(this.id), this.stop);
+  }
+}
+```
+
+The headers go out at once; a message follows when someone buys a notebook:
+
+```answer
+GET /products/7/stock
+200 OK
+content-type: text/event-stream; charset=utf-8
+cache-control: no-cache, no-transform
+
+data: {"id":7,"stock":11}
+---
+GET /products/99/stock
+404 Not Found
+content-type: application/json; charset=utf-8
+
+{"error":"No product 99","code":"not_found","id":99}
+```
+
+- Plain values become `data:` lines, non-strings as JSON. [event](api:yerd.event)`({ event: "user", id: "7", data })` sends a named event, and also takes `retry` and `comment`.
+- Browsers read the stream with `EventSource`; `data-yx-live` does that for you and refreshes the page's Regions on each plain message.
+- `@signal` is the request's [AbortSignal](#disconnects-and-the-pass-the-signal-rule): it ends the subscription when the tab closes.
+- An error thrown before the handler returns (the 404 here) is an ordinary response.
+
+## Channels
+
+The catalog tells every open product page when stock changes. [Channels](api:yerd.Channels) is a built-in pub/sub hub: publish to a name from anywhere, subscribe from a stream route. [channel](api:yerd.channel)`<T>()` names one and types its messages:
+
+```ts
+// src/catalog.ts
+/** One channel per product: its page listens for stock changes. */
+export const stockChannel = (id: number) => channel<{ id: number; stock: number }>(`stock:${id}`);
+
+@service
+export class Catalog {
+  @inject(Channels) accessor channels!: Channels;
+  // ...
+
+  /** Take sold items off the shelf and tell every open product page. */
+  async take(id: number, qty: number): Promise<void> {
+    const product = this.find(id);
+    product.stock -= qty;
+    await this.channels.publish(stockChannel(id), { id, stock: product.stock }); // type-checked
   }
 }
 ```
@@ -190,8 +73,140 @@ export class LobbyEvents {
 - Plain strings work as names too: `publish("todos", msg)`.
 - Channels push to open tabs. For work that should run once per change on the server, use [events](14-events.md).
 
+> [!TAKE]
+> The message says "the stock changed"; the page refetches and morphs its Regions. The server renders the new stock the way it rendered the page, so there's no client template to keep in step. You pay one page request per message, so for a firehose, send data and handle it in [client code](17-client-code.md).
+
 > [!NOTE]
 > The default backend is in-memory: same process only, and every subscriber gets the very object you published, so don't mutate it afterwards. For several instances, register an [EventTransport](14-events.md#several-instances-and-other-apps) (channels [ride on it](14-events.md#channels-ride-along)) or a [ChannelBackend](api:yerd.ChannelBackend) (Redis, NATS, Postgres `LISTEN`) with `app.services((s) => s.value(ChannelBackend, myBackend))`. A `ChannelBackend` wins over the transport.
+
+## Return an async iterable
+
+A stream is any handler that returns an async iterable, usually an async generator; yerd sends each item as it's produced. The decorator picks the format:
+
+```ts tab="Plain"
+@route("/rows")
+export class Rows {
+  @get async *rows() {
+    for (let id = 1; id <= 3; id++) yield `${id}\n`;
+  }
+}
+```
+
+```answer
+GET /rows
+200 OK
+content-type: text/plain; charset=utf-8
+
+1
+2
+3
+```
+
+```ts tab="@ndjson"
+@route("/rows")
+export class Rows {
+  @get @ndjson async *rows() {
+    for (let id = 1; id <= 3; id++) yield { id };
+  }
+}
+```
+
+```answer
+GET /rows
+200 OK
+content-type: application/x-ndjson; charset=utf-8
+cache-control: no-cache, no-transform
+
+{"id":1}
+{"id":2}
+{"id":3}
+```
+
+```ts tab="@sse"
+@route("/rows")
+export class Rows {
+  @get @sse async *rows() {
+    for (let id = 1; id <= 3; id++) yield { id };
+  }
+}
+```
+
+```answer
+GET /rows
+200 OK
+content-type: text/event-stream; charset=utf-8
+cache-control: no-cache, no-transform
+
+data: {"id":1}
+
+data: {"id":2}
+
+data: {"id":3}
+```
+
+- Plain: strings and bytes go out as they are, anything else stringified, headers with the first chunk. Set your own type with `res(stream, { headers: { "content-type": "text/csv" } })` ([responses](04-responses.md)).
+- [@ndjson](api:yerd.ndjson) and `@sse` send headers right away, so use them for a feed that may sit quiet. Return `ndjson(source, options)` or `sse(...)` from an ordinary method for the same thing.
+- HTML pages stream too ([pages and layouts](05-pages-and-layouts.md#components)).
+
+| Option | `@ndjson` | `@sse` | Does |
+|---|---|---|---|
+| `heartbeat` | `0` (off) | `15000` | while the source is quiet, every N ms an empty line / a `: ping` comment, so proxies keep the connection open; or `{ every, send }` ([custom heartbeats](#custom-heartbeats)) |
+| `errorLine` / `errorEvent` | `true` | `true` | if the source throws mid-stream, a last `{"error": "..."}` line / `event: error` before closing |
+| `retry` | | none | a reconnect delay hint (ms), once at the start |
+
+Pass them as `@ndjson({ heartbeat: 15_000 })` or `@sse({ retry: 2000 })`.
+
+### Custom heartbeats
+
+Give the heartbeat a body with `{ every, send }` when clients should see it (to show "live", detect a stall, or carry a server time); the plain beat is invisible.
+
+```tsx
+// The same body every time.
+@get @sse({ heartbeat: { every: 20_000, send: event({ event: "ping" }) } }) feed() { ... }
+
+// A function makes each beat from its count, idle time and open time.
+@get stats() {
+  return ndjson(this.updates(), {
+    heartbeat: { every: 10_000, send: ({ count, idleMs }) => ({ type: "keepalive", count, idleMs }) },
+  });
+}
+```
+
+- `send` is written like any stream item: for SSE an `event()` or a plain message, for NDJSON a JSON line. The function may return `undefined` for a plain beat.
+- `idleMs` is the time since the last real item; `openMs` since the stream started. Beats only go out while the source is quiet.
+- A bad interval (negative, `NaN`) is refused when the stream is created.
+
+### Errors mid-stream
+
+Once a stream has started its status is sent, so a thrown error becomes the last line or event. A [YerdError](api:yerd.YerdError)'s message is shown as is; anything else is logged and sent as `Internal Server Error`.
+
+## Streamed request bodies
+
+[ndjsonBody](api:yerd.ndjsonBody) reads an NDJSON upload line by line as it arrives, optionally validating each line with a DTO.
+
+```ts
+import { args, is, ndjsonBody, post, route } from "@toyz/yerd";
+
+class StockRow {
+  @is.int() id!: number;
+  @is.int() stock!: number;
+}
+
+@route("/import")
+export class Import {
+  @post
+  @args(ndjsonBody(StockRow))
+  async run(rows: AsyncIterable<StockRow>) {
+    let count = 0;
+    for await (const row of rows) count += row.stock >= 0 ? 1 : 0;
+    return { imported: count };
+  }
+}
+```
+
+- Only each line is size-limited, not the whole upload.
+- A bad line ends the request with a 400 naming it (`Line 2 is not valid JSON`, or `Line 2 failed validation` plus the issues).
+- Without a DTO, lines are `unknown`. The same stream is `currentContext().lines()`. A body can be read whole or streamed, not both.
 
 ## Per-user live feeds
 
@@ -199,27 +214,26 @@ Give each user their own channel, publish after every write, and subscribe with 
 
 ```tsx
 import { Channels, channel, get, inject, route, signal, sse } from "@toyz/yerd";
-import { auth, type User } from "./users.js"; // createAuth(...), see 09-sessions-and-auth.md
+import { auth, type User } from "./users.js";
 
-type TodoChange = { type: "added" | "removed"; id: string };
-export const todoChannel = (userId: string) => channel<TodoChange>(`todos:${userId}`);
+export const orderChannel = (userId: string) => channel<{ orderId: number; status: string }>(`orders:${userId}`);
 
 // after a write, in a service or action:
-//   await this.channels.publish(todoChannel(owner.id), { type: "added", id });
+//   await this.channels.publish(orderChannel(order.userId), { orderId: order.id, status: "shipped" });
 
-@route("/todos/events", { guards: [auth.required] })
-export class TodoEvents {
+@route("/orders/events", { guards: [auth.required] })
+export class OrderEvents {
   @inject(Channels) accessor channels!: Channels;
   @auth.user accessor me!: User;
   @signal accessor stop!: AbortSignal;
 
   @get @sse feed() {
-    return this.channels.subscribe(todoChannel(this.me.id), this.stop);
+    return this.channels.subscribe(orderChannel(this.me.id), this.stop);
   }
 }
 
-// in the app layout: every open tab refreshes its Regions on each change
-const liveHook = <div data-yx-live="/todos/events" hidden></div>;
+// in the layout: every open tab refreshes its Regions on each change
+<div data-yx-live="/orders/events" hidden></div>
 ```
 
 To transform messages on the way out, loop in a generator: `for await (const change of this.channels.subscribe(...)) yield { ...change, at: Date.now() };`.
@@ -233,8 +247,6 @@ To transform messages on the way out, loop in a generator: `for await (const cha
 Put `sync` on an element to line up its infinite CSS animations, and those inside it, as if they all started together.
 
 ```tsx
-import { css, keyframes } from "@toyz/yerd";
-
 const bob = keyframes`50% { transform: translateY(-12px); }`;
 const dancer = css`
   animation: ${bob} 700ms ease-in-out infinite;
@@ -255,8 +267,6 @@ const dancer = css`
 Inject `Cues` and `play()` a cue by name; elements with `cue="name"` play it.
 
 ```tsx
-import { Cues, action, css, get, inject, keyframes, route } from "@toyz/yerd";
-
 const wobble = keyframes`25% { transform: rotate(-12deg) scale(1.3); } 75% { transform: rotate(10deg); }`;
 const gnome = css`&[data-yx-cued] { animation: ${wobble} 600ms ease-out; }`;
 
@@ -317,31 +327,7 @@ A cue carries its start time on the server's clock, so arrival time doesn't matt
 
 ### Sound
 
-Browsers block audio until the visitor interacts, so an `<audio cue>` on an untouched page stays quiet (the animation still plays). For Web Audio, start your `AudioContext` on the first click and play on `yx:cue`, as the kitchen sink's `horn` attribute does:
-
-```ts
-export const horn = attribute<boolean>("horn", {
-  render: (on) => (on ? { horn: "" } : {}),
-  client(el) {
-    let audio: AudioContext | undefined;
-    const unlock = () => void (audio ??= new AudioContext()).resume();
-    document.addEventListener("pointerdown", unlock);
-    const play = (event: Event) => {
-      const { late } = (event as CustomEvent<{ late: number }>).detail;
-      if (!audio || audio.state !== "running" || late > 400) return; // half a second late is just noise
-      const tone = audio.createOscillator();
-      tone.connect(audio.destination);
-      tone.start();
-      tone.stop(audio.currentTime + 0.5);
-    };
-    el.addEventListener("yx:cue", play);
-    return () => {
-      document.removeEventListener("pointerdown", unlock);
-      el.removeEventListener("yx:cue", play);
-    };
-  },
-});
-```
+Browsers block audio until the visitor interacts, so an `<audio cue>` on an untouched page stays quiet (the animation still plays). For Web Audio, start an `AudioContext` on the first click and play on `yx:cue`, skipping cues that arrive too `late`; the kitchen sink's [`horn` attribute](https://github.com/Toyz/yerd/blob/main/examples/kitchen-sink/src/attributes.tsx) does exactly that.
 
 Your own client code can read the same clock: `yerd.clock.now()` is the server's time, and `yerd.clock.sync()` re-measures and resolves with `{ now, offset, rtt }`.
 
@@ -415,7 +401,7 @@ export class Clock {
 }
 ```
 
-- `Channels.subscribe(name, signal)` already ends the moment the signal aborts.
+- `Channels.subscribe(name, signal)` already ends the moment the signal aborts, which is why the shop's feed is one line.
 - Pass it to `fetch`, `node:timers/promises` timers, database cursors and queues.
 - Signal-aware APIs throw an `AbortError` when cancelled; catch it as above, or it's logged as a failed stream.
 
