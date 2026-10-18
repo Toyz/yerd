@@ -77,10 +77,41 @@ export function Code({
  */
 export const onCopyClick = onProseClick;
 
-/** The first sentence of a doc comment, for lists. */
+/**
+ * The first sentence of a doc comment, for lists, hover cards and search, as
+ * runs of text and code. JSDoc links read as their label, or as the name in
+ * code when they have none ({@link yerd} -> `yerd`); markdown links as their
+ * label. These places are links themselves (or can't be clicked), so the
+ * names aren't links here; the entry's page links them.
+ */
+export function summaryParts(doc: string | undefined): Array<{ text: string; code: boolean }> {
+  if (!doc) return [];
+  const text = doc
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/\{@link(code|plain)?\s+([^}\s|]+)\s*(?:\|\s*|\s+)?([^}]*)\}/g, (_, how: string | undefined, target: string, label: string) => {
+      const shown = label.trim() || target;
+      return how === "plain" || (label.trim() && how !== "code") ? shown : `\`${shown}\``;
+    })
+    .replace(/\[([^\]]*)\]\([^)\s]+\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  // "e.g." and "i.e." don't end the sentence.
+  const end = text.search(/(?<!\b(?:e\.g|i\.e))[.!?](\s|$)/);
+  const sentence = end === -1 ? text : text.slice(0, end + 1);
+  return sentence
+    .split(/`([^`]*)`/)
+    .map((run, i) => ({ text: run, code: i % 2 === 1 }))
+    .filter((run) => run.text);
+}
+
+/** summaryParts() as plain text. */
 export function summary(doc: string | undefined): string {
-  if (!doc) return "";
-  const text = doc.replace(/```[\s\S]*?```/g, "").replace(/\s+/g, " ").trim();
-  const end = text.search(/[.!?](\s|$)/);
-  return (end === -1 ? text : text.slice(0, end + 1)).replace(/`/g, "");
+  return summaryParts(doc)
+    .map((run) => run.text)
+    .join("");
+}
+
+/** summaryParts() with its names in code. */
+export function Summary({ doc }: { doc: string | undefined }) {
+  return <>{summaryParts(doc).map((run) => (run.code ? <code>{run.text}</code> : run.text))}</>;
 }

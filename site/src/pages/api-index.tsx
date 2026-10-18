@@ -8,7 +8,7 @@ import { LoomElement, component, css, mount, on, prop, reactive, styles, throttl
 import { route } from "@toyz/loom/router";
 import { entryId, loadApi, sectionId, type Api, type Entry } from "../data";
 import { SECTION_INFO } from "../sections";
-import { KindBadge, SinceBadge, summary } from "../ui";
+import { KindBadge, SinceBadge, Summary, summary } from "../ui";
 
 const sheet = css`
   .page { max-width: 1080px; }
@@ -83,6 +83,7 @@ const sheet = css`
   .name { font: 600 0.95rem var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .module { font: 0.75rem var(--mono); color: var(--text-faint); white-space: nowrap; }
   .doc { grid-column: 2; font-size: 0.86rem; color: var(--text-dim); line-height: 1.45; margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .doc code { background: none; padding: 0; font-size: 0.95em; color: var(--text); }
   .parts { grid-column: 2; font: 0.74rem var(--mono); color: var(--text-faint); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .none { padding: 40px 0; color: var(--text-dim); }
@@ -174,7 +175,11 @@ export class PageApi extends LoomElement {
             {e.deprecated ? <span class="badge deprecated">deprecated</span> : null}
             {e.module !== "@toyz/yerd" ? <span class="module">{e.module.replace("@toyz/yerd", "")}</span> : null}
           </span>
-          {doc ? <span class="doc">{doc}</span> : null}
+          {doc ? (
+            <span class="doc">
+              <Summary doc={e.doc} />
+            </span>
+          ) : null}
           {e.parts?.length ? <span class="parts">with {e.parts.join(", ")}</span> : null}
         </a>
       </li>

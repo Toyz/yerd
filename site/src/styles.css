@@ -122,4 +122,5 @@ body {
 .api-tip-since.unreleased { color: var(--warn); background: var(--warn-bg); }
 .api-tip-sig { font: 0.76rem var(--mono); color: var(--text-faint); margin-bottom: 6px; overflow-wrap: anywhere; }
 .api-tip-doc { color: var(--text-dim); }
+.api-tip-doc code { font: 0.95em var(--mono); color: var(--text); }
 .api-tip-module { margin-top: 6px; font: 0.72rem var(--mono); color: var(--text-faint); }

@@ -14,7 +14,7 @@
 import { on } from "@toyz/loom";
 import { LoomAttribute, attribute, debounce } from "@toyz/loom/element";
 import { entryId, loadApi, lookupApi } from "./data";
-import { summary } from "./ui";
+import { summaryParts } from "./ui";
 
 let card: HTMLDivElement | undefined;
 let owner: Element | undefined;
@@ -56,8 +56,15 @@ async function show(el: Element, id: string): Promise<void> {
 
   const signature = (member ?? entry).signature.split("\n")[0]!;
   tip.append(line("api-tip-sig", signature.length > 120 ? `${signature.slice(0, 119)}…` : signature));
-  const text = summary((member ?? entry).doc);
-  if (text) tip.append(line("api-tip-doc", text));
+  const runs = summaryParts((member ?? entry).doc);
+  if (runs.length) {
+    const doc = line("api-tip-doc", "");
+    for (const run of runs) {
+      if (!run.code) doc.append(run.text);
+      else doc.append(Object.assign(document.createElement("code"), { textContent: run.text }));
+    }
+    tip.append(doc);
+  }
   if (entry.module !== "@toyz/yerd") tip.append(line("api-tip-module", `${entry.module} · ${entryId(entry)}`));
 
   tip.hidden = false;

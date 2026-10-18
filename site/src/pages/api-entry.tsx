@@ -8,7 +8,7 @@ import { LoomElement, component, css, mount, prop, reactive, styles, watch } fro
 import { route } from "@toyz/loom/router";
 import { entryId, linkContext, loadApi, loadGuides, resolveApi, sectionId, sourceUrl, type Api, type Entry, type GuideInfo, type Member } from "../data";
 import { SECTION_INFO } from "../sections";
-import { Code, KindBadge, Markdown, SinceBadge, onCopyClick, summary } from "../ui";
+import { Code, KindBadge, Markdown, SinceBadge, Summary, onCopyClick } from "../ui";
 
 const sheet = css`
   article { max-width: 880px; }
@@ -45,6 +45,7 @@ const sheet = css`
   .m-name { font: 600 0.88rem var(--mono); white-space: nowrap; }
   .m-kind { font-size: 0.78rem; color: var(--text-faint); white-space: nowrap; }
   .m-doc { font-size: 0.84rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+  .m-doc code { background: none; padding: 0; font-size: 0.95em; color: var(--text); }
 
   .member { padding: 18px 0 8px; border-top: 1px solid var(--border); scroll-margin-top: calc(var(--top) + 16px); }
   .member.target { border-top: 2px solid var(--brand); }
@@ -153,7 +154,9 @@ export class PageApiEntry extends LoomElement {
                 {m.name}
               </span>
               <span class="m-kind">{m.kind}</span>
-              <span class="m-doc">{summary(m.doc)}</span>
+              <span class="m-doc">
+                <Summary doc={m.doc} />
+              </span>
             </a>
           </li>
         ))}
