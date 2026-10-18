@@ -387,15 +387,26 @@ export interface BodyOptions<O = unknown> {
 }
 
 const bodyAccessor = createAccessor<Promise<unknown>, [pipeline: Pipeline]>(
-  async (ctx, pipeline) => {
-    const parsed = await ctx.body();
-    if (parsed.kind === "none") return missing("request body", "body", pipeline, "(root)");
-    // A multipart form's files sit next to its fields, for is.file() in DTOs.
-    const value = parsed.kind === "form" ? withFiles(parsed.value, parsed.files) : parsed.value;
-    return resolveField("request body", "body", value, pipeline, "(root)");
+  (ctx, pipeline) => {
+    // then() rather than an async function: one suspended frame fewer per
+    // request. ctx.body() throwing still makes the field a rejected promise.
+    let reading: Promise<ParsedBody>;
+    try {
+      reading = ctx.body();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return reading.then((parsed) => bodyValue(parsed, pipeline));
   },
   { name: "body" },
 );
+
+function bodyValue(parsed: ParsedBody, pipeline: Pipeline): unknown {
+  if (parsed.kind === "none") return missing("request body", "body", pipeline, "(root)");
+  // A multipart form's files sit next to its fields, for is.file() in DTOs.
+  const value = parsed.kind === "form" ? withFiles(parsed.value, parsed.files) : parsed.value;
+  return resolveField("request body", "body", value, pipeline, "(root)");
+}
 
 type BodyValue<A> = A extends DtoClass<infer T> ? T : Optional<A, FieldOutput<A, unknown>>;
 

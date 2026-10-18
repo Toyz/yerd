@@ -121,14 +121,18 @@ function hasBody(req: IncomingMessage): boolean {
   return req.headers["transfer-encoding"] !== undefined;
 }
 
-async function readAll(req: IncomingMessage, limit: number): Promise<Buffer<ArrayBuffer>> {
+/**
+ * Read the whole body and parse it (see parseBody). data/end listeners rather than `for await`: an async iterator
+ * per request costs measurably more (its own listeners and a microtask per
+ * chunk). Parsing in the end listener, rather than after an await, saves the
+ * request another suspended frame.
+ */
+function readParsed(req: IncomingMessage, limit: number): Promise<ParsedBody> {
   const declared = Number(req.headers["content-length"]);
   if (Number.isFinite(declared) && declared > limit) {
-    throw new PayloadTooLarge(`Request body is larger than ${limit} bytes`);
+    return Promise.reject(new PayloadTooLarge(`Request body is larger than ${limit} bytes`));
   }
-  if (req.readableEnded) return Buffer.alloc(0);
-  // data/end listeners rather than `for await`: an async iterator per request
-  // costs measurably more (its own listeners and a microtask per chunk).
+  if (req.readableEnded) return Promise.resolve({ kind: "none", value: undefined });
   return new Promise((resolve, reject) => {
     const chunks: Buffer<ArrayBuffer>[] = [];
     let size = 0;
@@ -151,8 +155,12 @@ async function readAll(req: IncomingMessage, limit: number): Promise<Buffer<Arra
     };
     const onEnd = () => {
       stop();
-      // Most bodies arrive in one chunk: no copy for those.
-      resolve(chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks, size));
+      try {
+        // Most bodies arrive in one chunk: no copy for those.
+        resolve(parseBody(chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks, size), req.headers["content-type"]));
+      } catch (error) {
+        reject(error);
+      }
     };
     // The client hung up mid-upload: theirs to retry, not a crash to log as one.
     const onError = (error: unknown) => {
@@ -245,12 +253,16 @@ export function formFields(params: URLSearchParams): FormFields {
  * }).listen(3001);
  * ```
  */
-export async function readBody(req: IncomingMessage, limit = DEFAULT_BODY_LIMIT): Promise<ParsedBody> {
-  if (!hasBody(req)) return { kind: "none", value: undefined };
-  const raw = await readAll(req, limit);
+export function readBody(req: IncomingMessage, limit = DEFAULT_BODY_LIMIT): Promise<ParsedBody> {
+  if (!hasBody(req)) return Promise.resolve({ kind: "none", value: undefined });
+  return readParsed(req, limit);
+}
+
+/** A whole body, parsed by its Content-Type (see readBody). */
+function parseBody(raw: Buffer<ArrayBuffer>, contentType: string | undefined): ParsedBody | Promise<ParsedBody> {
   // A chunked request that sends no bytes is no body, like Content-Length: 0.
   if (raw.byteLength === 0) return { kind: "none", value: undefined };
-  const type = mediaTypeOf(req.headers["content-type"]);
+  const type = mediaTypeOf(contentType);
 
   if (type === "application/json" || type.endsWith("+json")) {
     try {
@@ -271,7 +283,7 @@ export async function readBody(req: IncomingMessage, limit = DEFAULT_BODY_LIMIT)
   if (type === "application/x-www-form-urlencoded") {
     return { kind: "form", value: formFields(new URLSearchParams(raw.toString("utf8"))), files: Object.create(null) as FormFiles };
   }
-  if (type === "multipart/form-data") return parseMultipart(raw, req.headers["content-type"]!);
+  if (type === "multipart/form-data") return parseMultipart(raw, contentType!);
   if (type.startsWith("text/")) return { kind: "text", value: raw.toString("utf8") };
   return { kind: "bytes", value: new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) };
 }
