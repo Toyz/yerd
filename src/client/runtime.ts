@@ -1,13 +1,27 @@
 import { minified } from "./runtime-min.js";
+import type { Carried, Chunk, ChunkApi, ChunkName, HeldDrop, HeldInput, RuntimeHooks, Stream } from "./hooks.js";
+import { yerdCues } from "./runtime-cues.js";
+import { yerdDnd } from "./runtime-dnd.js";
+import { yerdLocal } from "./runtime-local.js";
 
 /**
  * yerd's client runtime, served at /_yerd/runtime.js.
  *
- * The whole runtime is one self-contained function. The server sends its
+ * The runtime's core is one self-contained function. The server sends its
  * source (`fn.toString()` of whatever the compiler produced) wrapped in an
  * IIFE, so it must not reference anything outside itself: no imports, no
  * module-level helpers. Everything is a progressive enhancement of plain HTML;
  * with this script blocked, every form and link still works.
+ *
+ * Three features that most pages don't use are chunks, each its own
+ * self-contained function served beside the core and imported when the page
+ * first has an element that needs it: cues (sync, cue: runtime-cues.ts), dnd
+ * (drop targets, dropTo: runtime-dnd.ts) and local (<Local>:
+ * runtime-local.ts). Each gets the core's internal hooks (see hooks.ts) when
+ * it starts. Input that arrives for a chunk still on its way isn't lost: the
+ * core starts drags itself and holds drops and <Local> input for the chunk.
+ * <Scripts /> is followed by modulepreload hints for the chunks the server
+ * rendered elements for, so they download alongside the core.
  *
  * - form[data-yx]       action forms: submitted with fetch, Regions morphed in
  *                       (a form inside a <details> closes it on success)
@@ -70,8 +84,17 @@ import { minified } from "./runtime-min.js";
  * Morphing patches the live DOM in place: elements are matched by id or
  * data-key, attributes and text are patched, focused fields keep their value
  * and caret, and an open <details> stays open.
+ *
+ * `base` is the URL the chunks are served under (the served script passes
+ * its own directory, from import.meta.url), `importChunk` imports one
+ * (import(), which only the served module can call), and `inline` holds
+ * chunks to start with the core instead of loading them.
  */
-export function yerdRuntime(): void {
+export function yerdRuntime(
+  base: string,
+  inline?: Partial<Record<ChunkName, Chunk>>,
+  importChunk?: (url: string) => Promise<{ default: Chunk }>,
+): void {
   // Guard on a symbol: `<div id="yerd">` makes `window.yerd` an element.
   const mark = Symbol.for("yerd.runtime");
   const flags = window as unknown as Record<symbol, unknown>;
@@ -717,12 +740,17 @@ export function yerdRuntime(): void {
   // Work that follows the page: run once it's parsed, then again after every
   // change the runtime makes (yx:applied: an apply, a boost, a refresh). One
   // query finds every hook's elements, rather than one query per hook.
+  // A hook added once the page has been scanned (a chunk's) runs on it straight away.
   type PageHook = { selector: string; run(found: Element[]): void };
-  const hooks: PageHook[] = [];
+  const pageHooks: PageHook[] = [];
+  let scanned = false;
   function onPage(selector: string, run: (found: Element[]) => void): void {
-    hooks.push({ selector, run });
+    pageHooks.push({ selector, run });
+    if (scanned) run(Array.from(document.querySelectorAll(selector)));
   }
   function scanPage(): void {
+    scanned = true;
+    const hooks = pageHooks.slice();
     const found = hooks.map((): Element[] => []);
     for (const el of Array.from(document.querySelectorAll(hooks.map((hook) => hook.selector).join(",")))) {
       hooks.forEach((hook, i) => {
@@ -766,8 +794,6 @@ export function yerdRuntime(): void {
     }
   }
   onPage("[data-yx-defer]", (skeletons) => void fillDeferred(skeletons));
-
-  type Stream = { close(): void };
 
   /**
    * An EventSource that keeps coming back. The browser retries a dropped
@@ -907,7 +933,10 @@ export function yerdRuntime(): void {
       // Inside another added element: searched with it.
       let up = root.parentElement;
       while (up && !added.has(up)) up = up.parentElement;
-      if (!up) scanAttrs(root);
+      if (!up) {
+        scanAttrs(root);
+        wantChunks(root);
+      }
     }
     // Moved elements (a keyed morph) are removed and re-added in one batch, so
     // only those still out of the document by now are really gone.
@@ -1004,243 +1033,6 @@ export function yerdRuntime(): void {
     );
   }
 
-  // ── <Local> state ──
-  // A <yerd-local> scope carries its initial state as JSON and the name its
-  // handlers use for it. Handlers (data-yx-on-<event>) are compiled with the
-  // state bound to that name; after each one, the scope's bindings
-  // (data-yx-text, data-yx-bind) are re-applied from the state.
-  type Scope = { el: Element; state: Record<string, unknown>; name: string; key?: string; storage?: Storage };
-  const scopes = new WeakMap<Element, Scope>();
-  // The handler attributes each element has a listener for.
-  const wired = new WeakMap<Element, Set<string>>();
-  // Persisted scopes by storage key, so scopes sharing a key stay in step.
-  // Scopes that left the page are pruned, so a boosted session doesn't keep them.
-  const byKey = new Map<string, Set<Scope>>();
-  const STORE_PREFIX = "yerd-local:";
-
-  /** Saved state to merge: an object, or undefined for anything else (a string would spread its characters). */
-  function savedState(text: string): Record<string, unknown> | undefined {
-    const value: unknown = JSON.parse(text);
-    return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-  }
-
-  function storageFor(el: Element): Storage | undefined {
-    try {
-      return el.getAttribute("data-yx-storage") === "session" ? sessionStorage : localStorage;
-    } catch {
-      return undefined; // storage blocked: works, just doesn't persist
-    }
-  }
-
-  function loadSaved(scope: Scope): void {
-    if (!scope.key || !scope.storage) return;
-    try {
-      const saved = scope.storage.getItem(STORE_PREFIX + scope.key);
-      if (saved) Object.assign(scope.state, savedState(saved));
-    } catch {
-      // unreadable or blocked: keep the server's defaults
-    }
-  }
-
-  /** A key's scopes still on the page; the others are dropped (and the key, once none are left). */
-  function prune(key: string): Set<Scope> | undefined {
-    const group = byKey.get(key);
-    if (!group) return undefined;
-    for (const scope of group) if (!scope.el.isConnected) group.delete(scope);
-    if (group.size === 0) byKey.delete(key);
-    return group;
-  }
-
-  /** Save a persisted scope and bring the others with its key (in this tab) up to date. */
-  function save(scope: Scope): void {
-    if (!scope.key || !scope.storage) return;
-    let json: string;
-    try {
-      json = JSON.stringify(scope.state);
-      scope.storage.setItem(STORE_PREFIX + scope.key, json);
-    } catch {
-      // full or blocked (or state that isn't JSON): the page still works
-      return;
-    }
-    for (const other of prune(scope.key) ?? []) {
-      if (other === scope || other.storage !== scope.storage) continue;
-      Object.assign(other.state, JSON.parse(json));
-      applyBindings(other);
-    }
-  }
-
-  // Persisted scopes changed since their last save. Storage is written once
-  // per frame at most, however many handlers ran (a drag, a burst of input),
-  // and before the page goes away.
-  const unsaved = new Set<Scope>();
-  function saveAll(): void {
-    for (const scope of Array.from(unsaved)) {
-      unsaved.delete(scope);
-      save(scope);
-    }
-  }
-  window.addEventListener("pagehide", saveAll);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") saveAll();
-  });
-
-  /** A handler ran: show the state now, and save it soon. */
-  function changed(scope: Scope): void {
-    applyBindings(scope);
-    if (!scope.key || !scope.storage) return;
-    if (unsaved.size === 0) requestAnimationFrame(saveAll);
-    unsaved.add(scope);
-  }
-
-  // Another tab saved: follow it.
-  window.addEventListener("storage", (event) => {
-    if (!event.key?.startsWith(STORE_PREFIX) || event.newValue === null) return;
-    for (const scope of prune(event.key.slice(STORE_PREFIX.length)) ?? []) {
-      if (scope.storage !== event.storageArea) continue;
-      try {
-        Object.assign(scope.state, savedState(event.newValue));
-      } catch {
-        continue;
-      }
-      applyBindings(scope);
-    }
-  });
-
-  /** A binding's value: `[!]path`, or `[!]path=<JSON>` for "field equals this" (eq()). */
-  function read(state: unknown, spec: string): unknown {
-    const negate = spec.startsWith("!");
-    const at = spec.indexOf("=");
-    const path = spec.slice(negate ? 1 : 0, at < 0 ? undefined : at);
-    let value: unknown = state;
-    for (const key of path.split(".")) {
-      if (key === "") continue;
-      value = value !== null && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined;
-    }
-    if (at >= 0) {
-      let expected: unknown;
-      try {
-        expected = JSON.parse(decodeURIComponent(spec.slice(at + 1)));
-      } catch {
-        expected = undefined;
-      }
-      value = value === expected;
-    }
-    return negate ? !value : value;
-  }
-
-  /** Elements that belong to this scope, not to a <Local> nested inside it. */
-  function owned(scope: Scope, selector: string): Element[] {
-    return Array.from(scope.el.querySelectorAll(selector)).filter((el) => el.closest("yerd-local") === scope.el);
-  }
-
-  function applyBindings(scope: Scope): void {
-    for (const el of owned(scope, "[data-yx-text]")) {
-      const value = read(scope.state, el.getAttribute("data-yx-text")!);
-      const text = value === null || value === undefined ? "" : String(value);
-      if (el.textContent !== text) el.textContent = text;
-    }
-    for (const el of owned(scope, "[data-yx-bind]")) {
-      for (const entry of el.getAttribute("data-yx-bind")!.split(";")) {
-        // The last colon: names can have their own (class.md:block,
-        // xlink:href), specs can't (an eq() value is URI-encoded).
-        const at = entry.lastIndexOf(":");
-        if (at < 0) continue;
-        const name = entry.slice(0, at);
-        const value = read(scope.state, entry.slice(at + 1));
-        if (name.startsWith("class.")) el.classList.toggle(name.slice(6), Boolean(value));
-        else if (name === "value") (el as HTMLInputElement).value = value === null || value === undefined ? "" : String(value);
-        else if (name === "checked") (el as HTMLInputElement).checked = Boolean(value);
-        // Like the server renders them: aria-* and the enumerated attributes
-        // take the words ("true" / "false", translate "yes" / "no", autocorrect "on" / "off"), not presence.
-        else if (typeof value === "boolean" && (name.startsWith("aria-") || name === "draggable" || name === "spellcheck" || name === "contenteditable" || name === "writingsuggestions")) el.setAttribute(name, String(value));
-        else if (typeof value === "boolean" && name === "translate") el.setAttribute(name, value ? "yes" : "no");
-        else if (typeof value === "boolean" && name === "autocorrect") el.setAttribute(name, value ? "on" : "off");
-        else if (value === false || value === null || value === undefined) el.removeAttribute(name);
-        else el.setAttribute(name, value === true ? "" : String(value));
-      }
-    }
-  }
-
-  function compile(scope: Scope, source: string): ((event: Event) => unknown) | undefined {
-    try {
-      return new Function(scope.name, `"use strict"; return (${source});`)(scope.state) as (event: Event) => unknown;
-    } catch (error) {
-      console.error("[yerd] a <Local> handler didn't compile:", source, error);
-      return undefined;
-    }
-  }
-
-  /**
-   * One listener per element and handler attribute. It runs the attribute as
-   * it is now: a morph that changes a handler's source gets it recompiled, one
-   * that removes it silences it, and one that adds a handler gets a listener.
-   */
-  function wire(scope: Scope, el: Element, names: string[]): void {
-    const done = wired.get(el) ?? new Set<string>();
-    wired.set(el, done);
-    for (const name of names) {
-      if (done.has(name)) continue;
-      done.add(name);
-      let source = el.getAttribute(name)!;
-      let fn = compile(scope, source);
-      el.addEventListener(name.slice("data-yx-on-".length), (event) => {
-        const now = el.getAttribute(name);
-        if (now === null) return;
-        if (now !== source) {
-          source = now;
-          fn = compile(scope, now);
-        }
-        if (!fn) return;
-        let result: unknown;
-        try {
-          result = fn(event);
-        } finally {
-          changed(scope);
-        }
-        if (result && typeof (result as Promise<unknown>).then === "function") {
-          const after = () => changed(scope);
-          void (result as Promise<unknown>).then(after, after);
-        }
-      });
-    }
-  }
-
-  // Elements that arrived in a scope, or got a new handler attribute, since
-  // they were last looked at: only these are searched for handlers to wire,
-  // not every element of every scope after each change to the page.
-  const touched = new Set<Element>();
-  function collect(records: MutationRecord[]): void {
-    for (const record of records) {
-      if (record.type === "attributes") {
-        if (record.attributeName!.startsWith("data-yx-on-")) touched.add(record.target as Element);
-      } else for (const node of Array.from(record.addedNodes)) if (node.nodeType === 1) touched.add(node as Element);
-    }
-  }
-  const localWatch = new MutationObserver((records) => {
-    collect(records);
-    wireTouched();
-  });
-
-  /** Wire the handlers on touched elements and their descendants, each to the scope it belongs to. */
-  function wireTouched(): void {
-    const roots = new Set(touched);
-    touched.clear();
-    for (const root of roots) {
-      if (!root.isConnected) continue;
-      // Inside another root: walked with it.
-      let up = root.parentElement;
-      while (up && !roots.has(up)) up = up.parentElement;
-      if (up) continue;
-      for (const el of [root, ...Array.from(root.querySelectorAll("*"))]) {
-        const names = Array.from(el.attributes, (a) => a.name).filter((name) => name.startsWith("data-yx-on-"));
-        if (names.length === 0) continue;
-        const host = el.closest("yerd-local");
-        const scope = host ? scopes.get(host) : undefined;
-        if (scope) wire(scope, el, names);
-      }
-    }
-  }
-
   // ── actions on any element, and triggers ──
 
   /**
@@ -1263,7 +1055,7 @@ export function yerdRuntime(): void {
       let source: Element | null = el;
       let rest = path.slice(1);
       if (path[0] === "drag") {
-        source = dragged;
+        source = drag.el;
         if (!source) return undefined;
       }
       if (path[0] === "ref") {
@@ -1283,199 +1075,56 @@ export function yerdRuntime(): void {
 
   const actionRuns = new WeakMap<Element, AbortController>();
 
-  // ── drag and drop ──
+  // ── drag and drop: the part that can't wait ──
   //
-  // Drop targets are elements whose trigger is "drop" (the page's draggable
-  // elements), "drop:<selector>" (only draggables matching it) or
-  // "drop:files" (files from outside the page, filtered by its accept
-  // attribute). Drops are handled here, centrally: the innermost target that
-  // accepts what's being dragged gets it.
-
-  let dragged: HTMLElement | null = null;
-
-  /** The page element being dragged, if it's still on the page. */
-  function dragSource(): HTMLElement | null {
-    if (dragged && !dragged.isConnected) dragged = null;
-    return dragged;
-  }
-
-  // dragover fires on every pointer move, so a drag remembers what it looked
-  // up: the target it marked [data-yx-over] (touched only when that changes),
-  // whether the page takes files anywhere, and each target's accept list.
-  // Forgotten when the drag ends, leaves the window, or a new one comes in.
-  let over: Element | null = null;
-  let fileTargets: boolean | undefined;
-  const accepted = new Map<Element, string | null>();
-
-  function setOver(target: Element | null): void {
-    if (over && over !== target) over.removeAttribute("data-yx-over");
-    over = target;
-    // Again if a morph took it off meanwhile.
-    if (target && !target.hasAttribute("data-yx-over")) target.setAttribute("data-yx-over", "");
-  }
-
-  function forgetDrag(): void {
-    fileTargets = undefined;
-    accepted.clear();
-  }
-
-  function endDrag(): void {
-    dragged?.removeAttribute("data-yx-dragging");
-    dragged = null;
-    setOver(null);
-    forgetDrag();
-  }
+  // Drop targets, file drops and dropTo are the dnd chunk's. A drag has to
+  // be set up while its dragstart is being dispatched, though, so that much
+  // is here: the dragged element (read by drag.* holes, and by the chunk),
+  // data-yx-dragging, and the data Firefox wants. Until the chunk is in, a
+  // drag over anything that looks like a drop target is allowed, and its drop
+  // (with the files, readable only now) is held for the chunk to judge.
 
   const DROP_TARGETS = '[data-yx-trigger^="drop"], [data-yx-drop-to]';
+  const drag: { el: HTMLElement | null } = { el: null };
+  let dnd: ChunkApi | undefined;
+  const heldDrops: HeldDrop[] = [];
 
-  /** What a drop target takes: "page" (any draggable), a selector, or "files". */
-  function dropKind(target: Element): string {
-    if (target.hasAttribute("data-yx-drop-to")) return "files";
-    const spec = (target.getAttribute("data-yx-trigger") ?? "").trim();
-    return spec === "drop" ? "page" : spec.slice(5).trim() || "page";
+  function endDrag(): void {
+    drag.el?.removeAttribute("data-yx-dragging");
+    drag.el = null;
+    dnd?.reset?.();
   }
 
-  function carriesFiles(event: DragEvent): boolean {
-    return Array.from(event.dataTransfer?.types ?? []).includes("Files");
-  }
-
-  /** Whether a file (or, while dragging, its item's MIME type) fits an accept list like "image/*,.pdf". */
-  function fits(accept: string | null, type: string, name?: string): boolean {
-    if (!accept) return true;
-    return accept.split(",").some((raw) => {
-      const rule = raw.trim().toLowerCase();
-      if (!rule) return false;
-      if (rule.startsWith(".")) return name === undefined || name.toLowerCase().endsWith(rule);
-      if (rule.endsWith("/*")) return type.toLowerCase().startsWith(rule.slice(0, -1));
-      return type.toLowerCase() === rule;
-    });
-  }
-
-  function accepts(target: Element, event: DragEvent): boolean {
-    const kind = dropKind(target);
-    const source = dragSource();
-    if (source) {
-      if (kind === "files") return false;
-      // Not onto itself, or into something it contains.
-      if (source === target || source.contains(target)) return false;
-      if (kind !== "page") {
-        try {
-          return source.matches(kind);
-        } catch {
-          return false;
-        }
-      }
-      return true;
-    }
-    if (kind !== "files" || !carriesFiles(event)) return false;
-    // While dragging, only types are known (and not in every browser): refuse only a clear mismatch.
-    const accept = acceptOf(target);
-    const items = Array.from(event.dataTransfer?.items ?? []).filter((item) => item.kind === "file");
-    return items.length === 0 || items.some((item) => !item.type || fits(accept, item.type));
-  }
-
-  /** The innermost drop target that accepts this drag. */
-  function dropTarget(event: DragEvent): HTMLElement | null {
-    let target = (event.target as Element).closest?.<HTMLElement>(DROP_TARGETS) ?? null;
-    while (target && !accepts(target, event)) target = target.parentElement?.closest<HTMLElement>(DROP_TARGETS) ?? null;
-    return target;
-  }
-
-  /** Files dropped from outside, minus folders and what `accept` refuses. */
-  function droppedFiles(target: Element, event: DragEvent): { files: File[]; refused: number } {
+  /** What a drag event carries, as a drop target judges it: files or not, and their types. */
+  function carried(event: DragEvent): Carried {
     const transfer = event.dataTransfer;
-    if (!transfer) return { files: [], refused: 0 };
-    const items = Array.from(transfer.items ?? []).filter((item) => item.kind === "file");
-    const all: File[] = [];
-    if (items.length) {
-      for (const item of items) {
-        // A dropped folder shows up as a file with no type and no size; skip it.
-        const entry = (item as DataTransferItem & { webkitGetAsEntry?: () => { isDirectory: boolean } | null }).webkitGetAsEntry?.();
-        if (entry?.isDirectory) continue;
-        const file = item.getAsFile();
-        if (file) all.push(file);
-      }
-    } else all.push(...Array.from(transfer.files ?? []));
-    const accept = acceptOf(target);
-    const files = all.filter((file) => fits(accept, file.type, file.name));
-    return { files, refused: all.length - files.length };
-  }
-
-  /** Is there anywhere on the page files may be dropped? Then a missed drop mustn't open the file. */
-  function hasFileTargets(): boolean {
-    fileTargets ??= document.querySelector('[data-yx-trigger^="drop:files"], [data-yx-drop-to]') !== null;
-    return fileTargets;
-  }
-
-  /** The file input a dropTo zone fills. */
-  function stagingInput(zone: Element): HTMLInputElement | null {
-    const selector = zone.getAttribute("data-yx-drop-to");
-    let input: Element | null = null;
-    try {
-      input = selector ? document.querySelector(selector) : null;
-    } catch {
-      // not a valid selector
-    }
-    return input instanceof HTMLInputElement && input.type === "file" ? input : null;
-  }
-
-  /** What a zone takes: its own accept, or (for dropTo) its input's. */
-  function acceptOf(target: Element): string | null {
-    if (!accepted.has(target)) accepted.set(target, target.getAttribute("accept") ?? stagingInput(target)?.getAttribute("accept") ?? null);
-    return accepted.get(target)!;
-  }
-
-  /** Show how many files a zone's input holds: data-yx-files, or none. */
-  function countStaged(input: HTMLInputElement): void {
-    for (const zone of Array.from(document.querySelectorAll("[data-yx-drop-to]"))) {
-      if (stagingInput(zone) !== input) continue;
-      const count = input.files?.length ?? 0;
-      if (count) zone.setAttribute("data-yx-files", String(count));
-      else zone.removeAttribute("data-yx-files");
-    }
-  }
-
-  /** Add dropped files to a dropTo zone's input (the same file twice counts once). */
-  function stage(zone: Element, files: File[]): void {
-    const input = stagingInput(zone);
-    if (!input) {
-      console.error(`[yerd] dropTo=${JSON.stringify(zone.getAttribute("data-yx-drop-to"))} isn't a file input on the page`);
-      return;
-    }
-    const transfer = new DataTransfer();
-    const seen = new Set<string>();
-    const add = (file: File) => {
-      const id = `${file.name}:${file.size}:${file.lastModified}`;
-      if (seen.has(id)) return;
-      seen.add(id);
-      transfer.items.add(file);
+    return {
+      files: Array.from(transfer?.types ?? []).includes("Files"),
+      types: Array.from(transfer?.items ?? []).filter((item) => item.kind === "file").map((item) => item.type),
     };
-    if (input.multiple) for (const file of Array.from(input.files ?? [])) add(file);
-    for (const file of input.multiple ? files : files.slice(0, 1)) add(file);
-    if (!input.multiple && files.length > 1) notify("Only one file goes here; kept the first.");
-    input.files = transfer.files;
-    // As if the user had picked them: listeners (and triggers) on the input see it.
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
-  document.addEventListener("change", (event) => {
-    const input = event.target;
-    if (input instanceof HTMLInputElement && input.type === "file") countStaged(input);
-  });
-  document.addEventListener("reset", (event) => {
-    // After the reset has cleared the inputs.
-    const form = event.target as HTMLFormElement;
-    setTimeout(() => {
-      for (const input of Array.from(form.querySelectorAll<HTMLInputElement>("input[type=file]"))) countStaged(input);
-    }, 0);
-  });
+  /** The files in a drop, minus folders. */
+  function filesOf(transfer: DataTransfer | null): File[] {
+    if (!transfer) return [];
+    const items = Array.from(transfer.items ?? []).filter((item) => item.kind === "file");
+    if (!items.length) return Array.from(transfer.files ?? []);
+    const files: File[] = [];
+    for (const item of items) {
+      // A dropped folder shows up as a file with no type and no size; skip it.
+      const entry = (item as DataTransferItem & { webkitGetAsEntry?: () => { isDirectory: boolean } | null }).webkitGetAsEntry?.();
+      if (entry?.isDirectory) continue;
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+    return files;
+  }
 
   document.addEventListener("dragstart", (event) => {
     endDrag();
     const source = (event.target as Element).closest?.<HTMLElement>("[draggable=true]");
     if (!source) return;
-    dragged = source;
+    drag.el = source;
     source.setAttribute("data-yx-dragging", "");
     if (event.dataTransfer) {
       // Firefox won't start a drag without data.
@@ -1486,60 +1135,23 @@ export function yerdRuntime(): void {
   // Fired on the source element, so a morph that removes it mid-drag can swallow it: drop cleans up too.
   document.addEventListener("dragend", endDrag);
 
+  // Before the chunk: a page that's waiting for it has drop targets, so a
+  // file let go anywhere else shouldn't open in the tab either.
   document.addEventListener("dragover", (event) => {
-    const target = dropTarget(event);
-    if (!target) {
-      setOver(null);
-      if (!dragSource() && carriesFiles(event) && hasFileTargets()) {
-        event.preventDefault();
-        if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
-      }
-      return;
-    }
-    // Allowing the drop is what makes the browser fire "drop" at all.
+    if (dnd) return;
+    const over = (event.target as Element).closest?.(DROP_TARGETS);
+    if (!over && (drag.el || !carried(event).files)) return;
     event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = dragSource() ? "move" : "copy";
-    setOver(target);
+    if (!over && event.dataTransfer) event.dataTransfer.dropEffect = "none";
   });
-
-  // Coming in from outside the window: a new drag (files from the desktop), with nothing remembered.
-  document.addEventListener("dragenter", (event) => {
-    if (!event.relatedTarget) forgetDrag();
-  });
-
-  document.addEventListener("dragleave", (event) => {
-    // Leaving the window altogether (to the desktop, another app).
-    if (!event.relatedTarget && (event.clientX <= 0 || event.clientY <= 0 || event.clientX >= innerWidth || event.clientY >= innerHeight)) {
-      setOver(null);
-      forgetDrag();
-    }
-  });
-
   document.addEventListener("drop", (event) => {
-    const target = dropTarget(event);
-    if (!target) {
-      // A missed file drop would navigate to the file: not while the page takes files somewhere.
-      if (!dragSource() && carriesFiles(event) && hasFileTargets()) event.preventDefault();
-      endDrag();
-      return;
-    }
+    if (dnd) return;
+    const target = event.target as Element;
+    const over = target.closest?.(DROP_TARGETS);
+    const what = carried(event);
+    if (!over && (drag.el || !what.files)) return;
     event.preventDefault();
-    setOver(null);
-    if (dragSource()) {
-      void runAction(target);
-      endDrag();
-      return;
-    }
-    const { files, refused } = droppedFiles(target, event);
-    endDrag();
-    if (refused && !files.length) {
-      notify("Those files can't be dropped here.");
-      return;
-    }
-    if (refused) notify(`${refused} file${refused === 1 ? "" : "s"} skipped: not a type this takes.`);
-    if (!files.length) return;
-    if (target.hasAttribute("data-yx-drop-to")) stage(target, files);
-    else void runAction(target, files);
+    if (over) heldDrops.push({ target, source: drag.el, carried: what, files: drag.el ? [] : filesOf(event.dataTransfer) });
   });
 
   /** Post an element's action (a newer run cancels an older one: typeahead), then apply the result like a form's. */
@@ -1705,50 +1317,6 @@ export function yerdRuntime(): void {
     if (strays.length) hoistStyles(strays);
   });
 
-  /** Put a persisted scope in its key's group (again, if it was pruned while off the page). */
-  function join(scope: Scope): void {
-    if (!scope.key) return;
-    if (!byKey.has(scope.key)) byKey.set(scope.key, new Set());
-    byKey.get(scope.key)!.add(scope);
-  }
-
-  function initLocals(found: Element[]): void {
-    // Saves still waiting go first: a scope arriving with the same key reads them.
-    saveAll();
-    for (const key of Array.from(byKey.keys())) prune(key);
-    collect(localWatch.takeRecords());
-    const live: Scope[] = [];
-    for (const el of found) {
-      let scope = scopes.get(el);
-      if (!scope) {
-        let state: Record<string, unknown>;
-        try {
-          state = JSON.parse(el.getAttribute("data-yx-local")!) as Record<string, unknown>;
-        } catch {
-          continue;
-        }
-        scope = { el, state, name: el.getAttribute("data-yx-as") || "s" };
-        const key = el.getAttribute("data-yx-persist");
-        if (key) {
-          scope.key = key;
-          scope.storage = storageFor(el);
-          loadSaved(scope);
-        }
-        scopes.set(el, scope);
-        // From now on, only what changes inside it needs looking at.
-        localWatch.observe(el, { subtree: true, childList: true, attributes: true });
-        touched.add(el);
-      }
-      join(scope);
-      live.push(scope);
-    }
-    // Wire handlers on new elements (a morph may have added some) and
-    // re-apply: a morph puts the server's initial values back.
-    wireTouched();
-    for (const scope of live) applyBindings(scope);
-  }
-  onPage("yerd-local[data-yx-local]", initLocals);
-
   // ── server clock ──
   // `sync` animations and cues are timed on the server's clock. How far this
   // page's clock is from it is measured against /_yerd/clock: a few round
@@ -1867,193 +1435,110 @@ export function yerdRuntime(): void {
     };
   });
 
-  // Built in: sync. Infinite CSS animations on (and in) the element are lined
-  // up as if they'd all started at the server's time zero, so every screen
-  // shows the same frame. Done when it connects, when an animation starts
-  // inside it (a class change), and when the clock is re-measured.
-  const syncing = new Set<Element>();
-  function align(el: Element): void {
-    if (typeof el.getAnimations !== "function") return;
-    const now = serverNow();
-    for (const animation of el.getAnimations({ subtree: true })) {
-      const timing = animation.effect?.getComputedTiming();
-      const duration = Number(timing?.duration);
-      if (!timing || timing.iterations !== Infinity || !(duration > 0)) continue;
-      const delay = Number(timing.delay) || 0;
-      // Two iterations, so an `alternate` one runs the same way everywhere too.
-      const period = 2 * duration;
-      animation.currentTime = delay + ((((now - delay) % period) + period) % period);
+  // ── chunks ──
+  // Each is loaded once, when the page first has an element that needs it:
+  // at the first scan, after an apply, boost or refresh (yx:applied), or when
+  // such an element is added some other way (onMutations). Imported from
+  // beside the core (`base`), where <Scripts />'s modulepreload hints have
+  // usually fetched it already. Inline ones (the whole runtime in one script,
+  // for tests) start with the core instead.
+  const chunkHooks: RuntimeHooks = {
+    onPage, attribute, notify, runAction, serverNow, clockReady, stream, reconcile,
+    drag, endDrag, carried, filesOf, dropTargets: DROP_TARGETS,
+  };
+  const triggers: Array<[ChunkName, string]> = [["cues", "[data-yx-sync], [data-yx-cue]"], ["dnd", DROP_TARGETS], ["local", "yerd-local[data-yx-local]"]];
+  const anyTrigger = triggers.map(([, selector]) => selector).join(", ");
+  const loading = new Set<ChunkName>();
+  const ready = new Set<ChunkName>();
+
+  function start(name: ChunkName, chunk: Chunk): void {
+    let own: ChunkApi = {};
+    try {
+      own = chunk(chunkHooks) ?? {};
+    } catch (error) {
+      console.error(`[yerd] the runtime's ${name} chunk failed to start:`, error);
     }
-  }
-  const aligning = new Set<Element>();
-  document.addEventListener("animationstart", (event) => {
-    const host = (event.target as Element).closest?.("[data-yx-sync]");
-    if (!host || !syncing.has(host) || aligning.has(host)) return;
-    aligning.add(host);
-    requestAnimationFrame(() => {
-      aligning.delete(host);
-      align(host);
-    });
-  });
-  document.addEventListener("yx:clock", () => {
-    for (const el of syncing) align(el);
-  });
-  attribute("data-yx-sync", (el) => {
-    syncing.add(el);
-    align(el);
-    void clockReady().then(() => {
-      if (syncing.has(el)) align(el);
-    });
-    return () => void syncing.delete(el);
-  });
-
-  // Built in: cue. Elements naming cues listen to their rooms through one
-  // EventSource on /_yerd/cues (the public rooms), and elements with
-  // data-yx-cue-from through the app's own stream route there (rooms behind
-  // its guards); each source is open while an element needs it. Each cue
-  // says when it plays on the server's clock: it's played then, or straight
-  // away and partway through if that's already passed (a late arrival, a
-  // slow link).
-  type CueMessage = { id: string; name: string; room: string; at: number; lasts?: number; data?: unknown };
-  const cueing = new Set<Element>();
-  // Cue name -> the elements naming it; rebuilt when an element or its cues change.
-  let cueIndex: Map<string, Element[]> | undefined;
-  // Source + cue id -> when it's over (server time): a reconnect replays what's still running, and each plays once.
-  const heard = new Map<string, number>();
-  const cueRuns = new WeakMap<Element, number>();
-  const cueSources = new Map<string, Stream>();
-  let cueQueued = false;
-  const PUBLIC_CUES = "/_yerd/cues?";
-  const roomOf = (el: Element): string => el.getAttribute("data-yx-cue-room") || "main";
-  const fromOf = (el: Element): string | null => el.getAttribute("data-yx-cue-from") || null;
-
-  /** Whether a cue that came from `url` is for `el` (which names it). */
-  function cueFor(el: Element, url: string, cue: CueMessage): boolean {
-    const from = fromOf(el);
-    // Public stream: the element's room. Its own route: whatever the route sends, narrowed by cueRoom if it has one.
-    if (!from) return url.startsWith(PUBLIC_CUES) && roomOf(el) === cue.room;
-    return from === url && (!el.hasAttribute("data-yx-cue-room") || roomOf(el) === cue.room);
-  }
-
-  function namedBy(name: string): Element[] {
-    if (!cueIndex) {
-      cueIndex = new Map();
-      for (const el of cueing) {
-        for (const cueName of new Set((el.getAttribute("data-yx-cue") ?? "").split(/\s+/))) {
-          if (!cueName) continue;
-          if (!cueIndex.has(cueName)) cueIndex.set(cueName, []);
-          cueIndex.get(cueName)!.push(el);
-        }
-      }
-    }
-    return cueIndex.get(name) ?? [];
-  }
-
-  function playCue(cue: CueMessage, url: string): void {
-    const behind = serverNow() - cue.at;
-    // Within a frame is on time (a timer firing a little late): no seeking for that.
-    const late = behind < 16 ? 0 : behind;
-    if (cue.lasts !== undefined && late >= cue.lasts) return;
-    const playing: Array<{ el: Element; before: Set<Animation> | undefined }> = [];
-    for (const el of namedBy(cue.name)) {
-      if (!el.isConnected || !cueFor(el, url, cue)) continue;
-      const detail = { name: cue.name, room: cue.room, data: cue.data, at: cue.at, late };
-      // preventDefault(): the listener plays it its own way.
-      if (!el.dispatchEvent(new CustomEvent("yx:cue", { bubbles: true, cancelable: true, detail }))) continue;
-      const before = typeof el.getAnimations === "function" ? new Set(el.getAnimations({ subtree: true })) : undefined;
-      el.removeAttribute("data-yx-cued");
-      playing.push({ el, before });
-    }
-    if (!playing.length) return;
-    // Flush styles once between taking the attribute off and putting it back,
-    // so an animation keyed off it starts over (on every element at once).
-    void (playing[0]!.el as HTMLElement).offsetWidth;
-    for (const { el, before } of playing) {
-      el.setAttribute("data-yx-cued", cue.name);
-      if (late > 0 && before) {
-        for (const animation of el.getAnimations({ subtree: true })) {
-          if (!before.has(animation)) animation.currentTime = (Number(animation.currentTime) || 0) + late;
-        }
-      }
-      if (el instanceof HTMLMediaElement) {
-        try {
-          el.currentTime = late / 1000;
-        } catch {
-          // Not seekable yet: from the start.
-        }
-        // Browsers refuse sound until the visitor has interacted with the page.
-        void el.play()?.catch(() => {});
-      }
-      const run = (cueRuns.get(el) ?? 0) + 1;
-      cueRuns.set(el, run);
-      if (cue.lasts !== undefined) {
-        setTimeout(() => {
-          if (cueRuns.get(el) === run) el.removeAttribute("data-yx-cued");
-        }, cue.lasts - late);
-      }
+    ready.add(name);
+    if (name === "dnd") {
+      dnd = own;
+      for (const held of heldDrops.splice(0)) own.drop?.(held);
+    } else if (name === "local") {
+      stopHolding();
+      own.replay?.(heldInput.splice(0));
     }
   }
 
-  function hear(cue: CueMessage, url: string): void {
-    if (!cue || typeof cue.id !== "string" || typeof cue.name !== "string" || typeof cue.room !== "string" || typeof cue.at !== "number") return;
-    const key = url + "\n" + cue.id;
-    if (heard.has(key)) return;
-    heard.set(key, cue.at + (cue.lasts ?? 0));
-    if (heard.size > 256) {
-      const old = serverNow() - 60000;
-      for (const [id, end] of heard) if (end < old) heard.delete(id);
-    }
-    void clockReady().then(() => {
-      const wait = cue.at - serverNow();
-      if (wait > 0) setTimeout(() => playCue(cue, url), wait);
-      else playCue(cue, url);
-    });
-  }
-
-  function connectCues(): void {
-    cueQueued = false;
-    const urls = new Set<string>();
-    const rooms = new Set<string>();
-    for (const el of cueing) {
-      const from = fromOf(el);
-      if (from) urls.add(from);
-      else rooms.add(roomOf(el));
-    }
-    if (rooms.size) urls.add(PUBLIC_CUES + Array.from(rooms).sort().map((room) => "room=" + encodeURIComponent(room)).join("&"));
-    if (urls.size) void clockReady();
-    reconcile(cueSources, urls, (url) =>
-      stream(url, (event) => {
-        try {
-          hear(JSON.parse(event.data) as CueMessage, url);
-        } catch {
-          // Not a cue.
-        }
-      }),
+  function need(name: ChunkName, found: Element[]): void {
+    if (ready.has(name)) return;
+    if (name === "local") holdInput(found);
+    if (loading.has(name) || !importChunk) return;
+    loading.add(name);
+    importChunk(new URL(`runtime-${name}.js`, base).href).then(
+      (module) => start(name, module.default),
+      (error: unknown) => {
+        // Tried again when the page next changes.
+        loading.delete(name);
+        console.error(`[yerd] couldn't load the runtime's ${name} chunk`, error);
+      },
     );
   }
-  function queueCues(): void {
-    cueIndex = undefined;
-    if (cueQueued) return;
-    cueQueued = true;
-    queueMicrotask(connectCues);
+
+  /** The chunks elements added outside an apply (app code, yerd.page.morph) need. */
+  function wantChunks(root: Element): void {
+    // Most additions need none: one query says so.
+    if (ready.size === triggers.length || !(root.matches(anyTrigger) || root.querySelector(anyTrigger))) return;
+    for (const [name, selector] of triggers) {
+      if (ready.has(name)) continue;
+      const found = Array.from(root.querySelectorAll(selector));
+      if (root.matches(selector)) found.unshift(root);
+      if (found.length) need(name, found);
+    }
   }
-  attribute("data-yx-cue", (el) => {
-    cueing.add(el);
-    queueCues();
-    return {
-      update: queueCues,
-      disconnect: () => {
-        cueing.delete(el);
-        queueCues();
-      },
-    };
-  });
-  // A room or source changed on its own (a morph): listen to the new one.
-  for (const name of ["data-yx-cue-room", "data-yx-cue-from"]) {
-    attribute(name, () => {
-      queueCues();
-      return { update: queueCues, disconnect: queueCues };
+
+  // <Local> input while its chunk loads: the event types the scopes'
+  // handlers listen for are watched (capturing, on the document, so nothing
+  // on the way can stop them first), and each event inside a scope is kept,
+  // with what its field held then, for the chunk to replay once it has wired
+  // the scopes. Their bindings wait for it too: until a handler runs, the
+  // server's values are the right ones.
+  const heldInput: HeldInput[] = [];
+  const holding = new Set<string>();
+  function hold(event: Event): void {
+    if (!(event.target as Element).closest?.("yerd-local")) return;
+    const field = event.target as HTMLInputElement;
+    heldInput.push({
+      event,
+      value: typeof field.value === "string" ? field.value : undefined,
+      checked: typeof field.checked === "boolean" ? field.checked : undefined,
     });
+  }
+  function holdInput(scopes: Element[]): void {
+    for (const scope of scopes) {
+      for (const el of [scope, ...Array.from(scope.querySelectorAll("*"))]) {
+        for (const { name } of Array.from(el.attributes)) {
+          const type = name.startsWith("data-yx-on-") ? name.slice(11) : "";
+          if (!type || holding.has(type)) continue;
+          holding.add(type);
+          document.addEventListener(type, hold, true);
+        }
+      }
+    }
+  }
+  function stopHolding(): void {
+    for (const type of holding) document.removeEventListener(type, hold, true);
+    holding.clear();
+  }
+
+  for (const [name, selector] of triggers) {
+    const chunk = inline?.[name];
+    if (chunk) {
+      loading.add(name);
+      start(name, chunk);
+    } else {
+      onPage(selector, (found) => {
+        if (found.length) need(name, found);
+      });
+    }
   }
 
   // Everything that follows the page is registered: run it on this page.
@@ -2062,21 +1547,70 @@ export function yerdRuntime(): void {
   else scanPage();
 }
 
-let source: string | undefined;
+/** The runtime's chunks, by name; each is served at /_yerd/runtime-<name>.js. */
+const CHUNKS: Record<ChunkName, Chunk> = { cues: yerdCues, dnd: yerdDnd, local: yerdLocal };
+
+/** The chunks' names. */
+export const RUNTIME_CHUNKS = Object.keys(CHUNKS) as ChunkName[];
+
+/** The core's and each chunk's function, as source. */
+export interface RuntimePieces {
+  core: string;
+  chunks: Record<ChunkName, string>;
+}
+
+let pieces: RuntimePieces | undefined;
+const scripts = new Map<string, string>();
 
 /**
- * The runtime as a script: the minified build when the package was built
- * with one (`npm run build`), otherwise the function's source in an IIFE.
- * The source must be self-contained, so the runtime has to be compiled at
- * ES2017 or later: older targets turn `async` into calls to a helper defined
- * outside the function, which wouldn't exist in the browser.
+ * A runtime function's source. It must be self-contained, so the runtime has
+ * to be compiled at ES2017 or later: older targets turn `async` into calls to
+ * a helper defined outside the function, which wouldn't exist in the browser.
  */
-export function runtimeSource(): string {
-  if (source) return source;
-  if (minified) return (source = minified);
-  const fn = yerdRuntime.toString();
-  if (/\b__(async|awaiter|generator)\b/.test(fn)) {
+function selfContained(fn: (...args: never[]) => unknown): string {
+  const text = fn.toString();
+  if (/\b__(async|awaiter|generator)\b/.test(text)) {
     throw new Error("yerd's client runtime was compiled below ES2017 (async was lowered to a helper); compile server code at ES2022");
   }
-  return (source = `(${fn})();\n`);
+  return text;
+}
+
+/**
+ * @internal The functions the runtime is made of, as source: the minified
+ * build when the package was built with one (`npm run build`), otherwise
+ * each function's own source.
+ */
+export function runtimePieces(): RuntimePieces {
+  pieces ??= minified ?? {
+    core: selfContained(yerdRuntime),
+    chunks: { cues: selfContained(yerdCues), dnd: selfContained(yerdDnd), local: selfContained(yerdLocal) },
+  };
+  return pieces;
+}
+
+/**
+ * The runtime's core as a script. `chunks: "split"` is what the server
+ * serves at /_yerd/runtime.js: a module that loads each chunk from beside
+ * itself (import.meta.url) when the page needs it. `chunks: "inline"` (the
+ * default) is the whole runtime in one classic script, every chunk started
+ * with the core, for running it without a server (`new Function(source)()`
+ * in tests); it has no import.meta to look for chunks with.
+ */
+export function runtimeSource({ chunks = "inline" }: { chunks?: "inline" | "split" } = {}): string {
+  let script = scripts.get(chunks);
+  if (script === undefined) {
+    const { core, chunks: parts } = runtimePieces();
+    script =
+      chunks === "split"
+        ? `(${core})(new URL(".", import.meta.url).href, undefined, (url) => import(url));\n`
+        : `(${core})("", { ${RUNTIME_CHUNKS.map((name) => `${name}: ${parts[name]}`).join(", ")} });\n`;
+    scripts.set(chunks, script);
+  }
+  return script;
+}
+
+/** A chunk as the module the core imports (`export default` its function), or undefined when there's no chunk by that name. */
+export function chunkSource(name: string): string | undefined {
+  if (!Object.hasOwn(CHUNKS, name)) return undefined;
+  return `export default ${runtimePieces().chunks[name as ChunkName]};\n`;
 }

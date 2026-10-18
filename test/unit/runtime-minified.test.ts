@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { runtimeSource } from "../../src/client/runtime.js";
-import { minifyRuntime } from "../../scripts/minify-runtime.js";
+import { runtimePieces, runtimeSource } from "../../src/client/runtime.js";
+import { minifyPieces, minifyRuntime } from "../../scripts/minify-runtime.js";
 import type { YerdClient as Yerd } from "../../src/attributes/attribute.js";
 
 // What `npm run build` ships: the same runtime, minified at build time.
@@ -61,5 +61,19 @@ describe("the minified runtime", () => {
     expect(document.querySelector("b")!.textContent).toBe("HI");
     document.querySelector("button")!.click();
     expect(document.querySelector("i")!.textContent).toBe("1");
+  });
+
+  it("minifies the core and each chunk on its own, each still one self-contained function", async () => {
+    const pieces = runtimePieces();
+    const small = await minifyPieces(pieces);
+    expect(Object.keys(small.chunks).sort()).toEqual(["cues", "dnd", "local"]);
+    for (const [name, fn] of [["core", small.core], ...Object.entries(small.chunks)] as Array<[string, string]>) {
+      expect(fn, name).toMatch(/^(async )?function\b/);
+      expect(typeof new Function(`return (${fn});`)(), name).toBe("function");
+    }
+    expect(small.core.length).toBeLessThan(pieces.core.length * 0.75);
+    // What the import() and the chunk modules hang on survives minifying.
+    expect(small.core).toContain("runtime-");
+    expect(small.chunks.local).toContain("yerd-local");
   });
 });
