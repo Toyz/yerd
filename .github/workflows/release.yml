@@ -38,4 +38,5 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npx playwright test
-      - run: npm publish --access public
+      # Verbose: on failure the OIDC exchange says why (npm otherwise just reports E404).
+      - run: npm publish --access public --loglevel verbose
