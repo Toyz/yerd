@@ -37,7 +37,7 @@ export { action, bind, ActionForm, type Action, type BoundAction } from "./actio
 export { assetUrl, useManifest, resetManifest, Stylesheet } from "./assets.js";
 export { mimeType, type StaticOptions } from "./server/static.js";
 export type { FormFiles } from "./server/body.js";
-export { Region, Scripts, RUNTIME_PATH, type RegionProps } from "./actions/components.js";
+export { Form, Region, Scripts, RUNTIME_PATH, type FormProps, type RegionProps } from "./actions/components.js";
 export { raw, escapeHtml, json, type RawHtml } from "./render/escape.js";
 export { Dynamic, type DynamicProps } from "./render/dynamic.js";
 export { Local, not, type LocalProps } from "./render/local.js";

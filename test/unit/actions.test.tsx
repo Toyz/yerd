@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  ActionForm, Region, Scripts, action, bind, get, is, length, redirect, route, trim, yerd,
+  ActionForm, Form, Region, Scripts, action, get, is, length, redirect, route, trim, yerd,
   type Action, type RunningServer,
 } from "@toyz/yerd";
 
@@ -16,9 +16,9 @@ function List({ remove }: { remove: Action<{ index: number }> }) {
       {items.map((title, index) => (
         <li key={title}>
           {title}
-          <form action={bind(remove, { index })}>
+          <Form action={remove} args={{ index }} class="inline">
             <button>x</button>
-          </form>
+          </Form>
         </li>
       ))}
     </Region>
@@ -96,7 +96,7 @@ describe("action forms", () => {
     const r = await post({ _yx: add!, title: "eggs" }, { yx: "1" });
     expect(r.status).toBe(200);
     const html = await r.text();
-    expect(html.startsWith('<ul id="items" data-yx-region><li data-key="eggs">eggs<form action="/items"')).toBe(true);
+    expect(html.startsWith('<ul id="items" data-yx-region><li data-key="eggs">eggs<form class="inline" action="/items" method="post" data-yx>')).toBe(true);
   });
 
   it("passes bound args, signed; an action returning nothing is a 204 for scripts", async () => {

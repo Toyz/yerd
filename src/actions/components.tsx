@@ -1,5 +1,7 @@
 import { jsx, type Child } from "../jsx/jsx-runtime.js";
+import type { FormAttributes } from "../jsx/elements.js";
 import { raw } from "../render/escape.js";
+import { bind, type Action } from "./action.js";
 
 /** Where yerd serves its client runtime. */
 export const RUNTIME_PATH = "/_yerd/runtime.js";
@@ -33,4 +35,35 @@ export function Region({ id, as = "div", ...rest }: RegionProps) {
  */
 export function Scripts({ auto = false }: { auto?: boolean } = {}) {
   return raw(`<script type="module" src="${RUNTIME_PATH}"${auto ? " data-yx-auto" : ""}></script>`);
+}
+
+/**
+ * Props for <Form>: the action, the arguments it's called with (required
+ * unless the action takes none, and typed from it), and any other `<form>`
+ * attribute.
+ */
+export type FormProps<A> = Omit<FormAttributes, "action" | "method"> & {
+  /** The @action method to call. */
+  action: Action<A>;
+  /** The form's content. */
+  children?: Child;
+} & ({} extends A ? { /** Arguments for the action, signed into the form. */ args?: NoInfer<A> } : { /** Arguments for the action, signed into the form. */ args: NoInfer<A> });
+
+/**
+ * A form that calls an action with arguments. The arguments are signed into
+ * the form's token, so the browser can't change which item it acts on, and
+ * typed from the action: a wrong or missing field doesn't compile. Renders a
+ * plain `<form>` (a POST that works with JavaScript off, upgraded to fetch by
+ * the runtime); the same as `<form action={bind(action, args)}>`.
+ *
+ * ```tsx
+ * @action remove({ id }: { id: string }) { ... }
+ *
+ * <Form action={this.remove} args={{ id: todo.id }}>
+ *   <button>Delete</button>
+ * </Form>
+ * ```
+ */
+export function Form<A>({ action, args, ...rest }: FormProps<A>) {
+  return jsx("form", { ...rest, action: bind(action, (args ?? {}) as A) });
 }
