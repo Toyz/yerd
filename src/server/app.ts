@@ -136,6 +136,25 @@ export interface ErrorPageProps {
   status: number;
   /** A message safe to show: the HttpError's message when it's exposed, else the status text. */
   message: string;
+  /**
+   * What was thrown: an HttpError (a 404 for an unknown path is one), or
+   * whatever a handler threw. For logging, or for showing details in
+   * development; `message` is what's safe to show everyone, since a crash's
+   * own message and stack can leak internals.
+   *
+   * ```tsx
+   * function ErrorPage({ status, message, error }: ErrorPageProps) {
+   *   return (
+   *     <main>
+   *       <h1>{status}</h1>
+   *       <p>{message}</p>
+   *       {process.env.NODE_ENV !== "production" && error instanceof Error ? <pre>{error.stack}</pre> : null}
+   *     </main>
+   *   );
+   * }
+   * ```
+   */
+  error: unknown;
 }
 
 type Next = (error?: unknown) => void;
@@ -436,7 +455,7 @@ export class YerdApp {
     const message =
       error instanceof HttpError && error.expose ? error.message : STATUS_TEXT[plain.status] ?? `HTTP ${plain.status}`;
     try {
-      const page = await coerce(jsx(this.#errorPage, { status: plain.status, message }), {
+      const page = await coerce(jsx(this.#errorPage, { status: plain.status, message, error } satisfies ErrorPageProps), {
         layouts: this.#layouts,
         meta: { ...meta, title: message },
       });

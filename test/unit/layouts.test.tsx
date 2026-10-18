@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   BootError, HttpError, accepts, createGuard, get, group, layout, noLayout, param, res, route, setMeta, yerd,
   type ErrorPageProps, type LayoutProps, type RunningServer,
@@ -53,13 +53,25 @@ class Explode {
   }
 }
 
-function ErrorPage({ status, message }: ErrorPageProps) {
+class DatabaseDown extends Error {}
+
+@route("/crash")
+class Crash {
+  @get boom(): never {
+    throw new DatabaseDown("password=hunter2 rejected");
+  }
+}
+
+const shown: unknown[] = [];
+
+function ErrorPage({ status, message, error }: ErrorPageProps) {
+  shown.push(error);
   return <div class="error"><b>{status}</b> {message}</div>;
 }
 
 let server: RunningServer;
 beforeAll(async () => {
-  server = await yerd({ routes: [Dashboard, AdminUser, Fragment, Explode], services: [], handleSignals: false })
+  server = await yerd({ routes: [Dashboard, AdminUser, Fragment, Explode, Crash], services: [], handleSignals: false })
     .layout(Root)
     .errorPage(ErrorPage)
     .listen(0, "127.0.0.1");
@@ -95,6 +107,21 @@ describe("layouts", () => {
     const missing = await page("/nope");
     expect(missing.status).toBe(404);
     expect(await missing.text()).toContain("<b>404</b> Not Found");
+  });
+
+  it("hands the error page what was thrown, while its message stays safe", async () => {
+    shown.length = 0;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await page("/crash");
+    expect(r.status).toBe(500);
+    const html = await r.text();
+    expect(html).toContain("<b>500</b> Internal Server Error");
+    expect(html).not.toContain("hunter2");
+    expect(shown).toHaveLength(1);
+    expect(shown[0]).toBeInstanceOf(DatabaseDown);
+    await page("/explode");
+    expect(shown[1]).toBeInstanceOf(HttpError);
+    expect((shown[1] as HttpError).status).toBe(418);
   });
 
   it("keeps plain errors for API clients", async () => {
