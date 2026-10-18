@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Local, Region, Styles, action, css, get, keyframes, not, prerender, renderToString, route, yerd } from "@toyz/yerd";
+import { Local, Region, Styles, action, css, get, keyframes, not, prerender, renderToStream, renderToString, route, yerd } from "@toyz/yerd";
 import { cssBundleText, resetCssBundle, useCssBundle } from "../../src/render/css.js";
 
 afterEach(() => resetCssBundle());
@@ -312,6 +312,40 @@ describe("rules in <head> with <Styles />", () => {
       </Page>,
     );
     expect(styles(html.slice(0, html.indexOf("</head>"))).filter((n) => n !== "global")).toEqual([late]);
+  });
+
+  it("keep first-use order with many classes, and land in <head> before the flush that sends it", async () => {
+    const many = Array.from({ length: 50 }, (_, i) => css`--head-many: ${i};`);
+    async function Slow() {
+      await new Promise((r) => setTimeout(r, 1));
+      return <p>slow</p>;
+    }
+    const chunks: string[] = [];
+    for await (const chunk of renderToStream(
+      <Page>
+        {many.map((c) => <p class={[c, badge]}>x</p>)}
+        <Slow />
+      </Page>,
+    )) chunks.push(chunk);
+    const first = chunks[0]!;
+    const head = first.slice(0, first.indexOf("</head>"));
+    expect(styles(head).filter((n) => n !== "global")).toEqual([many[0], pop, badge, ...many.slice(1)]);
+    expect(first.slice(first.indexOf("<body>"))).not.toContain("<style");
+  });
+
+  it("go to the latest <Styles />, the earlier one keeping what it had", async () => {
+    const a = css`--head-two: 1;`;
+    const b = css`--head-two: 2;`;
+    const html = await renderToString(
+      <div>
+        <Styles />
+        <i class={a} />
+        <Styles />
+        <i class={b} />
+      </div>,
+    );
+    const plain = html.replace(/<style data-yx-css="global">[^]*?<\/style>/g, "").replace(/<style data-yx-css="([^"]+)">[^]*?<\/style>/g, "<$1>");
+    expect(plain).toBe(`<div><${a}><i class="${a}"></i><${b}><i class="${b}"></i></div>`);
   });
 
   it("fall back to inline once the head has been sent (an async component flushed it)", async () => {

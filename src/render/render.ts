@@ -80,6 +80,8 @@ interface State {
    * the head has been flushed.
    */
   cssAnchor: number | undefined;
+  /** Rules on their way to cssAnchor: spliced in once, when the buffer is flushed or the render ends. */
+  cssHead: string;
   /** Inside a <select>, where the parser drops <style>: rules wait here for it to close. */
   cssHeld: Set<string> | undefined;
   /** Flushed chunks waiting for the stream's consumer. */
@@ -103,8 +105,17 @@ function isIterable(value: unknown): value is Iterable<Child> {
   return typeof value === "object" && value !== null && typeof (value as Iterable<unknown>)[Symbol.iterator] === "function";
 }
 
+/** Put the rules collected for <head> in at <Styles />, in one splice. */
+function placeHeadRules(state: State): void {
+  if (!state.cssHead) return;
+  const at = state.cssAnchor!;
+  state.buffer = state.buffer.slice(0, at) + state.cssHead + state.buffer.slice(at);
+  state.cssHead = "";
+}
+
 /** Hand the buffer to the consumer as a chunk (we're about to wait). */
 function flush(state: State): void {
+  placeHeadRules(state);
   if (!state.buffer) return;
   state.chunks.push(state.buffer);
   state.buffer = "";
@@ -162,6 +173,8 @@ function renderNode(node: YerdNode, state: State): Step {
     if (type === Fragment) return renderChild(props.children, state);
     if (type === Dynamic) return renderDynamic(props as unknown as DynamicProps, state);
     if (type === Styles) {
+      // A second <Styles /> takes over: the first one's rules go in first.
+      placeHeadRules(state);
       write(state, (Styles() as RawHtml).html);
       // Rules this page uses go here from now on, while the head is still in the buffer.
       if (state.dynamic !== "only" || state.insideDynamic > 0) state.cssAnchor = state.buffer.length;
@@ -284,13 +297,12 @@ function writeClassStyles(props: Record<string, unknown>, state: State): void {
 /** Rules into <head> at <Styles /> while it's still in the buffer, else inline here. */
 function writeStyles(state: State, html: string): void {
   if (!html) return;
-  const at = state.cssAnchor;
-  if (at === undefined) {
+  if (state.cssAnchor === undefined) {
     write(state, html);
     return;
   }
-  state.buffer = state.buffer.slice(0, at) + html + state.buffer.slice(at);
-  state.cssAnchor = at + html.length;
+  // Splicing each one in would copy the whole buffer per class.
+  state.cssHead += html;
 }
 
 /** An @action, a lambda calling one, or bind(...) of one. */
@@ -489,6 +501,7 @@ export async function* renderToStream(child: Child, options: RenderOptions = {})
     insideLocal: 0,
     cssSent: new Set(),
     cssAnchor: undefined,
+    cssHead: "",
     cssHeld: undefined,
     chunks: [],
     notify: undefined,
@@ -501,6 +514,7 @@ export async function* renderToStream(child: Child, options: RenderOptions = {})
   }
   if (!step) {
     // Synchronous all the way: one chunk.
+    placeHeadRules(state);
     if (state.buffer) yield state.buffer;
     return;
   }
@@ -523,6 +537,7 @@ export async function* renderToStream(child: Child, options: RenderOptions = {})
     await new Promise<void>((resolve) => (state.notify = resolve));
     state.notify = undefined;
   }
+  placeHeadRules(state);
   if (state.buffer) yield state.buffer;
 }
 
