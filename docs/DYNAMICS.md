@@ -192,6 +192,17 @@ Two layers, both on by default:
   (they're built for nobody); they rely on the signature and the cross-site
   check. An expired or foreign token is a 403 asking the user to reload.
 
+A session gets its nonce when it's first written (anything set, a flash, a
+sign-in), so the action that starts it answers with bound forms. When a
+scripted action starts the visitor's session, or rotates its nonce (signing
+in, `clear()`), its response carries `yx-rebind: 1`: the runtime fetches the
+page again in the background and takes just its tokens, swapping each one on
+the page for the fresh token with the same action and arguments, and changing
+nothing else (what the action just showed stays). The page's other forms are
+bound to the new session before the next click. An action that redirects
+(`yx-location`) or a plain form post gets a whole new page anyway, so neither
+carries the header.
+
 ---
 
 ## Tier 1.5: custom attributes and prefetch

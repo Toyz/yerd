@@ -1,10 +1,10 @@
 # Security
 
-This page collects what yerd does to keep an app safe by default, what each protection does and doesn't cover, and the few things that stay your job. Most of it needs no code. The checklist at the end is the short version.
+What yerd does to keep an app safe by default, what each protection covers, and what stays your job. The [checklist](#checklist) at the end is the short version.
 
 ## Secrets
 
-Action tokens are signed and cookie sessions are sealed with the app secret. Set it in production with `YERD_SECRET`, at least 32 bytes:
+Action tokens are signed and cookie sessions sealed with the app secret. Set `YERD_SECRET` in production, at least 32 bytes:
 
 ```sh
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
@@ -15,27 +15,29 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'
 YERD_SECRET="new-secret-at-least-32-bytes-long....,old-secret-at-least-32-bytes-long...."
 ```
 
-New tokens and sessions use the first secret; any listed secret is accepted, so open forms and existing sessions keep working through a rotation. `yerd({ secret })` takes a string or a list and wins over the variable. A secret shorter than 32 bytes stops the app from booting.
+- New tokens and sessions use the first secret; any listed secret is accepted, so a rotation breaks nothing.
+- `yerd({ secret })` takes a string or a list and wins over the variable.
+- A secret shorter than 32 bytes stops the app from booting.
 
 Without a secret, yerd makes a random one:
 
 | `NODE_ENV` | Without `YERD_SECRET` |
 | --- | --- |
-| unset or `development` | a random secret saved to `node_modules/.cache/yerd/secret` and reused, so restarting the dev server keeps you signed in |
-| `production` | a random secret per process, with a warning at boot: every restart signs everyone out and breaks open forms, and two instances reject each other's cookies |
-| anything else (`test`) | a random secret per process, no warning |
+| unset or `development` | saved to `node_modules/.cache/yerd/secret` and reused, so dev restarts keep you signed in |
+| `production` | one per process, with a boot warning: every restart signs everyone out and breaks open forms, and instances reject each other's cookies |
+| anything else (`test`) | one per process, no warning |
 
-Built servers (`vite build`) run with `NODE_ENV=production` unless you set it, so the warning shows up where it matters.
+Built servers run with `NODE_ENV=production` unless you set it.
 
 ## Cross-site requests
 
-Every POST, PUT, PATCH and DELETE is checked before any guard, handler or action runs. A browser request from another site is refused with a 403:
+Every POST, PUT, PATCH and DELETE from another site is refused with a 403 before any guard, handler or action runs. In order:
 
-1. An `Origin` listed in `trustedOrigins` passes.
-2. `Sec-Fetch-Site: cross-site` or `same-site` is refused; `same-origin` or `none` passes. Modern browsers send this header on every request.
-3. `Origin: null` (a sandboxed iframe, some redirects) is refused.
-4. Otherwise `Origin`, or failing that `Referer`, must match the `Host` (or `X-Forwarded-Host` with `trustProxy`).
-5. A request with none of these headers passes. It can't be a browser carrying a victim's cookies: curl, server-to-server calls and webhooks look like this.
+1. An `Origin` in `trustedOrigins` passes.
+2. `Sec-Fetch-Site: cross-site` or `same-site` is refused; `same-origin` or `none` passes.
+3. `Origin: null` (sandboxed iframes, some redirects) is refused.
+4. Otherwise `Origin`, or else `Referer`, must match the `Host` (or `X-Forwarded-Host` with `trustProxy`).
+5. A request with none of these headers passes: it can't be a browser carrying a victim's cookies (curl, webhooks, server-to-server).
 
 ```ts
 import { yerd } from "@toyz/yerd";
@@ -47,31 +49,30 @@ export const app = yerd({
 });
 ```
 
-This check is the main CSRF defense, for every unsafe request, with or without actions. [Action tokens](#action-tokens) add to it, but a form rendered for a visitor without a session carries a token that isn't tied to anyone, so for those visitors the check (and `SameSite` cookies) is what stops another site posting it. With `csrf: false`, plain POST handlers, actions posted by visitors without a session (a login form: login CSRF) and prerendered tokens are open to cross-site posts; an action posted for a visitor with a session still needs a token bound to that session, which another site can't get. Only turn it off when something in front of the app does the same job.
+- This is the main CSRF defense. For visitors without a session (whose tokens aren't bound to anyone) it and `SameSite` cookies are what stop another site posting a form.
+- With `csrf: false`, plain POST handlers, sessionless actions (a login form) and prerendered tokens are open to cross-site posts. Only turn it off when something in front of the app does the same job.
+- GET and HEAD are never checked, so GET handlers must not change anything: a link, an `<img>` or a [prefetch](06-interactivity.md#prefetching) can send one.
 
 > [!NOTE]
-> `same-site` counts as cross-site: `shop.example.com` can't post to `api.example.com` unless it's in `trustedOrigins`. A subdomain you don't control fully (user content, a marketing site) shouldn't be able to post with your users' cookies.
-
-GET and HEAD are never checked, which is why GET handlers must not change anything: a link, an `<img>`, or a [prefetch](06-interactivity.md#prefetching) can make a browser send one.
+> `same-site` counts as cross-site: `shop.example.com` can't post to `api.example.com` unless it's in `trustedOrigins`.
 
 ## Action tokens
 
-Every action form (and every element with an `action`) carries a `_yx` token, HMAC-SHA256-signed with the secret. It names the route class, the action and its bound arguments.
+Every action carries a `_yx` token, HMAC-SHA256-signed, naming the route class, the action and its bound arguments.
 
-- **Can't be forged.** A visitor can't call another action, or change `{ id: 7 }` to `{ id: 8 }`: the signature breaks and the request is a 400.
-- **Expires.** After `actionTtl` seconds (default 86400, a day). An expired form gets a 403 asking the user to reload; with the client runtime the page refreshes itself (see [stale pages](#stale-pages)).
-- **Bound to the session.** With sessions on, a visitor who has a session gets tokens carrying a hash of that session's nonce. A token rendered for one visitor is a 403 for anyone else, so a token leaked from a page (a screenshot, a shared HTML file) is useless to others. Turn sessions on even if you don't otherwise need them, if forms matter.
-- **Forms never start a session.** Every session gets its nonce when it's first written (anything set, a flash, a sign-in), so rendering forms costs nothing: a visitor without a session gets an *unbound* token and no cookie, however the page streams, and crawlers or `curl` reading your pages don't fill the session store. An unbound token is accepted only from a request that still has no session; it rests on its signature, its expiry and the [cross-site check](#cross-site-requests). Once the visitor has a session, an unbound token is refused like another session's (the runtime refreshes the page: see [stale pages](#stale-pages)).
-- **Signing in renews the nonce.** `regenerate()` (which `auth.login()` calls) gives the session a new nonce, and `clear()` drops it too, so forms rendered before them go stale. A login form posted by a new visitor carries an unbound token, which works: the session it starts has a nonce from then on.
-- **The page catches up by itself.** When a scripted action starts the visitor's session, or rotates its nonce (signing in, `clear()`), its response carries `yx-rebind: 1`, and the client runtime fetches the page again in the background and takes just its tokens: each one on the page is swapped for the fresh token with the same action and arguments, and nothing else changes (what the action just showed stays). The page's other forms are bound to the new session before the next click, so none of them comes back stale. An action that redirects (`yx-location`) or a plain form post gets a whole new page anyway, so neither carries the header.
-- **Prerendered pages** are built for no one, so their tokens have no expiry and no session. They're protected by the signature and the cross-site check only. Keep actions that need a signed-in user off prerendered pages, or check the user in the action.
+- **Can't be forged.** Changing the action or `{ id: 7 }` to `{ id: 8 }` breaks the signature: a 400.
+- **Expires** after `actionTtl` seconds (default 86400). An expired form is a 403 asking the user to reload; the runtime does it for them (see [stale pages](#stale-pages)).
+- **Bound to the session.** With sessions on, a visitor with a session gets tokens tied to its nonce, and a token leaked to anyone else is a 403. Turn sessions on if forms matter.
+- **Forms never start a session.** A visitor without one gets an unbound token and no cookie, so pages stay cacheable and crawlers don't fill the store. An unbound token is accepted only while the visitor still has no session.
+- **Signing in renews the nonce.** `regenerate()` (called by `auth.login()`) and `clear()` make earlier forms stale. When a scripted action starts or rotates the session, the runtime re-fetches the page's tokens in the background, so other forms don't go stale.
+- **Prerendered pages** have tokens with no expiry and no session, protected only by the signature and the cross-site check. Keep actions that need a signed-in user off them, or check the user in the action.
 
 > [!WARNING]
-> A signed token proves your server rendered those arguments. It doesn't prove this user may act on them: an action bound to `{ id }` must still check that the signed-in user owns `id`. The token was rendered for whoever was looking at the page, and pages change hands (a shared screen, a stale tab after logout).
+> A signed token proves your server rendered those arguments, not that this user may act on them. An action bound to `{ id }` must still check that the signed-in user owns `id`: pages change hands (a shared screen, a stale tab after logout).
 
 ### Values the browser fills in
 
-An action lambda that reads `el.value`, `ref("#x").checked` or `drag.data("id")` leaves holes in the token. Where each value goes is signed; what it contains comes from the browser, like any form field. Validate it before use, for example with [parse](api:yerd.parse):
+`el.value`, `ref("#x").checked` and `drag.data("id")` in an action lambda are browser input, like form fields; only where they go is signed. Validate them, for example with [parse](api:yerd.parse):
 
 ```tsx
 import { Region, action, get, is, matches, parse, route } from "@toyz/yerd";
@@ -100,60 +101,55 @@ export class Board {
 
 ### Stale pages
 
-When the secret changed, the server was redeployed, a token expired, or the page's tokens were made for another session (or for no session, and the visitor has one now, after signing in), the client runtime gets a `yx-stale` response, fetches the page again with fresh tokens and tells the user to try again. The action didn't run, so retrying is safe. Without JavaScript the user gets the 403 page.
+When a token is expired, signed with a dropped secret, or made for another session (or for none, and the visitor now has one), the runtime gets a `yx-stale` response, re-fetches the page with fresh tokens and asks the user to try again. The action didn't run, so retrying is safe. Without JavaScript the user gets the 403 page.
 
 ## Sessions
 
-- **Sealed.** The default [CookieStore](api:yerd.CookieStore) keeps the data in the cookie, encrypted and authenticated with AES-256-GCM: visitors can't read or change it. [MemoryStore](api:yerd.MemoryStore) and other id stores keep only a random id in the (also sealed) cookie, and `MemoryStore` keys its records by a hash of the id, so a dump of the store can't be replayed as cookies.
-- **Its own key.** The session cookie is sealed under a key derived for it alone. [seal()](api:yerd.seal) and [unseal()](api:yerd.unseal) use a different one, so a value your app seals (even one a visitor chose) is never accepted as a session cookie, and a session cookie never opens with `unseal()`. Upgrading from a version before the split invalidates existing sessions and sealed values once: everyone signs in again.
-- **Cookie flags.** Always `HttpOnly`, `SameSite=Lax` and `Path=/`. Over HTTPS also `Secure`, with the `__Host-` name prefix, which stops a subdomain from planting the cookie. Behind a proxy, set `trustProxy` so yerd believes `X-Forwarded-Proto`; see [deploying](11-deploying.md#behind-a-proxy).
-- **Expiry.** `maxAge` idle time (14 days by default, refreshed by requests that use the session) and `absoluteMaxAge` from creation (30 days, never extended).
-- **Opened only when used.** A request that never reads the session (a JSON endpoint, an image) doesn't unseal its cookie or read the store. Routes that never need one can say so with `session: false`: see [sessions](09-sessions-and-auth.md#routes-without-a-session).
-- **Crashes don't save.** If a request ends in an unhandled crash (anything but a `YerdError`), its session changes are thrown away, so a half-finished login or update never sticks.
-- **Not cached.** HTML pages sent to someone with a session (their session cookie came in, whether or not the page read it) get `Cache-Control: private, no-cache` unless the handler set its own, so neither a shared cache nor the browser's Back button replays a signed-in page to the wrong person. Pages for visitors without one stay cacheable, action forms and all. If you mark a page with forms cacheable yourself, send `Vary: Cookie` too: a cached page's tokens are for whoever it was rendered for.
+- **Sealed.** The default [CookieStore](api:yerd.CookieStore) encrypts and authenticates the cookie with AES-256-GCM. Id stores keep only a random id in the sealed cookie; `MemoryStore` keys records by a hash of it, so a store dump can't be replayed.
+- **Its own key.** The session cookie key is separate from [seal()](api:yerd.seal) / [unseal()](api:yerd.unseal), so nothing your app seals passes for a session.
+- **Cookie flags.** `HttpOnly`, `SameSite=Lax`, `Path=/`; over HTTPS also `Secure` with the `__Host-` prefix, which stops subdomains planting it. Behind a proxy, set `trustProxy` (see [deploying](11-deploying.md#behind-a-proxy)).
+- **Expiry.** `maxAge` idle (14 days) and `absoluteMaxAge` from creation (30 days, never extended).
+- **Crashes don't save**, so a half-finished login never sticks.
+- **Not cached.** HTML for a request carrying a session cookie gets `Cache-Control: private, no-cache` unless the handler set its own. If you mark a page with forms cacheable yourself, send `Vary: Cookie`: its tokens are for whoever it was rendered for.
+
+The full behaviour and options are in [sessions and auth](09-sessions-and-auth.md).
 
 ### Signing in and out
 
-[createAuth](api:auth.createAuth)'s `login(user)`:
-
-1. **Rotates the session id** (`regenerate()`), so an id someone planted or saw before login is worthless afterwards (session fixation).
-2. **Starts a fresh session when the user changes.** If someone else was signed in on this browser (a shared computer, no logout), their session data is dropped, not handed to the new user. A guest's data (a cart) does carry over, and `onLogin` can merge it.
-3. Stores the user's id, then runs `onLogin`.
-
-`logout()` runs `onLogout`, then destroys the session and its cookie. An id whose user no longer exists is dropped from the session on the next request. Two kinds of sign-in in one app (users and admins) must use different `sessionKey`s; a second `createAuth()` on the same key throws. Details in [sessions and auth](09-sessions-and-auth.md#login-and-logout).
+[createAuth](api:auth.createAuth)'s `login(user)` rotates the session id (stopping session fixation) and starts a fresh session if a different user was signed in, so their data never reaches the next user. `logout()` destroys the session and cookie. An id whose user no longer exists is dropped on the next request. See [login and logout](09-sessions-and-auth.md#login-and-logout).
 
 ### Passwords
 
-[hashPassword](api:auth.hashPassword) uses argon2id (OWASP's minimum: 19 MiB, 2 passes) where Node has it and scrypt otherwise, in PHC format, so parameters can be raised later and old hashes still verify. [verifyPassword](api:auth.verifyPassword) compares in constant time. Pass it `undefined` for an unknown user: it still runs a full hash, so response time doesn't reveal which accounts exist.
+- [hashPassword](api:auth.hashPassword) uses argon2id (OWASP's minimum: 19 MiB, 2 passes), scrypt where Node lacks it, in PHC format so parameters can be raised later.
+- [verifyPassword](api:auth.verifyPassword) compares in constant time. Pass it `undefined` for an unknown user so timing doesn't reveal which accounts exist.
 
 ## Redirects
 
-- [safeNext](api:auth.safeNext) only lets same-site paths through. `//evil.com`, `/\evil.com`, `/\t/evil.com`, `https://...`, `javascript:` and paths that normalize to `//host` all become the fallback (default `"/"`). Run every `?next=` through it.
-- [redirect()](api:yerd.redirect) sends whatever you give it (non-ASCII is percent-encoded, and line breaks are refused). It doesn't check where it points, so never pass it a URL from the request without `safeNext`.
-- After an action without JavaScript, yerd redirects back to the page the form was on, taken from `Referer` only when it's the same host, and checked like `safeNext`.
-- `auth.required` sends browsers to `loginPath?next=<the page>`. Read it back with `safeNext`.
-- The client runtime never navigates to a `javascript:`, `data:` or `vbscript:` URL, whatever a response says.
+- [safeNext](api:auth.safeNext) passes only same-site paths. `//evil.com`, `/\evil.com`, `/\t/evil.com`, `https://...`, `javascript:` and paths that normalize to `//host` become the fallback (`"/"`). Run every `?next=` through it.
+- [redirect()](api:yerd.redirect) doesn't check where it points (it percent-encodes non-ASCII and refuses line breaks), so never pass it a request URL without `safeNext`.
+- A no-JavaScript action redirects back to the form's page, from a same-host `Referer` only, checked like `safeNext`.
+- The client runtime never navigates to `javascript:`, `data:` or `vbscript:` URLs.
 
 ## Output
 
-- **Escaping.** Text and attribute values are always escaped. [raw()](api:yerd.raw) is the only way around it: never pass it anything a user typed unless you sanitized it.
-- **URL attributes.** `href`, `src`, `action`, `formaction` and friends turn `javascript:`, `vbscript:` and `data:` URLs into `about:blank#blocked` (`data:image/...` is allowed on `src` and `poster`), including tricks like `" java\tscript:"`.
-- **Inline scripts.** `<script>` and `<style>` contents are raw text. Hand data to a script with [json()](api:yerd.json), which escapes `<`, `>` and `&`. Text that would end the element early (`</script`) throws at render time.
-- **Headers.** A header value with a line break, NUL or other control character is refused before it's written, so request data can't split a response.
-- **Errors.** A thrown error that isn't a `YerdError` is a 500 with the body `Internal Server Error`; its message and stack go to the log only. `YerdError` messages are shown below 500 and hidden from 500 up (`expose`). The error page gets the thrown error as `error`; show its stack in development only (see [error pages](05-pages-and-layouts.md#error-pages)).
-- **Logs.** Fields named like secrets (`password`, `token`, `authorization`, `cookie`, `session`...) are redacted before any sink sees them. See [logging](10-logging.md#redaction-and-limits).
+- **Escaping.** Text and attributes are always escaped. [raw()](api:yerd.raw) is the only way around it; never pass it unsanitized user input.
+- **URL attributes.** `javascript:`, `vbscript:` and `data:` URLs (including tricks like `" java\tscript:"`) become `about:blank#blocked`; `data:image/...` is allowed on `src` and `poster`.
+- **Inline scripts.** Pass data with [json()](api:yerd.json); text that would end the element early throws.
+- **Headers.** Values with line breaks, NUL or other control characters are refused, so request data can't split a response.
+- **Errors.** A non-`YerdError` is a 500 with body `Internal Server Error`; message and stack go to the log only. `YerdError` messages are shown below 500. Show stacks on the [error page](05-pages-and-layouts.md#error-pages) in development only.
+- **Logs.** Fields named like secrets (`password`, `token`, `cookie`, ...) are redacted; see [logging](10-logging.md#redaction-and-limits).
 
 ## Input
 
-- **Validation.** Bad values are a 400 before your handler sees them. DTO classes drop keys they don't declare, so a client can't sneak `isAdmin: true` into a model you `Object.assign`. A field named `__proto__` is plain data. See [request data](03-request-data.md).
-- **URLs.** [is.url()](api:yerd.is.url) only accepts http and https unless you list other protocols, so a profile link can't be `javascript:alert(1)`.
-- **Size.** Bodies over `bodyLimit` (1 MiB by default) are a 413 before your code runs; `maxSize` and `types` limit each upload (413, 415). Streamed NDJSON bodies are limited per line.
-- **Static files.** `app.static()` refuses `..` (encoded or not), NUL bytes, dotfiles and symlinks that leave the folder.
+- **Validation.** Bad values are a 400 before your handler. DTOs drop undeclared keys (no sneaking in `isAdmin: true`), and `__proto__` is plain data. See [request data](03-request-data.md).
+- **URLs.** [is.url()](api:yerd.is.url) accepts only http and https unless you list others.
+- **Size.** Bodies over `bodyLimit` (1 MiB) are a 413 before your code runs; `maxSize` and `types` limit uploads. Streamed NDJSON is limited per line.
+- **Static files.** `app.static()` refuses `..` (encoded or not), NUL bytes, dotfiles and symlinks leaving the folder.
 
 ## Client-side code
 
-- **CSP.** [Local](api:yerd.Local) handlers are compiled in the browser, which needs `'unsafe-eval'` under a strict Content-Security-Policy. Without `Local`, the runtime is a plain module script from your own origin (`script-src 'self'`), and so are the chunks it imports from `/_yerd/`.
-- **Shipped as source.** `Local` handlers and the client halves of [custom attributes](06-interactivity.md#custom-attributes) are sent to the browser as their source text. They can't see server variables, and anything you write in them is public.
+- **CSP.** [Local](api:yerd.Local) handlers are compiled in the browser and need `'unsafe-eval'` under a strict Content-Security-Policy. Without `Local`, `script-src 'self'` is enough for the runtime and its `/_yerd/` chunks.
+- **Shipped as source.** `Local` handlers and [custom attributes](06-interactivity.md#custom-attributes)' client halves are public and can't see server variables.
 
 ## Checklist
 
