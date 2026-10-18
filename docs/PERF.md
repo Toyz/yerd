@@ -32,8 +32,9 @@ still flushed exactly at those points, so streaming behaves the same.
 
 **Renderer: no repeated work.** Tag and attribute names are validated once
 and remembered (capped sets, in case names come from user data);
-`classNames` flattens arrays and objects in one pass with no intermediate
-arrays; the skipped-props Set became two comparisons.
+one walk over a class value builds the class string, collects `<Local>`
+bindings and spots css`` names (only strings containing `yx-` are split),
+allocating nothing for elements without css`` classes; the skipped-props Set became two comparisons.
 
 **Request context: a class, lazily filled.** It was an object literal with a
 dozen getter closures, plus an AbortController, a `res.on("close")` listener,

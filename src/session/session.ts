@@ -625,7 +625,7 @@ export class SessionApi<D> {
   /**
    * True when this request started without a session (no cookie, or one that
    * was expired or invalid). Fixed for the request: setting values (yerd sets
-   * the CSRF nonce on page requests) doesn't change it.
+   * the CSRF nonce when it first signs an action token) doesn't change it.
    */
   get isNew(): boolean {
     return this.#isNew;

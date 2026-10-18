@@ -460,9 +460,7 @@ const capturing = new AsyncLocalStorage<{ fn?: Function; args?: unknown; calls: 
  */
 export function action<M extends Action<any>>(method: M, context: ClassMethodDecoratorContext): M {
   assertPublicInstance(context, "@action", { stringNamed: true });
-  const set = ACTIONS.hasOwn(context.metadata) ? ACTIONS.from(context.metadata)! : new Set(ACTIONS.from(context.metadata));
-  set.add(context.name);
-  ACTIONS.set(context.metadata, set);
+  ACTIONS.ownSet<string | symbol>(context.metadata).add(context.name);
   const info = { name: context.name, metadata: context.metadata };
   // Called inside an action lambda while the page renders, the action only
   // says who it is and what it was given; otherwise it runs.

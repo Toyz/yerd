@@ -34,7 +34,8 @@ import { attributesSource, resetAttributeRegistry } from "../attributes/attribut
 import { isYerdNode } from "../jsx/jsx-runtime.js";
 import { YerdResponse, isBare, redirect } from "../respond/response.js";
 import { Router, paramNames } from "../router/trie.js";
-import { DEFAULT_BODY_LIMIT } from "./body.js";
+import { DEFAULT_BODY_LIMIT, mediaTypeOf } from "./body.js";
+import { metadataOf } from "../decorators/keys.js";
 import { acceptsEncoding, createMount, serveStatic, type StaticMount, type StaticOptions } from "./static.js";
 import { useManifest } from "../assets.js";
 import { runWithContext, type RouteInfo, type YerdContext } from "./context.js";
@@ -677,11 +678,13 @@ export class YerdApp {
     const cssList = join(dir, ".yerd", "css.json");
     if (existsSync(cssList)) useCssRecord(cssList, base);
     else resetCssBundle();
-    const mount = createMount(mountPath(base), dir);
+    // A build's files never change while it's served: look each one up once.
+    const mount = createMount(mountPath(base), dir, {}, true);
     const list = join(dir, ".yerd", "prerendered.json");
     if (existsSync(list)) {
       const paths = JSON.parse(readFileSync(list, "utf8")) as Record<string, string>;
-      for (const [path, file] of Object.entries(paths)) this.#prerendered.set(path, { mount: createMount("/", dir), file });
+      const pages = createMount("/", dir, {}, true);
+      for (const [path, file] of Object.entries(paths)) this.#prerendered.set(path, { mount: pages, file });
     }
     this.#mounts.push(mount);
     return this;
@@ -1106,7 +1109,7 @@ export class YerdApp {
     const answering = new Map<string, string>();
     for (const registration of container.registrations()) {
       if (!registration.impl) continue;
-      const metadata = metadataOfClass(registration.impl);
+      const metadata = metadataOf(registration.impl);
       const name = registration.impl.name || keyName(registration.key);
       checkInjections(name, registration.lifetime, metadata, container, problems);
       if (registration.lifetime !== "singleton") {
@@ -1191,7 +1194,7 @@ export class YerdApp {
     const events = container.get(Events);
     for (const registration of container.registrations()) {
       if (!registration.impl || registration.lifetime !== "singleton") continue;
-      const metadata = metadataOfClass(registration.impl);
+      const metadata = metadataOf(registration.impl);
       const ons = ON_EVENT.from(metadata) ?? [];
       const answers = HANDLES.from(metadata) ?? [];
       if (!ons.length && !answers.length) continue;
@@ -1246,7 +1249,7 @@ export class YerdApp {
     container.get(Events).subscribeHandlers();
     await runWithServices(container, undefined, async () => {
       for (const registration of singletons) {
-        const metadata = metadataOfClass(registration.impl!);
+        const metadata = metadataOf(registration.impl!);
         const boot = ON_BOOT.from(metadata) ?? [];
         const shutdown = ON_SHUTDOWN.from(metadata) ?? [];
         const periodic = EVERY.from(metadata) ?? [];
@@ -1465,7 +1468,7 @@ export class YerdApp {
         ? this.#prerendered.get(path)
         : undefined;
     if (prebuilt) {
-      const file = await serveStatic(prebuilt.mount, `/${prebuilt.file}`, conditional(req));
+      const file = await serveStatic(prebuilt.mount, `/${prebuilt.file}`, conditional(req), method === "HEAD");
       if (file) return sendFile(res, file, method === "HEAD");
     }
 
@@ -1475,7 +1478,7 @@ export class YerdApp {
       if (reading && this.#mounts.length > 0) {
         const headers = conditional(req);
         for (const mount of this.#mounts) {
-          const file = await serveStatic(mount, path, headers);
+          const file = await serveStatic(mount, path, headers, method === "HEAD");
           if (file) return sendFile(res, file, method === "HEAD");
         }
       }
@@ -1929,18 +1932,14 @@ function redirectBack(context: YerdContext): YerdResponse {
     }
   }
   // The fallback is the request path, which a client controls (`POST //evil.com`), so it's checked too.
-  return new YerdResponse(303, { location: safeBack(back, safeBack(context.path, "/")) }, null);
+  return new YerdResponse(303, { location: safeBack(back, safeBack(context.path)) }, null);
 }
 
 /** A class's decorator metadata and its ancestors' (subclass metadata prototype-chains to the parent's). */
 function metadataChain(cls: Function): object[] {
   const chain: object[] = [];
-  for (let md: object | null = metadataOfClass(cls); md && md !== Object.prototype; md = Object.getPrototypeOf(md)) chain.push(md);
+  for (let md: object | null = metadataOf(cls); md && md !== Object.prototype; md = Object.getPrototypeOf(md)) chain.push(md);
   return chain;
-}
-
-function metadataOfClass(cls: Function): DecoratorMetadataObject {
-  return ((cls as unknown as Record<symbol, unknown>)[Symbol.metadata!] as DecoratorMetadataObject | undefined) ?? {};
 }
 
 function checkInjections(name: string, lifetime: Lifetime, metadata: DecoratorMetadataObject, container: Container, problems: string[]): void {
@@ -2050,8 +2049,7 @@ export function crossSiteReason(req: IncomingMessage, trusted: ReadonlySet<strin
 }
 
 function isFormBody(contentType: string | undefined): boolean {
-  if (!contentType) return false;
-  const type = contentType.split(";")[0]!.trim().toLowerCase();
+  const type = mediaTypeOf(contentType);
   return type === "application/x-www-form-urlencoded" || type === "multipart/form-data";
 }
 
