@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Local, not, renderToString, type Child } from "@toyz/yerd";
+import { Local, eq, not, renderToString, type Child } from "@toyz/yerd";
 import { jsx } from "@toyz/yerd/jsx-runtime";
 import { stateName } from "../../src/render/local.js";
 
@@ -116,6 +116,20 @@ describe("class bindings", () => {
     expect(await render((s) => <b class={{ "md:block": not(s.on), "hover:underline": s.on }} />)).toBe(
       '<b class="md:block" data-yx-bind="class.md:block:!on;class.hover:underline:on"></b>',
     );
+  });
+});
+
+describe("eq() and not()", () => {
+  it("refuses eq(not(field), value): the runtime would compare the field itself", async () => {
+    await expect(
+      renderToString(<Local state={{ on: false }}>{(s) => <b hidden={eq(not(s.on), true)} />}</Local>),
+    ).rejects.toThrow("eq() takes a field of the state, not not(); write not(eq(field, value))");
+  });
+
+  it("refuses eq(eq(...))", async () => {
+    await expect(
+      renderToString(<Local state={{ on: false }}>{(s) => <b hidden={eq(eq(s.on, true), true)} />}</Local>),
+    ).rejects.toThrow("not another eq()");
   });
 });
 

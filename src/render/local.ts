@@ -108,6 +108,8 @@ export function eq<T>(field: T, value: T): boolean {
   if (!isBinding(field)) return field === value;
   const b = field as unknown as Binding;
   if (b[EQUALS] !== undefined) throw new TypeError("eq() takes a field of the state, not another eq()");
+  // The runtime negates after comparing, so eq(not(x), v) can't be written down.
+  if (b.negate) throw new TypeError("eq() takes a field of the state, not not(); write not(eq(field, value))");
   return { [BINDING]: true, path: b.path, value: b.value === value, negate: false, [EQUALS]: value } as unknown as boolean;
 }
 
