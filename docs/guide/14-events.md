@@ -264,7 +264,7 @@ export class CartPage {
 }
 ```
 
-- **Errors cross over.** An `YerdError` from the handler reaches the caller with the same status and message; other failures arrive as a plain `Error` with the handler's message (and are logged there).
+- **Errors cross over.** A `YerdError` from the handler reaches the caller as yerd's class for its status (a `Conflict` for a 409), with its message, code and details. Other failures arrive as a plain `Error` with the handler's message (and are logged there).
 - **One answer.** Two `@handles` for one call class is a boot error; it belongs on a singleton service.
 - **Nobody home.** In memory, an unanswered call fails at once (`Nothing answers shipping.quote`). Over a transport that can't count listeners, it fails after `timeout` (default `"10s"`).
 - **Not deferred.** A call goes out immediately, even inside a request.

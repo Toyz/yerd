@@ -435,7 +435,7 @@ export class Counter {
 ```
 
 `data-carry` holds server-resolved values for carried decorators like a
-projected `@user` (see [DECORATORS.md](DECORATORS.md#one-kit-both-sides)). Empty
+projected `@user` (see [DECORATORS.md](DECORATORS.md#one-kit-both-sides-planned)). Empty
 here since `Counter` uses none.
 
 **Client side.** The runtime finds `yerd-island` elements (on load and after

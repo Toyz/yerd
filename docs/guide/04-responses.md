@@ -181,7 +181,7 @@ export class Hello {
 
 ## Errors with YerdError
 
-Throw an [`YerdError`](api:yerd.YerdError) anywhere in the request (handler, guard, transform, service) to answer with a status.
+Throw a [`YerdError`](api:yerd.YerdError), or one of its subclasses, to answer with a status. It works anywhere in a request: a handler, a guard, a transform, a service.
 
 ```tsx
 import { Conflict, NotFound, del, get, route } from "@toyz/yerd";
@@ -236,7 +236,33 @@ Each takes `(message?, options?)`. For any other status, `new YerdError(status, 
 | `headers` | Headers for the error response. |
 | `cause` | The underlying error, for your logs. |
 
-Any other thrown error is a logged 500 with the body `Internal Server Error`; its message never reaches the client.
+yerd's own failures are these classes too: an unknown path is a `NotFound`, a wrong method a `MethodNotAllowed`, a failed DTO a `ValidationFailed`. `@catches` and `instanceof` see them like yours.
+
+### Your own errors
+
+Extend the closest class:
+
+```ts
+import { Conflict, YerdError } from "@toyz/yerd";
+
+class OutOfStock extends Conflict {
+  constructor(readonly sku: string) {
+    super(`${sku} is out of stock`, { code: "out_of_stock", details: { sku } });
+  }
+}
+
+// A different body shape: override toJSON().
+class Problem extends YerdError {
+  override toJSON() {
+    return { type: `https://example.com/problems/${this.code}`, title: this.message, status: this.status };
+  }
+}
+
+throw new Problem(422, "Quantity must be positive", { code: "bad_qty", headers: { "content-type": "application/problem+json" } });
+```
+
+- `@catches(Conflict)` catches an `OutOfStock`, and `error.name` is `"OutOfStock"`.
+- An overridden `toJSON()` is used even without a code or details.
 
 ## Handling errors with @catches
 
@@ -272,7 +298,7 @@ export class Pet {
 
 - With error classes it handles only those; with none, everything. Methods are tried in written order.
 - JSX renders inside the route's layouts.
-- The error's status (an `YerdError`'s, else 500) sticks unless you return `res(..., { status })` or a number.
+- The error's status (a `YerdError`'s, else 500) sticks unless you return `res(..., { status })` or a number.
 - `undefined` passes the error on to the next `@catches`, then `app.onError`, then the error page.
 
 ## app.onError

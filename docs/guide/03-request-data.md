@@ -349,7 +349,7 @@ export class Slow {
 [createAccessor](api:yerd.createAccessor) turns a function of the request context into a decorator for accessor fields and `@args`; the built-ins are made the same way.
 
 ```tsx
-import { YerdError, createAccessor, get, route } from "@toyz/yerd";
+import { NotFound, createAccessor, get, route } from "@toyz/yerd";
 import { findShop, type Shop } from "./shops.js";
 
 /** The visitor's first choice from Accept-Language, or undefined (then the field's initializer). */
@@ -359,7 +359,7 @@ export const language = createAccessor((ctx) => ctx.headers["accept-language"]?.
 export const shop = createAccessor(
   async (ctx): Promise<Shop> => {
     const found = await findShop(ctx.url.hostname.split(".")[0] ?? "");
-    if (!found) throw new YerdError(404, "No such shop");
+    if (!found) throw new NotFound("No such shop");
     return found;
   },
   { name: "shop" },
@@ -389,7 +389,7 @@ export class Product {
 ```
 
 - The function runs at most once per request per decorator and argument list, on first read.
-- Returning `undefined` uses the field's initializer; throwing (an `YerdError`, say) answers the request, like a guard.
+- Returning `undefined` uses the field's initializer; throwing (a `YerdError`, say) answers the request, like a guard.
 - Arguments after `ctx` become the decorator's arguments. `validate` runs at boot for every route that uses it; return a message to stop the boot.
 - The field's type is checked against the return type.
 - They also work on services (see [request data in a service](08-services.md#request-data-in-a-service)).

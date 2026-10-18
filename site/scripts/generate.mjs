@@ -461,7 +461,7 @@ function guideList() {
 
 /** Same as slugify() in src/markdown.ts, so search results land on the heading's anchor. */
 function slugify(text) {
-  return text.toLowerCase().replace(/<[^>]+>/g, "").replace(/[`*_~]/g, "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-");
+  return text.toLowerCase().replace(/<[^>]+>/g, "").replace(/[`*~]/g, "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-");
 }
 
 /** A guide's ## and ### headings, for search: their text and anchor ids (numbered like the renderer's). */

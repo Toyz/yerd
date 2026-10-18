@@ -250,7 +250,7 @@ export class SignupPage {
 ```
 
 - **One markup for both.** The server fills the same boxes the runtime writes into (and clears on the next submit).
-- **Your own errors.** For a check of your own (the email is taken), throw an `YerdError` with `details: { issues: [{ path: "email", message: "That email is taken" }] }`.
+- **Your own errors.** For a check of your own (the email is taken), throw a `YerdError` with `details: { issues: [{ path: "email", message: "That email is taken" }] }`.
 - **Never redisplay secrets.** Leave passwords and card numbers out of the flashed draft.
 - How unmatched and list-item messages are placed is in [field error boxes](06-interactivity.md#errors).
 
