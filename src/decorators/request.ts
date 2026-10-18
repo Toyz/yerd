@@ -255,10 +255,11 @@ const fieldAccessor = createAccessor<Promise<unknown>, [name: string, options?: 
   async (ctx, name, options) => {
     const parsed = await ctx.body();
     const fields = parsed.kind === "none" ? undefined : fieldsOf(parsed.value, parsed.kind);
-    const value = fields?.[name];
+    const sent = fields?.[name];
+    // A repeated field takes its first value, like @query; an empty JSON array is missing.
+    const value = Array.isArray(sent) ? sent[0] : sent;
     if (value === undefined) return missing("form field", name, options);
-    // A repeated field takes its first value, like @query.
-    return resolveField("form field", name, Array.isArray(value) ? value[0]! : value, options);
+    return resolveField("form field", name, value, options);
   },
   { name: "field" },
 );

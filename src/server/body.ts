@@ -145,6 +145,8 @@ export function formFields(params: URLSearchParams): FormFields {
 export async function readBody(req: IncomingMessage, limit = DEFAULT_BODY_LIMIT): Promise<ParsedBody> {
   if (!hasBody(req)) return { kind: "none", value: undefined };
   const raw = await readAll(req, limit);
+  // A chunked request that sends no bytes is no body, like Content-Length: 0.
+  if (raw.byteLength === 0) return { kind: "none", value: undefined };
   const type = mediaType(req);
 
   if (type === "application/json" || type.endsWith("+json")) {

@@ -170,7 +170,9 @@ const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?
 
 /** Whether year-month-day is a real calendar date. */
 function sameUtcDay(year: number, month: number, day: number): boolean {
-  const d = new Date(Date.UTC(year, month - 1, day));
+  // setUTCFullYear, unlike Date.UTC, doesn't map years 0-99 to 1900-1999.
+  const d = new Date(0);
+  d.setUTCFullYear(year, month - 1, day);
   return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
 }
 
@@ -199,7 +201,11 @@ export const is = {
   /** A finite number, or a decimal string (exponents allowed). */
   number: primitive<number>((v) => {
     if (typeof v === "number") return Number.isFinite(v) ? v : INVALID;
-    if (typeof v === "string" && NUMBER.test(v.trim())) return Number(v);
+    if (typeof v === "string" && NUMBER.test(v.trim())) {
+      // "1e400" passes the pattern but overflows to Infinity.
+      const n = Number(v);
+      return Number.isFinite(n) ? n : INVALID;
+    }
     return INVALID;
   }, "a number"),
 

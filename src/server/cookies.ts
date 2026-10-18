@@ -5,11 +5,11 @@ export function parseCookies(header: string | undefined): Record<string, string>
   if (!header) return out;
   for (const part of header.split(";")) {
     const eq = part.indexOf("=");
-    if (eq <= 0) continue;
+    if (eq < 0) continue;
     const name = part.slice(0, eq).trim();
     let value = part.slice(eq + 1).trim();
-    if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
-    if (!(name in out)) {
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
+    if (name !== "" && !(name in out)) {
       try {
         out[name] = decodeURIComponent(value);
       } catch {
@@ -39,11 +39,20 @@ export interface CookieOptions {
 }
 
 const NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+// Path and Domain go into the header as is: no ";" (it would start another
+// attribute) and no control characters.
+const ATTRIBUTE = /^[^;\x00-\x1f\x7f]*$/;
+
+function attribute(name: string, value: string): string {
+  if (!ATTRIBUTE.test(value)) throw new TypeError(`Invalid cookie ${name}: ${JSON.stringify(value)}`);
+  return value;
+}
 
 /**
  * Build a Set-Cookie header value. The value is percent-encoded; the
  * defaults are Path=/, HttpOnly and SameSite=Lax. Throws a TypeError for a
- * name that isn't an RFC 6265 token.
+ * name that isn't an RFC 6265 token, a path or domain with ";" or a control
+ * character, or a lifetime that isn't a real number or date.
  *
  * ```ts
  * serializeCookie("theme", "dark", { maxAge: 31536000 });
@@ -53,10 +62,17 @@ const NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 export function serializeCookie(name: string, value: string, options: CookieOptions = {}): string {
   if (!NAME.test(name)) throw new TypeError(`Invalid cookie name: ${JSON.stringify(name)}`);
   let cookie = `${name}=${encodeURIComponent(value)}`;
-  if (options.maxAge !== undefined) cookie += `; Max-Age=${Math.floor(options.maxAge)}`;
-  if (options.expires) cookie += `; Expires=${options.expires.toUTCString()}`;
-  cookie += `; Path=${options.path ?? "/"}`;
-  if (options.domain) cookie += `; Domain=${options.domain}`;
+  if (options.maxAge !== undefined) {
+    // Browsers ignore "Max-Age=NaN", which would quietly make a session cookie.
+    if (!Number.isFinite(options.maxAge)) throw new TypeError(`Invalid cookie maxAge: ${options.maxAge}`);
+    cookie += `; Max-Age=${Math.floor(options.maxAge)}`;
+  }
+  if (options.expires) {
+    if (Number.isNaN(options.expires.getTime())) throw new TypeError("Invalid cookie expires: Invalid Date");
+    cookie += `; Expires=${options.expires.toUTCString()}`;
+  }
+  cookie += `; Path=${attribute("path", options.path ?? "/")}`;
+  if (options.domain) cookie += `; Domain=${attribute("domain", options.domain)}`;
   if (options.httpOnly ?? true) cookie += "; HttpOnly";
   if (options.secure) cookie += "; Secure";
   cookie += `; SameSite=${options.sameSite ?? "Lax"}`;
