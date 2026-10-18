@@ -13,7 +13,7 @@
  * mailto is dropped to plain text.
  */
 
-import { highlight } from "./highlight";
+import { highlight, type CodeLinker } from "./highlight";
 
 export interface Heading {
   level: number;
@@ -52,6 +52,28 @@ function apiTarget(code: string, ctx: LinkContext): string | undefined {
   if (!/^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)?$/.test(name)) return undefined;
   const id = ctx.resolveApi(name);
   return id && id !== ctx.self && !id.startsWith(`${ctx.self}/`) ? id : undefined;
+}
+
+/**
+ * Links inside a code block: decorators (`@route`, `@is.string`) always, and
+ * other identifiers only when the block imports them from yerd, so a local
+ * variable that happens to share an export's name stays plain.
+ */
+function codeLinker(source: string, ctx: LinkContext): CodeLinker | undefined {
+  const resolve = ctx.resolveApi;
+  if (!resolve) return undefined;
+  const imported = new Set<string>();
+  for (const m of source.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']@toyz\/yerd(?:\/[\w-]+)?["']/g)) {
+    for (const part of m[1]!.split(",")) {
+      const name = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/).pop()!.trim();
+      if (name) imported.add(name);
+    }
+  }
+  return (name, kind) => {
+    if (kind === "word" && !imported.has(name)) return undefined;
+    const id = resolve(name);
+    return id && id !== ctx.self ? id : undefined;
+  };
 }
 
 function apiLink(id: string, inner: string): string {
@@ -200,7 +222,8 @@ export function renderMarkdown(source: string, ctx: LinkContext): Rendered {
       const body: string[] = [];
       const close = fence[2]!;
       for (i++; i < lines.length && !lines[i]!.trimStart().startsWith(close); i++) body.push(lines[i]!.slice(fence[1]!.length));
-      html += `<div class="code-wrap"><button class="copy" type="button" aria-label="Copy code">copy</button><pre class="code" data-lang="${escapeHtml(fence[3] || "text")}"><code>${highlight(body.join("\n"), fence[3] || "text")}</code></pre></div>`;
+      const source = body.join("\n");
+      html += `<div class="code-wrap"><button class="copy" type="button" aria-label="Copy code">copy</button><pre class="code" data-lang="${escapeHtml(fence[3] || "text")}"><code>${highlight(source, fence[3] || "text", codeLinker(source, ctx))}</code></pre></div>`;
       continue;
     }
 

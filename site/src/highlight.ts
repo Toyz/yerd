@@ -20,28 +20,42 @@ const TS =
 
 const SH = /(#[^\n]*)|("(?:\\.|[^"\\])*"|'[^']*')|(\$\w+|\$\{[^}]*\})|(^|\s)(npm|npx|node|git|vite|cd|yerd)(?=\s|$)|(\s+|[\s\S])/gmy;
 
-export function highlight(code: string, lang: string): string {
+/**
+ * Turns a name in code into an API page id when it should link: `decorator`
+ * for `@route` / `@is.string`, `word` for any other identifier.
+ */
+export type CodeLinker = (name: string, kind: "decorator" | "word") => string | undefined;
+
+function linked(html: string, id: string | undefined): string {
+  return id ? `<a class="api-ref" href="#/api/${escape(id)}" data-api="${escape(id)}">${html}</a>` : html;
+}
+
+export function highlight(code: string, lang: string, link?: CodeLinker): string {
   const language = lang.toLowerCase();
-  if (["ts", "tsx", "typescript", "js", "jsx", "javascript", "mjs", "json", "jsonc"].includes(language)) return highlightTs(code);
+  if (["ts", "tsx", "typescript", "js", "jsx", "javascript", "mjs", "json", "jsonc"].includes(language)) return highlightTs(code, link);
   if (["sh", "bash", "shell", "console", "fish"].includes(language)) return highlightSh(code);
   return escape(code);
 }
 
-function highlightTs(code: string): string {
+function highlightTs(code: string, link?: CodeLinker): string {
   let out = "";
   TS.lastIndex = 0;
   for (let m = TS.exec(code); m; m = TS.exec(code)) {
     const [text, comment, string, decorator, number, tag, word] = m;
     if (comment) out += `<span class="tok-comment">${escape(text)}</span>`;
     else if (string) out += `<span class="tok-string">${escape(text)}</span>`;
-    else if (decorator) out += `<span class="tok-decorator">${escape(text)}</span>`;
+    else if (decorator) out += linked(`<span class="tok-decorator">${escape(text)}</span>`, link?.(text.slice(1), "decorator"));
     else if (number) out += `<span class="tok-number">${escape(text)}</span>`;
     else if (tag) out += `<span class="tok-tag">${escape(text)}</span>`;
     else if (word) {
       if (KEYWORDS.has(word)) out += `<span class="tok-keyword">${word}</span>`;
-      else if (/^[A-Z]/.test(word)) out += `<span class="tok-type">${word}</span>`;
-      else if (code[TS.lastIndex] === "(") out += `<span class="tok-fn">${word}</span>`;
-      else out += word;
+      else {
+        // A property access (`.word`) is never an export of its own.
+        const id = code[TS.lastIndex - word.length - 1] === "." ? undefined : link?.(word, "word");
+        if (/^[A-Z]/.test(word)) out += linked(`<span class="tok-type">${word}</span>`, id);
+        else if (code[TS.lastIndex] === "(") out += linked(`<span class="tok-fn">${word}</span>`, id);
+        else out += linked(word, id);
+      }
     } else out += escape(text);
     if (TS.lastIndex >= code.length) break;
   }
