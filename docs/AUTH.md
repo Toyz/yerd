@@ -110,16 +110,26 @@ class, or `currentContext().session` from function components. Like the other
 request accessors it reads through `AsyncLocalStorage`, so it works whatever the
 class's lifetime.
 
-**API.** `get(key)`, `set(key, value)`, `delete(key)`, `clear()`,
+**API.** values as properties (`session.cart`, `session.cart = x`, assigning
+`undefined` removes), `get(key)`, `set(key, value)`, `delete(key)`, `clear()`,
 `flash(key, value)` / `flash(key)` (readable on the next request only, then
 gone, which pairs with the post/redirect/get flow actions already use),
 `regenerate()`, `destroy()`, `isNew`, `createdAt`. Keys and value types come
-from the merged `SessionData` interface, so `session.get("cartt")` is a
-compile error. Writing after `destroy()` (logout, then a flash or a login)
+from `Session<T>`'s `T`, or the merged `SessionData` interface for plain
+`Session`, so `session.cartt` is a compile error. `@session(Cart)` views the
+session through a class: its methods, getters and setters run with `this` as
+the session, and field initializers are defaults (read when the value is
+missing, saved once changed). Views are per session and class, so two
+accessors with the same class share one. Writing after `destroy()` (logout, then a flash or a login)
 starts a fresh session: a new id and creation time, the old record still
 dropped.
 
-**Lazy and dirty-tracked.** Nothing is written back unless it changed (or
+**Ids.** `kind: "id"` stores get a fresh id on a new session and on
+`regenerate()`: 32 random bytes by default, or `sessions({ generateId })`
+(sync or async; must be unique and non-empty; refused with a CookieStore).
+
+**Lazy and dirty-tracked.** Nothing is written back unless it changed (set,
+or changed in place: the data is compared to what was loaded) (or
 `rolling` needs the expiry bumped). A page that never touches the session
 sends no `Set-Cookie`. A request whose handler crashed (anything but an
 `HttpError`) skips the commit, so a half-done login or update doesn't stick.

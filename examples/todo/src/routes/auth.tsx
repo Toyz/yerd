@@ -3,11 +3,10 @@ import { safeNext, verifyPassword } from "@toyz/yerd/auth";
 import { AuthLayout } from "../layouts.js";
 import { LoginForm, SignupForm, UserRepo, auth, type User } from "../users.js";
 
-declare module "@toyz/yerd" {
-  interface SessionData {
-    /** Last submitted name, so a failed form keeps it. */
-    lastName?: string;
-  }
+/** What the auth pages keep in the session. */
+interface AuthSession {
+  /** Last submitted name, so a failed form keeps it. */
+  lastName?: string;
 }
 
 /** Login and signup: their own layout, no app chrome, no login required. */
@@ -36,7 +35,7 @@ function Field({ name, label, type = "text", value, autocomplete }: { name: stri
 export class LoginPage {
   @inject(UserRepo) accessor users!: UserRepo;
   @auth.maybeUser accessor me: User | undefined;
-  @session accessor session!: Session;
+  @session accessor session!: Session<AuthSession>;
   @query("next") accessor next: string | undefined;
 
   @get page() {
@@ -47,7 +46,7 @@ export class LoginPage {
         <h1>Welcome back</h1>
         <p class="meta-line">Log in to see your todos.</p>
         <form action={this.submit}>
-          <Field name="name" label="Username" value={this.session.get("lastName")} autocomplete="username" />
+          <Field name="name" label="Username" value={this.session.lastName} autocomplete="username" />
           <Field name="password" label="Password" type="password" autocomplete="current-password" />
           <p class="form-error" data-yx-error role="alert">{error}</p>
           <button class="btn btn-block">Log in</button>
@@ -69,7 +68,7 @@ export class LoginPage {
     const user = this.users.byName(input.name);
     // Always spends a password hash, so timing doesn't reveal which names exist.
     if (!(await verifyPassword(input.password, user?.passwordHash)) || !user) {
-      this.session.set("lastName", input.name);
+      this.session.lastName = input.name;
       return this.#fail("Wrong username or password.");
     }
     auth.login(user);
@@ -86,7 +85,7 @@ export class LoginPage {
 @route("/signup", { group: AuthPages, meta: { title: "Sign up" } })
 export class SignupPage {
   @inject(UserRepo) accessor users!: UserRepo;
-  @session accessor session!: Session;
+  @session accessor session!: Session<AuthSession>;
   @query("next") accessor next: string | undefined;
 
   @get page() {
@@ -96,7 +95,7 @@ export class SignupPage {
         <h1>Create an account</h1>
         <p class="meta-line">Your todos are yours: nobody else sees them.</p>
         <form action={this.submit}>
-          <Field name="name" label="Username" value={this.session.get("lastName")} autocomplete="username" />
+          <Field name="name" label="Username" value={this.session.lastName} autocomplete="username" />
           <Field name="password" label="Password (8+ characters)" type="password" autocomplete="new-password" />
           <p class="form-error" data-yx-error role="alert">{error}</p>
           <button class="btn btn-block">Sign up</button>
@@ -122,7 +121,7 @@ export class SignupPage {
 
   #fail(message: string, name: string | undefined) {
     this.session.flash("error", message);
-    if (name !== undefined) this.session.set("lastName", name.trim().toLowerCase());
+    if (name !== undefined) this.session.lastName = name.trim().toLowerCase();
     return redirect("/signup");
   }
 }

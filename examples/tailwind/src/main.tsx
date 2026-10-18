@@ -26,9 +26,18 @@ const IDS = Object.keys(LABELS);
 /** Shared by everyone: one count per counter, in this process. */
 const shared = new Map<string, number>(IDS.map((id) => [id, 0]));
 
-/** What this page keeps in a visitor's session: their own counts, by counter id. */
-interface Counts {
-  mine?: Record<string, number>;
+/**
+ * What this page keeps in a visitor's session: their own counts, by counter
+ * id. A class, so the session gets its method; `= {}` is a default, saved
+ * only once a counter is bumped.
+ */
+class Counts {
+  mine: Record<string, number> = {};
+
+  bump(id: string): number {
+    this.mine[id] = (this.mine[id] ?? 0) + 1;
+    return this.mine[id];
+  }
 }
 
 /** Where a counter keeps its count. */
@@ -108,12 +117,8 @@ function Section({ title, note, children }: { title: string; note: string; child
 
 @route("/", { meta: { title: "Tailwind in yerd" } })
 export class Home {
-  // Session<Counts>: get/set only take Counts' fields, typed.
-  @session accessor session!: Session<Counts>;
-
-  get mine(): Record<string, number> {
-    return this.session.get("mine") ?? {};
-  }
+  // The session, seen through Counts: this.counts.mine and this.counts.bump(), typed.
+  @session(Counts) accessor counts!: Session<Counts>;
 
   @get page() {
     return (
@@ -130,7 +135,7 @@ export class Home {
         </Section>
 
         <Section title="Yours" note="Kept in your session on the server: survives a reload, another browser has its own.">
-          {IDS.map((id) => <Counter id={id} store={{ kind: "session", value: this.mine[id] ?? 0, bump: this.bumpMine }} />)}
+          {IDS.map((id) => <Counter id={id} store={{ kind: "session", value: this.counts.mine[id] ?? 0, bump: this.bumpMine }} />)}
         </Section>
 
         <Section title="This tab" note="Local state: no requests at all, gone on reload.">
@@ -154,9 +159,7 @@ export class Home {
   /** Same, in this visitor's session: the action token is bound to the session too, so it can't be replayed from another. */
   @action bumpMine({ id }: { id: string }) {
     if (!(id in LABELS)) return 404;
-    const mine = { ...this.mine, [id]: (this.mine[id] ?? 0) + 1 };
-    this.session.set("mine", mine);
-    return <Counter id={id} store={{ kind: "session", value: mine[id]!, bump: this.bumpMine }} />;
+    return <Counter id={id} store={{ kind: "session", value: this.counts.bump(id), bump: this.bumpMine }} />;
   }
 }
 

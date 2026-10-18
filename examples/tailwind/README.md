@@ -13,9 +13,10 @@ Tailwind CSS v4 in a yerd app. `npm run tailwind` from the repo root.
   and objects all work, as long as full class names appear in the source.
 - One `Counter` component, four places to keep its count (a `store` prop):
   - **Shared**: server state everyone sees (a module-level Map), changed by an action.
-  - **Yours**: kept in the visitor's session (`app.sessions()`, `@session
-    accessor session!: Session<Counts>`, so `get`/`set` are typed by `Counts`),
-    so it survives a reload and another browser has its own.
+  - **Yours**: kept in the visitor's session (`app.sessions()`, `@session(Counts)
+    accessor counts!: Session<Counts>`: a class, so `this.counts.mine` is typed
+    and `this.counts.bump(id)` is its method), so it survives a reload and
+    another browser has its own.
   - **This tab**: `<Local state={{ count: 0 }}>`, state that lives only in the
     page: clicks run in the browser with no request, gone on reload.
   - **This browser**: the same `<Local>` with `persist="counter-{id}"`, kept in

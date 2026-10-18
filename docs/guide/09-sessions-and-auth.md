@@ -18,11 +18,11 @@ export class Cart {
   @session accessor session!: Session<CartData>;
 
   @get show() {
-    return { items: this.session.get("cart") ?? [], notice: this.session.flash("notice") ?? null };
+    return { items: this.session.cart ?? [], notice: this.session.flash("notice") ?? null };
   }
 
   @post add() {
-    this.session.set("cart", [...(this.session.get("cart") ?? []), "socks"]);
+    (this.session.cart ??= []).push("socks");
     this.session.flash("notice", "Added to cart");
     return redirect("/cart");
   }
@@ -31,27 +31,80 @@ export class Cart {
 export const app = yerd().sessions();
 ```
 
-`Session<CartData>` types the keys: `get("cart")` is `string[] | undefined`, `get("crat")` and `set("cart", 42)` won't compile. The type is only a view: every route sees the same session, so two routes can use different interfaces over it (keep their fields from clashing). `@args(session)` works the same way, typed by the parameter.
+`Session<CartData>` types the session: `this.session.cart` is `string[] | undefined`, and `this.session.crat` or `this.session.cart = 42` won't compile. Values are plain properties:
 
-Keys the whole app shares (a signed-in user id, say) can go on the global `SessionData` interface instead, and plain `Session` uses it:
+- assign to save one, assign `undefined` (or `delete`) to remove it;
+- changes made in place (`push`, editing a nested object) are noticed and saved too;
+- `get(key)` / `set(key, value)` do the same by name, and reach a field named like a session method (`id`, `flash`, ...).
 
-```ts
-declare module "@toyz/yerd" {
-  interface SessionData {
-    userId?: string;
+The type is only a view: every route sees the same session, so two routes can use different shapes over it (keep their field names apart). `@args(session)` works the same way, typed by the parameter.
+
+### A class for methods and defaults
+
+Pass a class to `@session` and the session gets its methods, getters and setters, with `this` as the session. Field initializers are defaults: a missing value reads as the default, and it's only saved once it changes, so a visitor who only reads gets no cookie.
+
+```tsx
+class Cart {
+  items: string[] = [];
+  coupon?: string;
+
+  get count() {
+    return this.items.length;
+  }
+  add(item: string) {
+    this.items.push(item);
   }
 }
 
-@session accessor session!: Session; // get("userId") is string | undefined
+@route("/cart")
+export class CartPage {
+  @session(Cart) accessor cart!: Session<Cart>;
+
+  @get show() {
+    return { items: this.cart.items, count: this.cart.count }; // items is string[], never undefined
+  }
+
+  @post add() {
+    this.cart.add("socks"); // saved
+    this.cart.flash("notice", "Added to cart"); // the session API is still there
+    return redirect("/cart");
+  }
+}
 ```
 
-Outside a route class, `currentContext().session` gives you the same object (typed by `SessionData`).
+- The class is never stored: only its data fields are, so keep them JSON (plain objects, arrays, strings, numbers, booleans).
+- Its constructor runs once per request (for the defaults) and takes no arguments.
+- No `#private` fields: `this` is the session, not an instance of the class.
+- `@args(session(Cart))` gives a handler parameter the same view.
+
+### App-wide keys
+
+Keys every route shares can go on the global `SessionData` interface instead. Plain `Session`, without a type argument, uses it, and so does `currentContext().session` outside a route class:
+
+```tsx
+declare module "@toyz/yerd" {
+  interface SessionData {
+    theme?: "light" | "dark";
+  }
+}
+
+@route("/theme")
+export class Theme {
+  @session accessor session!: Session;
+
+  @post toggle() {
+    this.session.theme = this.session.theme === "dark" ? "light" : "dark"; // typed by SessionData
+    return redirect("/");
+  }
+}
+```
 
 ## The session API
 
 | Method | Does |
 | --- | --- |
-| `get(key)` / `set(key, value)` | read and write a value |
+| `session.key` / `session.key = value` | read and write a value (`undefined` removes it); a shape class adds its own methods |
+| `get(key)` / `set(key, value)` | the same, by name |
 | `delete(key)` / `clear()` | remove one value / all of them |
 | `flash(key, value)` | keep a value for the next request only (a notice after a redirect) |
 | `flash(key)` | read and consume a flash set by the previous request |
@@ -59,7 +112,7 @@ Outside a route class, `currentContext().session` gives you the same object (typ
 | `destroy()` | drop the session and its cookie; setting a value afterwards starts a fresh one |
 | `isNew`, `createdAt` | whether the request arrived without a session; when it was created |
 
-Changes are saved after the handler runs. A request that changed nothing sends no cookie (unless a rolling session is due for a refresh).
+Changes are saved after the handler runs, including ones made in place. A request that changed nothing sends no cookie (unless a rolling session is due for a refresh).
 
 > [!NOTE]
 > If a request ends in an unhandled crash (anything other than an `HttpError`), the session isn't saved. A half-finished login or update never sticks.
@@ -86,6 +139,17 @@ export const app = yerd().sessions({
 | `cookieName` | `"yerd_session"` | cookie name (gets a `__Host-` prefix over HTTPS) |
 | `secure` | auto | force the `Secure` flag on or off; by default it's on when the request came over HTTPS |
 | `trustProxy` | the app's `trustProxy` | believe `X-Forwarded-Proto` when deciding whether the request was HTTPS |
+| `generateId` | 32 random bytes | makes the id for a new or regenerated session; only for stores that keep ids (`kind: "id"`) |
+
+Your own ids, for a store or logs that expect a format:
+
+```ts
+import { randomUUID } from "node:crypto";
+
+yerd().sessions({ store: new MemoryStore(), generateId: () => `sess_${randomUUID()}` });
+```
+
+It may be async (a database sequence), must return a unique non-empty string, and is refused with a `CookieStore`, which has no ids. The id sits inside the sealed cookie so it can't be forged, but keep it unguessable anyway: a leaked store dump shouldn't name live sessions.
 
 `MemoryStore` takes `maxSize` (evicts the least recently saved past it; default no cap) and `sweepInterval` (how often, at most, a save also clears expired sessions; default 60 s). It's for dev, tests and single-process deploys. For anything else, implement [SessionStore](api:yerd.SessionStore): `kind: "id"` plus `get`, `set` and `destroy`.
 

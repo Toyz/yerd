@@ -319,9 +319,8 @@ export class Visits {
   @session accessor session!: Session<{ visits?: number }>;
 
   @get count() {
-    const n = (this.session.get("visits") ?? 0) + 1;
-    this.session.set("visits", n);
-    return { visits: n };
+    this.session.visits = (this.session.visits ?? 0) + 1;
+    return { visits: this.session.visits };
   }
 }
 ```
