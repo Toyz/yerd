@@ -30,7 +30,7 @@ as one card; on GitHub it reads as a plain block.
 ````md
 ```tsx
 @get show() {
-  return this.catalog.find(this.id) ?? 404;
+  return this.catalog.find(this.id) ?? new NotFound("No such product");
 }
 ```
 
@@ -45,7 +45,7 @@ GET /products/99
 404 Not Found
 content-type: application/json; charset=utf-8
 
-{"error":"Not Found","code":"not_found"}
+{"error":"No such product","code":"not_found"}
 ```
 ````
 
@@ -54,6 +54,9 @@ content-type: application/json; charset=utf-8
 - A request with a body: put it after the request line, then a line with `>>>` before the status line.
 - An HTML body is shown as source and, on the site, rendered in a small preview. Keep it short: elide with `<!-- ... -->`.
 - Answers must be true. Take them from running `examples/shop` (or a test), not from memory.
+
+Errors are the named classes (`NotFound`, `Conflict`...), returned or thrown, never a bare
+`404`. Numbers are for statuses without a body: `return 204` after a delete.
 
 ## yerd's take
 

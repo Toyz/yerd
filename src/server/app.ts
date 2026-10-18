@@ -1701,7 +1701,11 @@ export class YerdApp {
     const instance = this.#routeInstance(owner, context.services.scope);
     const fn = instance[call.method] as ((...args: unknown[]) => unknown) | undefined;
     if (typeof fn !== "function") throw new Error(`${owner.def.className}.${String(call.method)} is not a method`);
-    return { result: await fn.apply(instance, await args()) };
+    const result: unknown = await fn.apply(instance, await args());
+    // `return this.catalog.find(id) ?? new NotFound()`: TypeScript has no throw
+    // expressions, so a returned error counts as thrown (@catches, onError, the error page).
+    if (result instanceof Error) throw result;
+    return { result };
   }
 
   /** The runtime's cue stream: `GET /_yerd/cues?room=a&room=b` (no room: the default one). */

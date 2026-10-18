@@ -103,7 +103,24 @@ class Down {
 @route("/returned")
 class Returned {
   @get returned() {
+    return new NotFound("No such product");
+  }
+}
+
+@route("/returned-crash")
+class ReturnedCrash {
+  @get crash() {
+    return new Error("oops");
+  }
+}
+
+@route("/returned-caught")
+class ReturnedCaught {
+  @get show() {
     return new NotFound();
+  }
+  @catches(NotFound) missing() {
+    return "caught";
   }
 }
 
@@ -134,7 +151,7 @@ class Stock {
   }
 }
 
-const app = () => yerd({ routes: [Throws, Problems, Down, Returned, SignupPage, Stock], services: [], handleSignals: false });
+const app = () => yerd({ routes: [Throws, Problems, Down, Returned, ReturnedCrash, ReturnedCaught, SignupPage, Stock], services: [], handleSignals: false });
 
 describe("writing your own", () => {
   it("a subclass is named after itself, instanceof its parents, with a stack", () => {
@@ -172,8 +189,18 @@ describe("writing your own", () => {
     expect(await r.text()).toBe("I'm a teapot");
   });
 
-  it("returning an error instead of throwing it is a crash, not a 200", async () => {
-    expect((await app().request("/returned")).status).toBe(500);
+  it("returning one counts as throwing it, for `?? new NotFound()`", async () => {
+    const r = await app().request("/returned");
+    expect(r.status).toBe(404);
+    expect(await r.json()).toEqual({ error: "No such product", code: "not_found" });
+    // @catches sees it too; its answer keeps the error's status.
+    const caught = await app().request("/returned-caught");
+    expect(caught.status).toBe(404);
+    expect(await caught.text()).toBe("caught");
+  });
+
+  it("a returned plain Error is a crash, like a thrown one", async () => {
+    expect((await app().request("/returned-crash")).status).toBe(500);
   });
 });
 

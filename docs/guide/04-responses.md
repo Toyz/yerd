@@ -206,6 +206,7 @@ export class OrderPage {
 - Exposed errors (below 500) send `{ "error": message, "code": code, ...details }` as JSON. One with no code and no details sends its message as text.
 - 5xx errors aren't exposed: the body is the status text alone. Pass `expose: true` to send the rest.
 - The error's `headers` go out either way, on error pages too.
+- Returning a `YerdError` counts as throwing it, for use in an expression: `return orders.get(id) ?? new NotFound("No such order")`.
 - Any other thrown error is a 500 with the body `Internal Server Error`, and is logged.
 
 ### The ready-made classes

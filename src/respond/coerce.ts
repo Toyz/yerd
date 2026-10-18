@@ -166,7 +166,7 @@ export async function coerce(value: unknown, options: CoerceOptions): Promise<Ou
   const what = value instanceof Map || value instanceof Set
     ? `a ${value.constructor.name} (JSON can't represent it; convert it, e.g. Object.fromEntries(map) or [...set])`
     : value instanceof Error
-      ? "an Error (throw it instead of returning it)"
+      ? "an Error (an error handler must answer with a response, not another error)"
       : value instanceof Response
         ? "a fetch Response (return its body, e.g. res(await response.text(), { status: response.status }))"
         : Object.prototype.toString.call(value);

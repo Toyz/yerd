@@ -51,7 +51,7 @@ describe("coerce", () => {
 
   it("refuses built-ins JSON can't represent, saying what to do", async () => {
     await expect(coerce(new Map(), opts)).rejects.toThrow(/a Map \(JSON can't represent it/);
-    await expect(coerce(new Error("x"), opts)).rejects.toThrow(/throw it/);
+    await expect(coerce(new Error("x"), opts)).rejects.toThrow(/answer with a response, not another error/);
   });
 
   it("Uint8Array -> octet-stream", async () => {
