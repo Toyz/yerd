@@ -5,7 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>yerd docs</title>
     <meta name="description" content="yerd: a TypeScript web server where routes are decorated classes and TSX is the template engine. API reference generated from the source." />
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%238bd5a0'/><text x='16' y='22' font-family='monospace' font-size='16' font-weight='700' text-anchor='middle' fill='%230d0f12'>y</text></svg>" />
+    <meta name="theme-color" content="#f5efe3" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1b1814" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M16 1 27 22H5Z' fill='%23d6452b'/><circle cx='16' cy='25' r='6' fill='%23f2c9a5'/><path d='M9 25q7 10 14 0q-2 6-7 6t-7-6Z' fill='%23fff'/></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Atkinson+Hyperlegible+Next:ital,wght@0,400;0,700;1,400&family=Atkinson+Hyperlegible+Mono:wght@400;600&display=swap"
+    />
+    <script>
+      // The theme you picked, before first paint (the toggle stores it as JSON).
+      try {
+        const theme = JSON.parse(localStorage.getItem("yerd-docs:theme") || '"system"');
+        if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+      } catch {}
+    </script>
   </head>
   <body>
     <yerd-docs></yerd-docs>

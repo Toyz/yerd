@@ -223,7 +223,7 @@ export function renderMarkdown(source: string, ctx: LinkContext): Rendered {
       const close = fence[2]!;
       for (i++; i < lines.length && !lines[i]!.trimStart().startsWith(close); i++) body.push(lines[i]!.slice(fence[1]!.length));
       const source = body.join("\n");
-      html += `<div class="code-wrap"><button class="copy" type="button" aria-label="Copy code">copy</button><pre class="code" data-lang="${escapeHtml(fence[3] || "text")}"><code>${highlight(source, fence[3] || "text", codeLinker(source, ctx))}</code></pre></div>`;
+      html += `<div class="code-wrap"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre class="code" data-lang="${escapeHtml(fence[3] || "text")}"><code>${highlight(source, fence[3] || "text", codeLinker(source, ctx))}</code></pre></div>`;
       continue;
     }
 

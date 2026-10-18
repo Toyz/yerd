@@ -2,7 +2,41 @@
  * A small syntax highlighter for the docs' code blocks: TypeScript / TSX /
  * JavaScript / JSON / shell. One pass of a sticky regex per language; output
  * is escaped text wrapped in <span class="tok-..."> and nothing else.
+ *
+ * The palette for those classes lives here too (codeStyles), one pair of
+ * colors per token: paper first, soil second. Every color clears WCAG AA
+ * (4.5:1) on the code background and on the raised surface in its theme.
+ * Decorators get the terracotta: they're what a yerd file is made of.
  */
+
+import { css } from "@toyz/loom";
+
+/** [light, dark] per token class. */
+export const CODE_PALETTE = {
+  comment: ["#6c6152", "#948973"],
+  string: ["#476628", "#b7cb91"],
+  keyword: ["#86386a", "#d9a6c8"],
+  decorator: ["#a8381f", "#f08a68"],
+  number: ["#7d5508", "#e6bb62"],
+  type: ["#2d5a73", "#93c3d8"],
+  fn: ["#6e4613", "#e3c38f"],
+  tag: ["#9a3a1c", "#f2957a"],
+} as const;
+
+const tokenRules = Object.entries(CODE_PALETTE)
+  .map(([token, [light, dark]]) => `.tok-${token} { color: light-dark(${light}, ${dark}); }`)
+  .join("\n");
+
+/** Token colors and the code surface, for any shadow root that shows code. */
+export const codeStyles = css`
+  :host {
+    --code-bg: light-dark(#ede5d5, #15120f);
+    --code-text: light-dark(#2b241c, #e9e0cf);
+  }
+  ${tokenRules}
+  .tok-comment { font-style: italic; }
+  .tok-decorator { font-weight: 600; }
+`;
 
 const KEYWORDS = new Set(
   ("abstract as async await break case catch class const continue declare default delete do else enum export extends " +

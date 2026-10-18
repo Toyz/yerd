@@ -1,57 +1,101 @@
 /* Global tokens. Custom properties inherit through shadow roots, so every
-   loom component reads these with var(--...). */
-:root {
-  color-scheme: dark;
-  --bg: #0d0f12;
-  --bg-raised: #14171c;
-  --bg-sunken: #0a0c0e;
-  --bg-hover: #1b1f26;
-  --border: #23272f;
-  --border-strong: #313743;
-  --text: #e6e8eb;
-  --text-dim: #a2a9b4;
-  --text-faint: #6b7280;
-  --accent: #8bd5a0;
-  --accent-dim: #4f8c62;
-  --accent-bg: rgba(139, 213, 160, 0.1);
-  --warn: #e8c46a;
-  --warn-bg: rgba(232, 196, 106, 0.1);
-  --danger: #f08b8b;
-  --info: #8ab4f8;
-  --info-bg: rgba(138, 180, 248, 0.1);
-  --font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --radius: 8px;
-  --sidebar: 272px;
+   loom component reads these with var(--...).
 
-  --tok-comment: #6b7280;
-  --tok-string: #c3e88d;
-  --tok-keyword: #c792ea;
-  --tok-decorator: #ffcb6b;
-  --tok-number: #f78c6c;
-  --tok-type: #82aaff;
-  --tok-fn: #8bd5a0;
-  --tok-tag: #f07178;
+   Two themes from one set of tokens: light-dark() picks the first value on
+   paper (light) and the second on soil (dark). Without a choice the page
+   follows the system; the toggle pins one with data-theme on <html>. The
+   code palette lives with the highlighter (highlight.ts). */
+:root {
+  color-scheme: light dark;
+
+  /* surfaces */
+  --bg: light-dark(#f5efe3, #1b1814);
+  --bg-raised: light-dark(#fbf8f1, #231f1a);
+  --bg-sunken: light-dark(#ede5d5, #15120f);
+  --bg-hover: light-dark(#ece3d1, #2b261f);
+  --border: light-dark(#e0d5c0, #352e26);
+  --border-strong: light-dark(#cbbca2, #4a4136);
+
+  /* ink */
+  --text: light-dark(#2b241c, #efe6d6);
+  --text-dim: light-dark(#53483c, #c4b8a5);
+  --text-faint: light-dark(#6f6355, #968b79);
+
+  /* terracotta: --hat is the gnome's hat (fills, marks); --accent is for text */
+  --hat: light-dark(#d6452b, #e0573b);
+  --accent: light-dark(#a8381f, #f08263);
+  --accent-dim: light-dark(#d9957f, #8a4434);
+  --accent-bg: light-dark(rgba(214, 69, 43, 0.09), rgba(224, 87, 59, 0.13));
+
+  /* moss */
+  --moss: light-dark(#4a6733, #a9c18b);
+  --moss-fill: light-dark(#7f9b60, #7f9b60);
+  --moss-bg: light-dark(rgba(109, 140, 78, 0.13), rgba(127, 155, 96, 0.16));
+
+  /* signals */
+  --warn: light-dark(#80530a, #e6b95e);
+  --warn-bg: light-dark(rgba(196, 140, 30, 0.13), rgba(230, 185, 94, 0.12));
+  --danger: light-dark(#a3261b, #f08a7a);
+  --danger-bg: light-dark(rgba(163, 38, 27, 0.08), rgba(240, 138, 122, 0.1));
+  --info: light-dark(#2d5d78, #8dbbd3);
+  --info-bg: light-dark(rgba(45, 93, 120, 0.08), rgba(141, 187, 211, 0.1));
+  --slate: light-dark(#3d5a70, #9cc0d6);
+  --slate-bg: light-dark(rgba(61, 90, 112, 0.1), rgba(156, 192, 214, 0.12));
+  --ochre: light-dark(#7a5408, #e2bb68);
+  --ochre-bg: light-dark(rgba(176, 128, 30, 0.13), rgba(226, 187, 104, 0.12));
+
+  --shadow: light-dark(0 18px 48px rgba(60, 40, 20, 0.16), 0 18px 48px rgba(0, 0, 0, 0.5));
+
+  /* type */
+  --display: "Young Serif", "Iowan Old Style", Georgia, serif;
+  --font: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Atkinson Hyperlegible Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --radius: 6px;
+  --top: 60px;
+  --sidebar: 248px;
+  --measure: 70ch;
 }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
 * {
   box-sizing: border-box;
 }
 
+html {
+  scroll-padding-top: calc(var(--top) + 16px);
+}
+
 html,
 body {
   margin: 0;
-  background: var(--bg);
+  background-color: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* A faint paper grain; it reads as texture, not pattern. */
+body {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .25 0 0 0 0 .15 0 0 0 .05 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 ::selection {
-  background: var(--accent-dim);
+  background: light-dark(#f2c3b6, #6b3426);
   color: var(--text);
+}
+
+:focus-visible {
+  outline: 2px solid var(--hat);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
 }
 
 /* Hover cards for API references (src/api-tip.ts): one element on <body>. */
@@ -59,23 +103,23 @@ body {
   position: fixed;
   z-index: 100;
   padding: 12px 14px;
-  border-radius: 10px;
+  border-radius: 8px;
   border: 1px solid var(--border-strong);
   background: var(--bg-raised);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-  font-size: 0.85rem;
+  box-shadow: var(--shadow);
+  font-size: 0.87rem;
   line-height: 1.5;
   pointer-events: none;
 }
 .api-tip[hidden] { display: none; }
 .api-tip-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
-.api-tip-name { font: 600 0.95rem var(--mono); color: var(--accent); }
+.api-tip-name { font: 600 0.95rem var(--mono); color: var(--text); }
 .api-tip-kind, .api-tip-since {
-  font: 600 0.68rem var(--mono); padding: 2px 6px; border-radius: 999px;
-  border: 1px solid var(--border-strong); color: var(--text-dim);
+  font: 700 0.7rem var(--font); padding: 2px 7px; border-radius: 3px;
+  background: var(--bg-sunken); color: var(--text-dim);
 }
-.api-tip-since { color: var(--accent); border-color: var(--accent-dim); }
-.api-tip-since.unreleased { color: var(--warn); border-color: rgba(232, 196, 106, 0.45); }
-.api-tip-sig { font: 0.74rem var(--mono); color: var(--text-faint); margin-bottom: 6px; overflow-wrap: anywhere; }
+.api-tip-since { color: var(--moss); background: var(--moss-bg); }
+.api-tip-since.unreleased { color: var(--warn); background: var(--warn-bg); }
+.api-tip-sig { font: 0.76rem var(--mono); color: var(--text-faint); margin-bottom: 6px; overflow-wrap: anywhere; }
 .api-tip-doc { color: var(--text-dim); }
-.api-tip-module { margin-top: 6px; font: 0.7rem var(--mono); color: var(--text-faint); }
+.api-tip-module { margin-top: 6px; font: 0.72rem var(--mono); color: var(--text-faint); }

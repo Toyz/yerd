@@ -20,8 +20,20 @@ export function SinceBadge({ since }: { since: string | null | undefined }) {
   );
 }
 
+/** What an export is, as a plant tag (see tagStyles in shared.ts). */
 export function KindBadge({ kind }: { kind: string }) {
-  return <span class={`badge kind ${kind}`}>{kind}</span>;
+  return <span class={`tag ${kind}`}>{kind}</span>;
+}
+
+/** The gnome: a terracotta hat, a face, a beard. The same mark the example app wears. */
+export function GnomeMark({ size = 28 }: { size?: number }) {
+  return (
+    <svg class="gnome" viewBox="0 0 32 32" width={size} height={size} aria-hidden="true">
+      <path d="M16 1 27 22H5Z" fill="var(--hat)" />
+      <circle cx={16} cy={25} r={6} fill="#f2c9a5" />
+      <path d="M9 25q7 10 14 0q-2 6-7 6t-7-6Z" fill="#fff" />
+    </svg>
+  );
 }
 
 /** Markdown (guides, JSDoc), rendered by markdown.ts: escaped text plus its own markup only. */
@@ -68,8 +80,8 @@ export function onCopyClick(event: Event): void {
   if (!button) return;
   const code = button.parentElement?.querySelector("code")?.textContent ?? "";
   void navigator.clipboard?.writeText(code).then(() => {
-    button.textContent = "copied";
-    setTimeout(() => (button.textContent = "copy"), 1200);
+    button.textContent = "Copied";
+    setTimeout(() => (button.textContent = "Copy"), 1200);
   });
 }
 
