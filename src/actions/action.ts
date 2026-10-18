@@ -13,6 +13,7 @@
  * user is allowed to act on them: actions still check ownership.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -167,8 +168,12 @@ export interface BoundAction<A = unknown> {
   readonly holes?: HoleSource[];
 }
 
-/** Set while an action lambda runs at render time: action calls are recorded, not run. */
-let capturing: { fn?: Function; args?: unknown; calls: number } | undefined;
+/**
+ * Set while an action lambda runs at render time: action calls are recorded,
+ * not run. Async context, not a flag, so an async lambda's code after an
+ * await (which runs once the capture is over) still can't run the action.
+ */
+const capturing = new AsyncLocalStorage<{ fn?: Function; args?: unknown; calls: number; done: boolean }>();
 
 /**
  * Mark a route method as an action. Its first parameter is the arguments the
@@ -191,10 +196,12 @@ export function action<M extends Action<any>>(method: M, context: ClassMethodDec
   // Called inside an action lambda while the page renders, the action only
   // says who it is and what it was given; otherwise it runs.
   const wrapped = function (this: unknown, args: unknown, form?: ActionForm): unknown {
-    if (capturing) {
-      capturing.calls++;
-      capturing.fn = wrapped;
-      capturing.args = args;
+    const box = capturing.getStore();
+    if (box) {
+      if (box.done) return undefined;
+      box.calls++;
+      box.fn = wrapped;
+      box.args = args;
       return undefined;
     }
     return method.call(this, args, form);
@@ -304,8 +311,8 @@ export function fillHoles(args: unknown, holes: HoleSource[] | undefined, fields
  * `ref()` reads become holes the browser fills when the action fires.
  */
 export function captureAction(lambda: Function, holes: HoleSource[] = []): BoundAction {
-  if (capturing) throw new TypeError("An action lambda can't render another action lambda");
-  const box: { fn?: Function; args?: unknown; calls: number } = { calls: 0 };
+  if (capturing.getStore()) throw new TypeError("An action lambda can't render another action lambda");
+  const box: { fn?: Function; args?: unknown; calls: number; done: boolean } = { calls: 0, done: false };
   const scope: ActionScope = {
     el: liveElement(["el"], holes),
     drag: liveElement(["drag"], holes),
@@ -313,12 +320,11 @@ export function captureAction(lambda: Function, holes: HoleSource[] = []): Bound
     ctx: currentContext(),
     form: STAND_IN,
   };
-  capturing = box;
   let result: unknown;
   try {
-    result = lambda(scope, STAND_IN);
+    result = capturing.run(box, () => lambda(scope, STAND_IN));
   } finally {
-    capturing = undefined;
+    box.done = true;
   }
   // An async lambda: the call before its first await was recorded; don't leave a rejection hanging.
   if (result instanceof Promise) result.catch(() => {});
