@@ -112,12 +112,14 @@ function typeAccepted(type: string, accepted: readonly string[]): boolean {
 
 /** Why `file` breaks `limits`, with the status a request accessor answers it with; undefined when it fits. */
 export function fileProblem(file: File, limits: FileLimits | undefined): { status: 413 | 415; message: string } | undefined {
+  // Named, so a form with several files says which one: "big.png is larger than 8 bytes".
+  const which = file.name || "File";
   if (limits?.maxSize !== undefined && file.size > limits.maxSize) {
-    return { status: 413, message: `File is larger than ${limits.maxSize} bytes` };
+    return { status: 413, message: `${which} is larger than ${limits.maxSize} bytes` };
   }
   const types = limits?.types;
   if (types && !typeAccepted(file.type, types)) {
-    return { status: 415, message: `File type ${file.type || "(unknown)"} isn't accepted (${types.join(", ")})` };
+    return { status: 415, message: `${which} has type ${file.type || "(unknown)"}, which isn't accepted (${types.join(", ")})` };
   }
   return undefined;
 }

@@ -716,9 +716,9 @@ describe("is.file / is.files", () => {
 
   it.each([
     [png(), "ok"],
-    [png("a.png", 5), "File is larger than 4 bytes"],
-    [txt, "File type text/plain isn't accepted (image/*)"],
-    [untyped, "File type (unknown) isn't accepted (image/*)"],
+    [png("a.png", 5), "a.png is larger than 4 bytes"],
+    [txt, "a.txt has type text/plain, which isn't accepted (image/*)"],
+    [untyped, "blob has type (unknown), which isn't accepted (image/*)"],
     [[png(), png()], "Expected one file"],
     ["a.png", "Expected a file"],
     [{ name: "a.png", size: 1, type: "image/png" }, "Expected a file"],
@@ -730,7 +730,7 @@ describe("is.file / is.files", () => {
 
   it("is.files takes one file as a list of one, and checks each with an indexed path", () => {
     expect(parse(Many, { v: png() }).v).toHaveLength(1);
-    expect(issuesOf(Many, { v: [png(), txt] })).toEqual([{ path: "v[1]", message: "File type text/plain isn't accepted (image/png)" }]);
+    expect(issuesOf(Many, { v: [png(), txt] })).toEqual([{ path: "v[1]", message: "a.txt has type text/plain, which isn't accepted (image/png)" }]);
     expect(issuesOf(Many, { v: [png(), png(), png()] })).toEqual([{ path: "v", message: "Expected at most 2 files" }]);
     expect(issuesOf(Many, { v: [] })).toEqual([{ path: "v", message: "Expected at least 1 files" }]);
     expect(issuesOf(Many, { v: [png(), "x"] })).toEqual([{ path: "v", message: "Expected files" }]);
@@ -741,7 +741,7 @@ describe("is.file / is.files", () => {
       @is.file({ types: ["image/*"] }) v!: File;
     }
     const sneaky = new File(["x"], "x", { type: "imagex/png" });
-    expect(one(Img, sneaky)).toEqual({ error: "File type imagex/png isn't accepted (image/*)" });
+    expect(one(Img, sneaky)).toEqual({ error: "x has type imagex/png, which isn't accepted (image/*)" });
   });
 });
 

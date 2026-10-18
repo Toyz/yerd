@@ -158,9 +158,9 @@ describe("files", () => {
     expect(fileProblem(png("a.png", 1, "Image/PNG"), { types: ["image/*"] })).toBeUndefined();
     expect(fileProblem(png("a.gif", 1, "image/gif"), { types: ["image/png"] })).toEqual({
       status: 415,
-      message: "File type image/gif isn't accepted (image/png)",
+      message: "a.gif has type image/gif, which isn't accepted (image/png)",
     });
-    expect(fileProblem(png("a.png", 9), { maxSize: 8 })).toEqual({ status: 413, message: "File is larger than 8 bytes" });
+    expect(fileProblem(png("a.png", 9), { maxSize: 8 })).toEqual({ status: 413, message: "a.png is larger than 8 bytes" });
   });
 
   it("an empty file input isn't a file", () => {

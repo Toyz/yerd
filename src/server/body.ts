@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { HttpError } from "../respond/response.js";
+import { isSentFile } from "../decorators/parse.js";
 
 /**
  * Text fields from a form body, by name. A name sent more than once becomes
@@ -175,10 +176,8 @@ function appendField(fields: FormFields, key: string, value: string): void {
   else fields[key] = [existing, value];
 }
 
-/** Whether a file input really sent a file: an empty one arrives as a File with no name and no bytes. */
-export function isSentFile(file: File): boolean {
-  return file.size > 0 || file.name !== "";
-}
+// The rule for "an empty file input isn't a file" lives with the other request parsers.
+export { isSentFile };
 
 /** The files really sent under a field (see isSentFile); empty when none. */
 export function sentFiles(files: readonly File[] | undefined): File[] {

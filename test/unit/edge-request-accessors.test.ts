@@ -485,7 +485,7 @@ describe("@body(Dto) with uploads", () => {
       body: {
         error: "Validation failed",
         issues: [
-          { path: "avatar", message: "File is larger than 10 bytes" },
+          { path: "avatar", message: "a.png is larger than 10 bytes" },
           { path: "attachments", message: "Expected at most 2 files" },
         ],
       },
@@ -609,7 +609,7 @@ describe("@file and @files", () => {
     const fd = new FormData();
     fd.append("avatar", png("a.png"));
     fd.append("avatar", png("big.png", 9));
-    expect(await upload(fd)).toEqual({ status: 413, body: "avatar: File is larger than 8 bytes" });
+    expect(await upload(fd)).toEqual({ status: 413, body: "avatar: big.png is larger than 8 bytes" });
   });
 
   it.each<[string, () => FormData, unknown]>([
@@ -630,7 +630,7 @@ describe("@file and @files", () => {
         fd.append("avatar", png("a.png", 9));
         return fd;
       },
-      { status: 413, body: "avatar: File is larger than 8 bytes" },
+      { status: 413, body: "avatar: a.png is larger than 8 bytes" },
     ],
     [
       "a gif",
@@ -639,7 +639,7 @@ describe("@file and @files", () => {
         fd.append("avatar", png("a.gif", 4, "image/gif"));
         return fd;
       },
-      { status: 415, body: "avatar: File type image/gif isn't accepted (image/png, image/jpeg)" },
+      { status: 415, body: "avatar: a.gif has type image/gif, which isn't accepted (image/png, image/jpeg)" },
     ],
     [
       "an untyped file",
@@ -648,7 +648,7 @@ describe("@file and @files", () => {
         fd.append("avatar", new File(["x"], "x"));
         return fd;
       },
-      { status: 415, body: "avatar: File type application/octet-stream isn't accepted (image/png, image/jpeg)" },
+      { status: 415, body: "avatar: x has type application/octet-stream, which isn't accepted (image/png, image/jpeg)" },
     ],
     [
       "an extra that isn't an image",
@@ -658,7 +658,7 @@ describe("@file and @files", () => {
         fd.append("extras", png("x.txt", 1, "text/plain"));
         return fd;
       },
-      { status: 415, body: "extras: File type text/plain isn't accepted (image/*)" },
+      { status: 415, body: "extras: x.txt has type text/plain, which isn't accepted (image/*)" },
     ],
   ])("%s", async (_label, make, expected) => {
     expect(await upload(make())).toEqual(expected);
