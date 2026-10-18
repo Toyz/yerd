@@ -198,6 +198,28 @@ export const app = yerd().sessions().use(auth);
 
 `auth.login(user)` regenerates the session id (so a pre-login id can't be reused) and stores the user's id. `auth.logout()` destroys the session.
 
+### Carrying a guest's cart across sign-in
+
+`onLogin` runs right after `login()` has rotated the session, and `onLogout` right before `logout()` destroys it. Use them to merge what a guest collected into the user's own data, and to keep it for next time (another day, another device):
+
+```ts
+export const auth = createAuth<User>({
+  load: (id) => resolve(Users).find(id),
+  async onLogin(user, session) {
+    const saved = await resolve(Carts).load(user.id);
+    session.set("cart", mergeCarts(saved, session.get("cart"))); // guest items join the saved cart
+  },
+  async onLogout(user, session) {
+    if (user) await resolve(Carts).save(user.id, session.get("cart") ?? []);
+  },
+});
+
+// In the action: await it, so the session is ready before the response.
+await auth.login(user);
+```
+
+Either hook may be async; then `login()` and `logout()` return their promise, so `await` them. Save on every cart change too if a user might never sign out.
+
 ```tsx
 import { ActionForm, HttpError, action, get, inject, query, redirect, route } from "@toyz/yerd";
 import { safeNext, verifyPassword } from "@toyz/yerd/auth";

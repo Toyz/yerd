@@ -53,6 +53,25 @@ export interface AuthOptions<User> {
    * auth in a process needs its own: a second createAuth() without one throws.
    */
   sessionKey?: string;
+  /**
+   * Runs in login(), after the session id is rotated and the user is stored:
+   * merge what a guest collected into the user's own data (a cart, recently
+   * viewed), or load their saved state into the session. May be async; then
+   * `await auth.login(user)`.
+   *
+   * ```ts
+   * onLogin: async (user, session) => {
+   *   const saved = await carts.load(user.id);
+   *   session.set("cart", mergeCarts(saved, session.get("cart")));
+   * },
+   * ```
+   */
+  onLogin?: (user: User, session: Session) => void | Promise<void>;
+  /**
+   * Runs in logout(), before the session is destroyed: save what should
+   * outlive it (the cart, for next time). May be async; then `await auth.logout()`.
+   */
+  onLogout?: (user: User | undefined, session: Session) => void | Promise<void>;
 }
 
 /**
@@ -71,9 +90,10 @@ export interface Auth<User> {
   /** Guard: the signed-in user has one of these roles (403 otherwise). */
   role(...names: string[]): GuardRef;
   /** Sign a user in: new session id (fixation), user id stored. */
-  login(user: User): void;
-  /** Sign out: the session is destroyed. */
-  logout(): void;
+  /** Sign in: rotates the session id, stores the user, then runs onLogin (await it when that's async). */
+  login(user: User): void | Promise<void>;
+  /** Sign out: runs onLogout, then destroys the session (await it when onLogout is async). */
+  logout(): void | Promise<void>;
   /** The signed-in user, for components and plain functions. */
   current(): User | undefined;
 }
@@ -187,11 +207,19 @@ export function createAuth<User>(options: AuthOptions<User>): Auth<User> {
       session.regenerate();
       session.set(userKey as never, idOf(user) as never);
       setUser(ctx, user);
+      return options.onLogin?.(user, session);
     },
     logout() {
       const ctx = currentContext();
-      sessionOf(ctx).destroy();
-      setUser(ctx, undefined);
+      const session = sessionOf(ctx);
+      const end = () => {
+        session.destroy();
+        setUser(ctx, undefined);
+      };
+      const saving = options.onLogout?.(current(ctx), session);
+      if (saving instanceof Promise) return saving.then(end);
+      end();
+      return undefined;
     },
     current() {
       const ctx = maybeContext();
