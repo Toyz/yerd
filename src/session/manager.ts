@@ -23,7 +23,7 @@ export interface LoadedSession {
   secure: boolean;
 }
 
-/** Refuse options that can't work, at the sessions() call. */
+/** Refuse options that can't work, at the sessions() call (the one way a SessionManager gets its options). */
 export function checkSessionOptions(options: SessionOptions): void {
   if (options.generateId && (options.store?.kind ?? "cookie") !== "id") {
     throw new TypeError("sessions({ generateId }) needs a store that keeps ids (kind: \"id\"), like MemoryStore; a CookieStore keeps the data in the cookie and has no ids");
@@ -34,7 +34,7 @@ export function checkSessionOptions(options: SessionOptions): void {
 
 /** Loads a request's session before the handler and writes it back after. */
 export class SessionManager {
-  readonly #store: SessionStore;
+  readonly #store: SessionStore | CookieStore;
   readonly #maxAge: number;
   readonly #absolute: number;
   readonly #rolling: boolean;
@@ -49,7 +49,6 @@ export class SessionManager {
     this.#absolute = options.absoluteMaxAge ?? 30 * DAY;
     this.#rolling = options.rolling ?? true;
     this.#name = options.cookieName ?? "yerd_session";
-    checkSessionOptions(options);
   }
 
   async #newId(old: string | undefined): Promise<string> {

@@ -821,8 +821,9 @@ function decodedPath(path: string): string {
  * hand back is the parsed path, and parsing drops dot segments: "/.//evil.com"
  * (or "/%2e//evil.com", "/x/..//evil.com") comes out as "//evil.com", which a
  * browser reads as another host. A result starting with "//" is refused too.
+ * A refused value becomes `fallback` (default "/"). Public as auth's safeNext.
  */
-export function safeBack(value: string | null | undefined, fallback: string): string {
+export function safeBack(value: string | null | undefined, fallback = "/"): string {
   if (!value || !value.startsWith("/") || /[\x00-\x1f\x7f\\]/.test(value)) return fallback;
   let url: URL;
   try {

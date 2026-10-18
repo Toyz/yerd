@@ -461,15 +461,15 @@ describe("SessionManager: the cookie size limit", () => {
 });
 
 describe("SessionManager: ids and generateId", () => {
-  it("refuses generateId with a cookie store, at construction and in checkSessionOptions", () => {
-    expect(() => new SessionManager({ generateId: () => "x" }, [SECRET])).toThrow(/needs a store that keeps ids/);
+  it("refuses generateId with a cookie store, at the sessions() call", () => {
+    expect(() => yerd({ handleSignals: false }).sessions({ generateId: () => "x" })).toThrow(/needs a store that keeps ids/);
     expect(() => checkSessionOptions({ generateId: () => "x" })).toThrow(TypeError);
     expect(() => checkSessionOptions({ generateId: () => "x", store: new MemoryStore() })).not.toThrow();
   });
 
   it.each(["bad name", "semi;colon", "", "eq=ual", "café"])("refuses cookieName %j up front, not on the first write", (cookieName) => {
     expect(() => checkSessionOptions({ cookieName })).toThrow(/Invalid cookie name/);
-    expect(() => new SessionManager({ cookieName }, [SECRET])).toThrow(/Invalid cookie name/);
+    expect(() => yerd({ handleSignals: false }).sessions({ cookieName })).toThrow(/Invalid cookie name/);
   });
 
   // Question: a generateId that repeats another live session's id makes the

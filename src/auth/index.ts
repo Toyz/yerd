@@ -28,7 +28,6 @@
 
 import { createAccessor, type AccessorDecorator } from "../decorators/kit.js";
 import { createGuard, onGuardRegistryReset, type GuardRef } from "../decorators/guards.js";
-import { localKey } from "../decorators/keys.js";
 import { safeBack } from "../actions/action.js";
 import { HttpError } from "../respond/response.js";
 import { currentContext, maybeContext, type YerdContext } from "../server/context.js";
@@ -252,9 +251,7 @@ export interface Auth<User> {
  * }
  * ```
  */
-export function safeNext(value: string | null | undefined, fallback = "/"): string {
-  return safeBack(value, fallback);
-}
+export const safeNext: (value: string | null | undefined, fallback?: string) => string = safeBack;
 
 /** Browsers (and yerd's runtime, which asks for HTML) get the login redirect; APIs get a 401. */
 function wantsPage(ctx: YerdContext): boolean {
@@ -300,7 +297,8 @@ function wantsPage(ctx: YerdContext): boolean {
  * ```
  */
 export function createAuth<User>(options: AuthOptions<User>): Auth<User> {
-  const loaded = localKey<{ user: User | undefined }>("auth:user");
+  // This auth's slot in the per-request memo: the loaded user, once per request.
+  const loaded = Symbol("auth:user");
   const idOf = options.idOf ?? ((user: User) => String((user as { id: unknown }).id));
   const loginPath = options.loginPath ?? "/login";
   const userKey = options.sessionKey ?? DEFAULT_KEY;
@@ -321,8 +319,8 @@ export function createAuth<User>(options: AuthOptions<User>): Auth<User> {
     }
   };
 
-  const stateOf = (ctx: YerdContext) => ctx.memo.get(loaded.key) as { user: User | undefined } | undefined;
-  const setUser = (ctx: YerdContext, user: User | undefined) => ctx.memo.set(loaded.key, { user });
+  const stateOf = (ctx: YerdContext) => ctx.memo.get(loaded) as { user: User | undefined } | undefined;
+  const setUser = (ctx: YerdContext, user: User | undefined) => ctx.memo.set(loaded, { user });
 
   const middleware: Middleware = async (ctx, next) => {
     // Build-time prerendering has no visitor: nobody is signed in.

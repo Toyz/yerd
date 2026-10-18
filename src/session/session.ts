@@ -149,8 +149,8 @@ export interface SessionRecord {
  * ```
  */
 export interface SessionStore {
-  /** "cookie" stores keep the sealed record in the cookie itself; "id" stores keep an id there. */
-  readonly kind: "cookie" | "id";
+  /** Always "id": the cookie keeps the sealed id, the store the record. (Keeping the record in the cookie itself is CookieStore.) */
+  readonly kind: "id";
   /** The record for `id`, or undefined when unknown or expired. */
   get(id: string): SessionRecord | undefined | Promise<SessionRecord | undefined>;
   /** Save `record` under `id`, replacing any old one; it may be dropped after `ttlMs`. */
@@ -173,16 +173,9 @@ export interface SessionStore {
  * });
  * ```
  */
-export class CookieStore implements SessionStore {
+export class CookieStore {
+  /** Marks it: the session manager reads and writes the record in the cookie itself. */
   readonly kind = "cookie" as const;
-  /** No-op: the session manager reads the record from the cookie itself. */
-  get(): undefined {
-    return undefined;
-  }
-  /** No-op: the record is written into the cookie. */
-  set(): void {}
-  /** No-op: destroying clears the cookie. */
-  destroy(): void {}
 }
 
 /** Options for MemoryStore. */
@@ -779,7 +772,7 @@ export interface SessionOptions {
    * app.sessions({ store: new MemoryStore({ maxSize: 10_000 }) });
    * ```
    */
-  store?: SessionStore;
+  store?: SessionStore | CookieStore;
   /**
    * Idle lifetime in ms: a session not used for this long is gone. Default
    * 14 days.
