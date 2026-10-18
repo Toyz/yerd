@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -107,6 +107,11 @@ describe("checkActionToken", () => {
     expect(tag).toHaveLength(22);
     expect(tag).not.toContain(nonce);
     expect(csrfTag("a")).not.toBe(csrfTag("b"));
+  });
+
+  it("csrfTag's memo of the last nonce never hands one session's tag to another", () => {
+    const sha = (s: string) => createHash("sha256").update(s).digest("base64url").slice(0, 22);
+    for (const n of ["a", "a", "b", "a", "b", "b", nonce]) expect(csrfTag(n)).toBe(sha(n));
   });
 });
 

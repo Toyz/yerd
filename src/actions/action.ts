@@ -18,7 +18,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createKey } from "../decorators/keys.js";
-import { resolveRoute, routeRegistry } from "../decorators/route.js";
+import { resolveRoute, routeRegistry, type RouteDef } from "../decorators/route.js";
 import { HttpError } from "../respond/response.js";
 import { Logger } from "../log/logger.js";
 import { currentContext, type YerdContext } from "../server/context.js";
@@ -715,12 +715,21 @@ declare module "../session/session.js" {
   }
 }
 
+// The last nonce csrfTag() hashed, and its tag.
+let lastNonce: string | undefined;
+let lastTag = "";
+
 /**
  * What a token carries for a session nonce: a hash of it rather than the
  * nonce itself, so a token seen in page source says nothing about the session.
  */
 export function csrfTag(nonce: string): string {
-  return createHash("sha256").update(nonce).digest("base64url").slice(0, 22);
+  // Every token on a page carries the same session's tag: hash it once.
+  if (nonce !== lastNonce) {
+    lastTag = createHash("sha256").update(nonce).digest("base64url").slice(0, 22);
+    lastNonce = nonce;
+  }
+  return lastTag;
 }
 
 /**
@@ -784,14 +793,12 @@ export function formAction(value: ActionLambda | Action<unknown> | BoundAction):
   const args = isBoundAction(value) ? value.args : {};
   const info = actionFunctions.get(fn);
   if (!info) throw new TypeError("An action must be an @action method, a lambda calling one, or bind(...) of one");
-  const def = routeRegistry.find((d) => d.metadata === info.metadata);
-  if (!def) throw new TypeError(`@action ${info.name} belongs to a class that isn't a @route`);
+  const owner = ownerRoute(info);
   const ctx = currentContext();
-  const pattern = resolveRoute(def).pattern;
-  const url = pattern.replace(/[:*]([A-Za-z0-9_]+)/g, (_, name: string) => {
+  const url = owner.pattern.replace(/[:*]([A-Za-z0-9_]+)/g, (_, name: string) => {
     const value = ctx.params[name];
     if (value === undefined) {
-      throw new Error(`Can't render a form for ${def.className}.${info.name}: the current page has no :${name} param`);
+      throw new Error(`Can't render a form for ${owner.className}.${info.name}: the current page has no :${name} param`);
     }
     return encodeURIComponent(value);
   });
@@ -800,8 +807,34 @@ export function formAction(value: ActionLambda | Action<unknown> | BoundAction):
   // page's own URL may spell a param differently ("/u/@ada" for "/u/%40ada").
   const samePage = url === ctx.path || decodedPath(url) === decodedPath(ctx.path);
   const holes = isBoundAction(value) ? value.holes : undefined;
-  const token = ctx.signAction(holes?.length ? { c: def.className, a: info.name, p: args, h: holes } : { c: def.className, a: info.name, p: args });
+  const token = ctx.signAction(holes?.length ? { c: owner.className, a: info.name, p: args, h: holes } : { c: owner.className, a: info.name, p: args });
   return { url: samePage ? url + ctx.url.search : url, token, ...(holes?.length ? { holes } : {}) };
+}
+
+interface OwnerRoute {
+  className: string;
+  /** The full pattern, group prefixes included. */
+  pattern: string;
+  /** Where the route sat in the registry, to notice a reset (dev reloads) without a hook. */
+  index: number;
+  def: RouteDef;
+}
+
+// Per route class: every form for one of its actions needs the same pattern,
+// and resolving it walks the group chain.
+const owners = new WeakMap<DecoratorMetadataObject, OwnerRoute>();
+
+/** The route an action belongs to: its class name and full pattern. */
+function ownerRoute(info: ActionInfo): OwnerRoute {
+  const cached = owners.get(info.metadata);
+  // A reset registry (or one refilled since) no longer holds this def where it did.
+  if (cached && routeRegistry[cached.index] === cached.def) return cached;
+  const index = routeRegistry.findIndex((d) => d.metadata === info.metadata);
+  if (index < 0) throw new TypeError(`@action ${info.name} belongs to a class that isn't a @route`);
+  const def = routeRegistry[index]!;
+  const owner = { className: def.className, pattern: resolveRoute(def).pattern, index, def };
+  owners.set(info.metadata, owner);
+  return owner;
 }
 
 function decodedPath(path: string): string {
