@@ -59,12 +59,13 @@ export type FormActionValue = string | ActionValue;
 type TriggerEvent =
   | "click" | "dblclick" | "input" | "change" | "submit"
   | "keydown" | "keyup" | "keypress" | "focus" | "blur" | "focusin" | "focusout"
-  | "mouseenter" | "mouseleave" | "pointerdown" | "pointerup" | "toggle";
+  | "mouseenter" | "mouseleave" | "pointerdown" | "pointerup" | "toggle" | "drop";
 
 /**
  * When an element's action fires. Any DOM event (`"click"`, `"keyup"`, or a
  * custom one), optionally debounced (`"input 250ms"`) or filtered by key
- * (`"keydown:Enter"`); `"visible"` when it scrolls into view (once per
+ * (`"keydown:Enter"`); `"drop"` when a `draggable` element is dropped on it
+ * (the lambda's `drag` is that element); `"visible"` when it scrolls into view (once per
  * render: infinite scroll); `"load"` as soon as the page has it; `"every 5s"`
  * on a timer while it's on the page and the tab is visible.
  */

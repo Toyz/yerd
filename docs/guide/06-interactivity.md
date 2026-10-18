@@ -154,6 +154,7 @@ The lambda's one parameter has four things; take the ones you need.
 |---|---|---|
 | `el` | the element the action is on (the form, for a form) | when the action fires, in the browser |
 | `ref(selector)` | another element on the page, by CSS selector | when the action fires, in the browser |
+| `drag` | for `trigger="drop"`: the element that was dropped | when it lands, in the browser |
 | `ctx` | the request rendering the page: params, query, session | now, on the server |
 | `form` | a stand-in to pass to actions that take a form | |
 
@@ -163,7 +164,7 @@ The lambda's one parameter has four things; take the ones you need.
 <div action={({ ctx }) => this.more({ page: Number(ctx.query.get("page") ?? 1) + 1 })} trigger="visible" />
 ```
 
-`el` and `ref()` offer `value`, `valueAsNumber`, `checked`, `selectedIndex`, `open`, `disabled`, `textContent`, `id`, `name`, `scrollTop`, `scrollLeft` and `dataset.*`. Their values don't exist yet when the page renders: the browser reads them when the action fires and sends them along. So pass them straight into the arguments. `el.value.trim()` or `` `${el.value}!` `` throws while rendering, with a message saying so. Do that work in the action instead.
+`el`, `drag` and `ref()` offer `value`, `valueAsNumber`, `checked`, `selectedIndex`, `open`, `disabled`, `textContent`, `id`, `name`, `scrollTop`, `scrollLeft` and `dataset.*`. Their values don't exist yet when the page renders: the browser reads them when the action fires and sends them along. So pass them straight into the arguments. `el.value.trim()` or `` `${el.value}!` `` throws while rendering, with a message saying so. Do that work in the action instead.
 
 > [!NOTE]
 > Where `el` / `ref()` values go is signed: they can only fill the spots you put them in. What they contain comes from the browser, like any form field, so validate them. They arrive typed: `checked`, `open` and `disabled` as booleans, the numeric ones as numbers, the rest as strings. They need the client runtime; a plain form post can't fill them and gets a 400.
@@ -189,6 +190,7 @@ Forms are still the default for anything that must work everywhere: a form posts
 | any DOM event: `"change"`, `"keyup"`, `"focusout"`, `"dblclick"`, a custom one... | when the element (or something inside it) fires it |
 | `"input 250ms"` | after the events stop for that long (debounced) |
 | `"keydown:Enter"` | only for that key |
+| `"drop"` | when a `draggable` element is dropped on it; the lambda's `drag` is that element |
 | `"visible"` | when the element scrolls into view (200px early), once per render |
 | `"load"` | as soon as the page has it, once per render |
 | `"every 5s"` | on a timer, while it's on the page and the tab is visible |
@@ -215,6 +217,38 @@ export class People {
   }
 }
 ```
+
+### Drag and drop
+
+Make things `draggable="true"` and give the place they land an action with `trigger="drop"`. The lambda's `drag` is whatever was dropped, so a kanban board is a column per status:
+
+```tsx
+function Column({ status, cards, move }: { status: Status; cards: Card[]; move: Action<{ card: string; to: Status; before?: string }> }) {
+  return (
+    <section class="column" action={({ drag }) => move({ card: drag.dataset.id, to: status })} trigger="drop">
+      <h2>{status}</h2>
+      <Region id={`column-${status}`} as="ul">
+        {cards.map((card) => (
+          // Dropping on a card puts the dropped one before it; the innermost target wins.
+          <li key={card.id} data-id={card.id} draggable="true"
+            action={({ drag }) => move({ card: drag.dataset.id, to: status, before: card.id })} trigger="drop">
+            {card.title}
+          </li>
+        ))}
+      </Region>
+    </section>
+  );
+}
+```
+
+While a drag is on, the dragged element has `data-yx-dragging` and the target under it `data-yx-over`, so CSS can show what's happening:
+
+```css
+[data-yx-dragging] { opacity: 0.4; }
+[data-yx-over] { outline: 2px dashed currentColor; }
+```
+
+Only the page's own `draggable` elements drop: files or text dragged in from elsewhere are left to the browser. Drag and drop needs the client runtime, so give important moves another way in too (a select, or buttons).
 
 ### Infinite scroll
 

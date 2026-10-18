@@ -118,6 +118,11 @@ export interface ActionScope {
   readonly el: ActionElement;
   /** Another element on the page, by CSS selector, as it is when the action fires: `ref("#sort").value`. */
   ref(selector: string): ActionElement;
+  /**
+   * For `trigger="drop"`: the element that was dropped (the `draggable`
+   * element being dragged), as it is when it lands: `drag.dataset.id`.
+   */
+  readonly drag: ActionElement;
   /** The request rendering this page (params, query, session...). Read now, not when the action fires. */
   readonly ctx: YerdContext;
   /** A stand-in form for actions that take one: `({ form }) => this.rename({ id }, form)`. */
@@ -197,7 +202,7 @@ export function action<M extends Action<any>>(method: M, context: ClassMethodDec
 /** Stand-in form for action lambdas; the action never sees it. */
 const STAND_IN = new ActionForm(Object.create(null) as FormFields);
 
-/** Where a hole's value comes from: ["el", ...path] or ["ref", selector, ...path]. */
+/** Where a hole's value comes from: ["el", ...path], ["drag", ...path] or ["ref", selector, ...path]. */
 export type HoleSource = string[];
 
 const HOLE: unique symbol = Symbol("yerd.hole");
@@ -214,7 +219,7 @@ function liveElement(base: HoleSource, holes: HoleSource[]): ActionElement {
     const key = JSON.stringify(path);
     let index = holes.findIndex((h) => JSON.stringify(h) === key);
     if (index < 0) index = holes.push(path) - 1;
-    const label = `${path[0] === "ref" ? `ref(${JSON.stringify(path[1])})` : "el"}.${path.slice(path[0] === "ref" ? 2 : 1).join(".")}`;
+    const label = `${path[0] === "ref" ? `ref(${JSON.stringify(path[1])})` : path[0]}.${path.slice(path[0] === "ref" ? 2 : 1).join(".")}`;
     const fail = () => {
       throw new TypeError(`${label} is filled in by the browser when the action fires; pass it straight into the action's arguments ({ q: ${label} }), don't compute with it`);
     };
@@ -229,7 +234,7 @@ function liveElement(base: HoleSource, holes: HoleSource[]): ActionElement {
       has: (_h, key) => key === HOLE,
     });
   };
-  const name = base[0] === "ref" ? `ref(${JSON.stringify(base[1])})` : "el";
+  const name = base[0] === "ref" ? `ref(${JSON.stringify(base[1])})` : base[0]!;
   return new Proxy({} as ActionElement, {
     get(_t, key) {
       if (typeof key === "symbol") return undefined;
@@ -295,6 +300,7 @@ export function captureAction(lambda: Function, holes: HoleSource[] = []): Bound
   const box: { fn?: Function; args?: unknown; calls: number } = { calls: 0 };
   const scope: ActionScope = {
     el: liveElement(["el"], holes),
+    drag: liveElement(["drag"], holes),
     ref: (selector: string) => liveElement(["ref", selector], holes),
     ctx: currentContext(),
     form: STAND_IN,

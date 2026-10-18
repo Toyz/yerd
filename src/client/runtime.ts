@@ -23,6 +23,10 @@
  * - [data-yx-trigger]   on an action form: submits it on that trigger
  * - [data-yx-holes]     values the server left for the browser: read from the
  *                       element (or ref(selector)) when the action fires, sent as _yxh<n>
+ * - trigger "drop"      a drop target: draggable elements can be dropped on it; the
+ *                       action's drag.* holes read the dropped element. While
+ *                       dragging, [data-yx-dragging] is on the dragged element and
+ *                       [data-yx-over] on the target under it
  * - [data-yx-append]    on a Region in a response: children are appended, not replaced
  *                       (data-yx-prepend: put first)
  * - #yx-notice          a small status message the runtime shows when an action
@@ -960,6 +964,10 @@ export function yerdRuntime(): void {
       const path = holes[i]!;
       let source: Element | null = el;
       let rest = path.slice(1);
+      if (path[0] === "drag") {
+        source = dragged;
+        if (!source) return undefined;
+      }
       if (path[0] === "ref") {
         source = document.querySelector(path[1]!);
         rest = path.slice(2);
@@ -976,6 +984,42 @@ export function yerdRuntime(): void {
   }
 
   const actionRuns = new WeakMap<Element, AbortController>();
+
+  // Drag and drop: the element being dragged, for drop targets' drag.* holes.
+  let dragged: HTMLElement | null = null;
+  document.addEventListener("dragstart", (event) => {
+    const source = (event.target as Element).closest?.<HTMLElement>("[draggable=true]");
+    if (!source) return;
+    dragged = source;
+    source.setAttribute("data-yx-dragging", "");
+    // Firefox won't start a drag without data.
+    event.dataTransfer?.setData("text/plain", source.id || source.dataset.id || "");
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  });
+  document.addEventListener("dragend", () => {
+    dragged?.removeAttribute("data-yx-dragging");
+    for (const over of Array.from(document.querySelectorAll("[data-yx-over]"))) over.removeAttribute("data-yx-over");
+    dragged = null;
+  });
+
+  /** The innermost drop target under a drag event, if the drag is one of ours. */
+  function dropTarget(event: Event): Element | null {
+    if (!dragged) return null;
+    return (event.target as Element).closest?.("[data-yx-trigger=drop]") ?? null;
+  }
+  document.addEventListener("dragover", (event) => {
+    const target = dropTarget(event);
+    if (!target) return;
+    // Allowing the drop is what makes the browser fire "drop" at all.
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    for (const over of Array.from(document.querySelectorAll("[data-yx-over]"))) if (over !== target) over.removeAttribute("data-yx-over");
+    target.setAttribute("data-yx-over", "");
+  });
+  document.addEventListener("dragleave", (event) => {
+    const target = dropTarget(event);
+    if (target && !target.contains(event.relatedTarget as Node | null)) target.removeAttribute("data-yx-over");
+  });
 
   /** Post an element's action (a newer run cancels an older one: typeahead), then apply the result like a form's. */
   async function runAction(el: HTMLElement): Promise<void> {
@@ -1100,8 +1144,15 @@ export function yerdRuntime(): void {
         // The trigger may have been morphed away or changed since.
         if (el.getAttribute("data-yx-trigger")?.trim().split(/\s+/)[0] !== kind) return;
         if (key && (e as KeyboardEvent).key !== key) return;
-        // A click on a link or a submit button would navigate or submit too.
-        if (event === "click" || event === "submit" || key) e.preventDefault();
+        // A click on a link or a submit button would navigate or submit too;
+        // a drop would open the dropped thing.
+        if (event === "click" || event === "submit" || event === "drop" || key) e.preventDefault();
+        // The innermost action wins: a card's drop doesn't also drop on its column.
+        e.stopPropagation();
+        if (event === "drop") {
+          el.removeAttribute("data-yx-over");
+          if (!dragged) return;
+        }
         clearTimeout(timer);
         if (wait) timer = setTimeout(() => void runAction(el), wait);
         else void runAction(el);

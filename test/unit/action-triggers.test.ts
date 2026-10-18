@@ -195,4 +195,43 @@ describe("element actions", () => {
     expect(seen).toEqual(["Nope"]);
     expect(document.getElementById("yx-notice")).toBeNull();
   });
+
+  it("drag and drop: a drop target's action reads the dropped element; the innermost target wins", async () => {
+    const fetch = stubFetch(() => new Response(null, { status: 204 }));
+    show(`
+      <ul id="doing" data-yx-action="/board" data-yx-token="COL" data-yx-trigger="drop" data-yx-holes='[["drag","dataset","id"]]'>
+        <li id="c2" data-id="c2" draggable="true" data-yx-action="/board" data-yx-token="CARD" data-yx-trigger="drop" data-yx-holes='[["drag","dataset","id"]]'>two</li>
+      </ul>
+      <ul id="todo"><li id="c1" data-id="c1" draggable="true">one</li></ul>`);
+    const fire = (type: string, target: Element) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
+      return event;
+    };
+    const card = document.getElementById("c1")!;
+    fire("dragstart", card);
+    expect(card.hasAttribute("data-yx-dragging")).toBe(true);
+    const over = fire("dragover", document.getElementById("doing")!);
+    expect(over.defaultPrevented).toBe(true);
+    expect(document.getElementById("doing")!.hasAttribute("data-yx-over")).toBe(true);
+    // Dropped on the card inside the column: only the card's action runs.
+    fire("drop", document.getElementById("c2")!);
+    fire("dragend", card);
+    await flush();
+    const posts = fetch.mock.calls.filter(([, init]) => init?.method === "POST").map(([, init]) => Object.fromEntries(new URLSearchParams(String(init!.body))));
+    expect(posts).toEqual([{ _yx: "CARD", _yxh0: "c1" }]);
+    expect(card.hasAttribute("data-yx-dragging")).toBe(false);
+    expect(document.querySelector("[data-yx-over]")).toBeNull();
+  });
+
+  it("ignores drops that aren't one of the page's draggables", async () => {
+    const fetch = stubFetch(() => new Response(null, { status: 204 }));
+    show(`<ul id="doing" data-yx-action="/board" data-yx-token="COL" data-yx-trigger="drop" data-yx-holes='[["drag","dataset","id"]]'></ul>`);
+    const over = new Event("dragover", { bubbles: true, cancelable: true });
+    document.getElementById("doing")!.dispatchEvent(over);
+    expect(over.defaultPrevented).toBe(false);
+    document.getElementById("doing")!.dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
+    await flush();
+    expect(fetch.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+  });
 });
