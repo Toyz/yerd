@@ -37,6 +37,7 @@ Demo accounts (also listed on `/login`):
 | `/orders`, `/orders/:id` | my orders; live status (pending, packed, shipped), cancel while pending, returns with photos | `RootLayout` > `ShopShell` (> `ReceiptCard` via `res()`) |
 | `/returns` | guest returns: `is.email`, `is.date`, `is.url`, a `[trim, toUuid]` pipeline, per-field error boxes | `RootLayout` > `ShopShell` |
 | `/features` | the feature tour | `RootLayout` > `ShopShell` |
+| `/lifetimes` | every service lifetime and registration style, live | `RootLayout` > `ShopShell` |
 | `/oops` | a deliberate crash: the error page shows the stack in development only | `RootLayout` > `ErrorPage` |
 | `/chat` | live chat; staff can mute | `RootLayout` > `ShopShell` |
 | `/rave` | gnome rave: dancing in step on every screen (`sync`), an airhorn and a beat drop played everywhere at once (`Cues`) | `RootLayout` > `ShopShell` |
@@ -92,7 +93,12 @@ API and `@catches(PaymentDeclined)` on the cart, `json()` for JSON-LD in a
 `resolve()`), `@inject`, `@maybe(Mailer)` (nothing registers one), `token()`
 for `ShopConfig` and `Mailer`, `@onBoot` (stock the shelves, hash the demo
 passwords), `@onShutdown`, `@every("4s")` (an imaginary crowd buys things and
-publishes each sale) and a `@hosted` `RestockWorker`.
+publishes each sale) and a `@hosted` `RestockWorker`. `/lifetimes` puts the
+rest side by side (`src/lifetimes.ts`): a singleton factory for a token
+(`s.singleton(BootInfo, bootInfo)`), a scoped factory for a class with a
+constructor argument (`s.scoped(Visit, ...)`) whose `[Symbol.dispose]` runs
+as each request ends, a `@transient` `Dice` injected twice (two dice), and
+`@service({ provides: Fortune })` behind a token.
 
 **Orders and returns** (`src/cart.ts`, `src/routes/orders.tsx`): order ids
 are UUIDs, checked and branded by a `[trim, toUuid]` pipeline on `@param`
@@ -227,11 +233,12 @@ curl -H 'x-api-key: let-me-in' -H 'content-type: application/json' \
 | `src/sales.ts` | `SalesFeed` (`@every`), `RestockWorker` (`@hosted`), `salesChannel` |
 | `src/users.ts` | `UserRepo`, demo accounts, `createAuth(...)` |
 | `src/viewer.ts` | the scoped `Viewer` |
+| `src/lifetimes.ts` | `BootInfo`, `Visit`, `Disposals`, `Dice`, `Fortune`: one of each service lifetime |
 | `src/chat.ts`, `src/board.ts` | chat (with the `notMuted` guard) and the kanban board |
 | `src/attributes.tsx` | `money`, `ago`, `ticker` and `horn` custom attributes |
 | `src/layouts.tsx` | root, shop, marketing, admin, auth and receipt layouts; error page |
 | `src/components.tsx` | product cards, grid, sentinel, hearts, toast |
-| `src/routes/*.tsx` | shop, products, cart, orders, chat, rave, admin, board, auth, pages, media, tour (lookbook, features), API |
+| `src/routes/*.tsx` | shop, products, cart, orders, chat, rave, lifetimes, admin, board, auth, pages, media, tour (lookbook, features), API |
 | `src/styles.css` | the stylesheet |
 | `src/hero.svg` | the hero image |
 | `public/humans.txt` | a file served as is from `public/` |

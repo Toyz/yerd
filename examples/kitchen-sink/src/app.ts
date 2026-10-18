@@ -6,6 +6,7 @@ import { ShopConfig, readOnlyMode, timing } from "./shop.js";
 // them; a @service is registered when its module loads, so load it here.
 import "./reactions.js";
 import { auth } from "./users.js";
+import { BootInfo, Disposals, Visit, bootInfo } from "./lifetimes.js";
 
 /** The app, without routes: main.ts (Vite) and server.ts (plain node) add them their own way. */
 export function createApp() {
@@ -27,7 +28,11 @@ export function createApp() {
           apiKey: process.env.BAZAAR_API_KEY ?? "let-me-in",
           readOnly: process.env.BAZAAR_READ_ONLY === "1",
           freeShippingCents: 5000,
-        }),
+        })
+          // Factories, for what a decorated class can't be: a token's value made on first use, and a
+          // per-request class built with a constructor argument (see the /lifetimes page).
+          .singleton(BootInfo, bootInfo)
+          .scoped(Visit, (c) => new Visit(c.get(Disposals))),
       )
       // Request lines and spans at info everywhere; in development also Orders at debug.
       // YERD_LOG and YERD_LOG_FORMAT still win, so a deploy can change this without a rebuild.

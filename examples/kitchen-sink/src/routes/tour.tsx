@@ -106,6 +106,7 @@ const FEATURES: Array<[string, Feature[]]> = [
     { name: "@every on orders", href: "/orders", how: "The warehouse moves orders along every half minute." },
     { name: "@onBoot / @onShutdown", href: "/products", how: "The shelves are stocked at boot; the server logs when it closes." },
     { name: "@scoped, @singleton, token(), @maybe", href: "/cart", how: "The cart badge comes from the scoped Viewer; config is a token; the Mailer is optional." },
+    { name: "Every service lifetime, side by side", href: "/lifetimes", how: "A singleton factory, a scoped factory disposed at the end of each request, two @transient dice, and @service({ provides }) behind a token. Reload and watch." },
     { name: "@logger and @instrument with skip paths", href: "/cart", how: "Check out and watch the server log: the card number is never logged." },
   ]],
   ["Auth and sessions", [

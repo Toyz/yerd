@@ -604,3 +604,19 @@ test("rave: two tabs dance on one beat, and a cue plays on both at the same mome
   await expect(one.locator("#ravers")).toContainText(/[2-9] tabs raving/);
   await Promise.all([one.context().close(), two.context().close()]);
 });
+
+test("service lifetimes: singleton stays, scoped is one per request and disposed after, transients differ", async ({ page }) => {
+  await page.goto("/lifetimes");
+  const boot = await page.locator("#boot-id").textContent();
+  const visit = await page.locator("#visit-id").textContent();
+  expect(visit).toMatch(/^[0-9a-f]{8}$/);
+  await expect(page.locator("#visit-again")).toHaveText(visit!);
+  expect(await page.locator("#die-left").textContent()).not.toBe(await page.locator("#die-right").textContent());
+  await expect(page.locator("#fortune")).not.toBeEmpty();
+
+  await page.reload();
+  await expect(page.locator("#boot-id")).toHaveText(boot!);
+  await expect(page.locator("#visit-id")).not.toHaveText(visit!);
+  // The previous request's Visit was disposed when it ended.
+  await expect(page.locator("#disposed")).toContainText(visit!);
+});
