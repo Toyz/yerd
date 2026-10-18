@@ -43,7 +43,7 @@ import { useManifest } from "../assets.js";
 import { runWithContext, type RouteInfo, type YerdContext } from "./context.js";
 import { RequestContext, type RequestEnv } from "./request-context.js";
 import { abortOnClose, forwarded, isStreamBody, mergeVary, splitTarget, wantsPage } from "./http.js";
-import { CATCHES, METHOD_RESPONSE, type CatchEntry, type ResponseDefaults } from "../decorators/response.js";
+import { catchesOf, responseDefaults, type CatchEntry, type ResponseDefaults } from "../decorators/response.js";
 import { ConsoleLogger } from "../log/console.js";
 import { LogFilter, defaultFilter } from "../log/filter.js";
 import { ILogger } from "../log/ilogger.js";
@@ -308,13 +308,11 @@ function routeNode(byVerb: ReadonlyMap<Verb, readonly Handler[]>, pendingRuns: A
     if (!names?.size) continue;
     let byName = actions.get(owner.def.className);
     if (!byName) actions.set(owner.def.className, (byName = new Map()));
-    const methodGuards = METHOD_GUARDS.from(owner.def.metadata);
-    const declared = METHOD_RESPONSE.from(owner.def.metadata);
     for (const name of names) {
       // Two handlers of one class (GET and POST) share its actions: the first found runs them.
       if (byName.has(name)) continue;
-      const call: ActionCall = { owner, method: name, runs: [], declared: declared?.get(name) };
-      pendingRuns.push([call.runs, [...owner.classGuards, ...(methodGuards?.get(name) ?? [])]]);
+      const call: ActionCall = { owner, method: name, runs: [], declared: responseDefaults(owner.def.metadata, name) };
+      pendingRuns.push([call.runs, [...owner.classGuards, ...METHOD_GUARDS.get(owner.def.metadata, name)]]);
       byName.set(name, call);
     }
   }
@@ -1090,15 +1088,16 @@ export class YerdApp {
 
       const layouts = resolved.isolated ? resolved.layouts : joinLayouts(this.#layouts, resolved.layouts);
       const methodLayouts = METHOD_LAYOUTS.entries(def.metadata);
-      const classGuards = [...this.#appGuards, ...resolved.guards, ...(CLASS_GUARDS.from(def.metadata) ?? [])];
+      const classGuards = [...this.#appGuards, ...resolved.guards, ...CLASS_GUARDS.get(def.metadata)];
       // Actions run behind the class's guards plus their own method guards.
       for (const name of ACTIONS.from(def.metadata)?.keys() ?? []) {
-        for (const spec of [...classGuards, ...(METHOD_GUARDS.from(def.metadata)?.get(name) ?? [])]) {
+        for (const spec of [...classGuards, ...METHOD_GUARDS.get(def.metadata, name)]) {
           if (typeof spec === "string") referencedGuards.push([`${def.className}.${name}`, spec]);
         }
       }
       const bareMethods = noLayout.members(def.metadata);
       const acceptsByMethod = ACCEPTS.entries(def.metadata);
+      const catches = catchesOf(def.metadata);
       for (const { verb, method, when } of verbs) {
         const byVerb = groups.get(info.pattern) ?? new Map<Verb, Handler[]>();
         groups.set(info.pattern, byVerb);
@@ -1123,12 +1122,12 @@ export class YerdApp {
           meta: resolved.meta,
           args: argsByMethod?.get(method),
           accepts,
-          guards: [...classGuards, ...(METHOD_GUARDS.from(def.metadata)?.get(method) ?? [])],
+          guards: [...classGuards, ...METHOD_GUARDS.get(def.metadata, method)],
           classGuards,
           when,
           runs: [],
-          declared: METHOD_RESPONSE.from(def.metadata)?.get(method),
-          catches: CATCHES.from(def.metadata) ?? [],
+          declared: responseDefaults(def.metadata, method),
+          catches,
         });
       }
     }

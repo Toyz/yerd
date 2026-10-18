@@ -5,7 +5,6 @@ import { safeBack } from "../../src/actions/action.js";
 
 const g = (label: string) => createGuard(label, () => true);
 const labels = (specs: readonly GuardSpec[] | undefined) => (specs ?? []).map((s) => (typeof s === "string" ? s : (s as GuardRef).label));
-const meta = (cls: Function) => (cls as unknown as Record<symbol, DecoratorMetadataObject>)[Symbol.metadata!]!;
 
 describe("stacked guards", () => {
   it("run top to bottom on classes and methods, keeping guards(...) lists in order", () => {
@@ -18,8 +17,8 @@ describe("stacked guards", () => {
       @g("m4")
       show() {}
     }
-    expect(labels(CLASS_GUARDS.from(meta(Page)))).toEqual(["c1", "c2", "c3", "c4"]);
-    expect(labels(METHOD_GUARDS.from(meta(Page))?.get("show"))).toEqual(["m1", "m2", "m3", "m4"]);
+    expect(labels(CLASS_GUARDS.get(Page))).toEqual(["c1", "c2", "c3", "c4"]);
+    expect(labels(METHOD_GUARDS.get(Page, "show"))).toEqual(["m1", "m2", "m3", "m4"]);
   });
 
   it("put a subclass's guards after the ones it inherits", () => {
@@ -35,9 +34,9 @@ describe("stacked guards", () => {
       @g("sm2")
       override show() {}
     }
-    expect(labels(CLASS_GUARDS.from(meta(Sub)))).toEqual(["p1", "p2", "s1", "s2"]);
-    expect(labels(METHOD_GUARDS.from(meta(Sub))?.get("show"))).toEqual(["pm", "sm1", "sm2"]);
-    expect(labels(CLASS_GUARDS.from(meta(Base)))).toEqual(["p1", "p2"]);
+    expect(labels(CLASS_GUARDS.get(Sub))).toEqual(["p1", "p2", "s1", "s2"]);
+    expect(labels(METHOD_GUARDS.get(Sub, "show"))).toEqual(["pm", "sm1", "sm2"]);
+    expect(labels(CLASS_GUARDS.get(Base))).toEqual(["p1", "p2"]);
   });
 });
 

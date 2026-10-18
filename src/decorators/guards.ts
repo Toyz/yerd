@@ -21,8 +21,7 @@
  */
 
 import type { YerdContext } from "../server/context.js";
-import { createKey } from "./keys.js";
-import { assertPublicInstance } from "./util.js";
+import { checkMethod, classList, createMethodDecorator, methodList } from "./kit.js";
 
 export type GuardResult = boolean | string | void | undefined | unknown;
 /**
@@ -94,34 +93,16 @@ export function isGuardRef(value: unknown): value is GuardRef {
   return typeof value === "function" && (value as Partial<GuardRef>)[GUARD] === true;
 }
 
-export const CLASS_GUARDS = createKey<GuardSpec[]>("guards:class");
-export const METHOD_GUARDS = createKey<Map<string | symbol, GuardSpec[]>>("guards:method");
+/** Per class: its guards, top to bottom, after its parent's. */
+export const CLASS_GUARDS = classList<GuardSpec>("guards");
+/** Per method: its guards, top to bottom, after the ones it inherits. */
+export const METHOD_GUARDS = methodList<GuardSpec>("guards");
 
-const CLASS_SLOT = Symbol("class");
-/** Per class, per slot (the class or a method): how many guards came from the parent class. */
-const inheritedCounts = new WeakMap<DecoratorMetadataObject, Map<string | symbol, number>>();
-
-/**
- * TC39 applies stacked decorators bottom-up, so each one goes in ahead of the
- * ones this class already applied (but after the parent's): `@a @b` runs a, then b.
- */
-function insert(metadata: DecoratorMetadataObject, slot: string | symbol, list: readonly GuardSpec[], specs: readonly GuardSpec[]): GuardSpec[] {
-  let counts = inheritedCounts.get(metadata);
-  if (!counts) inheritedCounts.set(metadata, (counts = new Map()));
-  if (!counts.has(slot)) counts.set(slot, list.length);
-  const at = counts.get(slot)!;
-  return [...list.slice(0, at), ...specs, ...list.slice(at)];
-}
-
+/** One decorator for classes and methods: each kind has its own list. */
 function attach(specs: readonly GuardSpec[], context: ClassDecoratorContext | ClassMethodDecoratorContext, label: string): void {
-  if (context.kind === "class") {
-    const own = CLASS_GUARDS.ownArray<GuardSpec>(context.metadata);
-    own.splice(0, own.length, ...insert(context.metadata, CLASS_SLOT, own, specs));
-  } else {
-    assertPublicInstance(context, label);
-    const map = METHOD_GUARDS.ownMap<string | symbol, GuardSpec[]>(context.metadata);
-    map.set(context.name, insert(context.metadata, context.name, map.get(context.name) ?? [], specs));
-  }
+  if (context.kind === "class") return CLASS_GUARDS.add(context, ...specs);
+  checkMethod(context, label);
+  METHOD_GUARDS.add(context, ...specs);
 }
 
 /**
@@ -224,9 +205,12 @@ export function resetGuardRegistry(): void {
  * }
  * ```
  */
-export function guard(name?: string) {
-  return (_method: (ctx: YerdContext) => unknown, context: ClassMethodDecoratorContext): void => {
-    assertPublicInstance(context, "@guard");
-    guardRegistry.push({ name: name ?? String(context.name), method: context.name, metadata: context.metadata });
-  };
+export function guard(name?: string): (method: (ctx: YerdContext) => unknown, context: ClassMethodDecoratorContext) => void {
+  return GUARD_METHOD(name);
 }
+
+const GUARD_METHOD = createMethodDecorator("guard", {
+  apply(context, name?: string) {
+    guardRegistry.push({ name: name ?? String(context.name), method: context.name, metadata: context.metadata });
+  },
+});

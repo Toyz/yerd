@@ -773,7 +773,7 @@ export function resolveRoute(def: RouteDef): ResolvedRoute {
     const fromOptions = g.options.layout === undefined ? [] : Array.isArray(g.options.layout) ? g.options.layout : [g.options.layout];
     layouts = joinLayouts(joinLayouts(layouts, fromOptions), declared?.layouts ?? []);
     meta = { ...meta, ...g.options.meta };
-    guards.push(...(g.options.guards ?? []), ...(CLASS_GUARDS.from(metadata) ?? []));
+    guards.push(...(g.options.guards ?? []), ...CLASS_GUARDS.get(metadata));
   }
   const own = LAYOUT.get(def.metadata);
   if (own?.isolated) isolated = true;

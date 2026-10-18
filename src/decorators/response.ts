@@ -13,8 +13,7 @@
  * ```
  */
 
-import { createKey } from "./keys.js";
-import { assertPublicInstance } from "./util.js";
+import { createMethodDecorator, methodList, methodValue, type DecoratorTarget } from "./kit.js";
 import { assertStatus, checkHeader } from "../respond/response.js";
 
 export interface ResponseDefaults {
@@ -22,23 +21,26 @@ export interface ResponseDefaults {
   headers: Record<string, string>;
 }
 
-/** Per handler method: the status and headers @status / @setHeader declared. */
-export const METHOD_RESPONSE = createKey<Map<string | symbol, ResponseDefaults>>("response:method");
+/** Per handler method: the headers its @setHeader decorators declared, the top one winning. */
+const HEADERS = methodValue<Readonly<Record<string, string>>>("setHeader");
+
+/** What @status and @setHeader declared for a handler method, or undefined when neither did. */
+export function responseDefaults(target: DecoratorTarget, method: string | symbol): ResponseDefaults | undefined {
+  const code = status.get(target, method);
+  const headers = HEADERS.get(target, method);
+  if (code === undefined && headers === undefined) return undefined;
+  return { ...(code === undefined ? {} : { status: code }), headers: { ...headers } };
+}
 
 export interface CatchEntry {
   method: string | symbol;
   /** Error classes this method handles; empty: every error. */
-  types: Function[];
+  types: readonly Function[];
 }
 
-/** Per route class: its @catches methods, in declaration order. */
-export const CATCHES = createKey<CatchEntry[]>("catches");
-
-function defaultsFor(context: ClassMethodDecoratorContext): ResponseDefaults {
-  const map = METHOD_RESPONSE.ownMap<string | symbol, ResponseDefaults>(context.metadata);
-  let entry = map.get(context.name);
-  if (!entry) map.set(context.name, (entry = { headers: {} }));
-  return entry;
+/** A route class's @catches methods, in declaration order. */
+export function catchesOf(target: DecoratorTarget): CatchEntry[] {
+  return [...catches.entries(target)].map(([method, types]) => ({ method, types }));
 }
 
 /**
@@ -61,12 +63,7 @@ function defaultsFor(context: ClassMethodDecoratorContext): ResponseDefaults {
  * }
  * ```
  */
-export function status(code: number) {
-  assertStatus(code, "@status");
-  return (_method: Function, context: ClassMethodDecoratorContext): void => {
-    defaultsFor(context).status = code;
-  };
-}
+export const status = methodValue<number>("status", { validate: (code) => assertStatus(code, "@status") });
 
 /**
  * A header on this handler's responses (a header the result sets itself
@@ -87,12 +84,11 @@ export function status(code: number) {
  * }
  * ```
  */
-export function setHeader(name: string, value: string) {
-  checkHeader(name, value, `@setHeader(${JSON.stringify(name)}): the value`);
-  return (_method: Function, context: ClassMethodDecoratorContext): void => {
-    defaultsFor(context).headers[name.toLowerCase()] = value;
-  };
-}
+export const setHeader = createMethodDecorator("setHeader", {
+  validate: (name: string, value: string) => checkHeader(name, value, `@setHeader(${JSON.stringify(name)}): the value`),
+  // Applied bottom-up: each one goes over what's there, so the top one wins, and a subclass's over its parent's.
+  apply: (context, name, value) => HEADERS.set(context, { ...HEADERS.get(context.metadata, context.name), [name.toLowerCase()]: value }),
+});
 
 /**
  * Handle errors thrown by this route's handlers, guards and actions. The
@@ -129,9 +125,4 @@ export function setHeader(name: string, value: string) {
  * }
  * ```
  */
-export function catches(...types: Function[]) {
-  return (_method: Function, context: ClassMethodDecoratorContext): void => {
-    assertPublicInstance(context, "@catches");
-    CATCHES.ownArray<CatchEntry>(context.metadata).push({ method: context.name, types });
-  };
-}
+export const catches = methodList<Function>("catches");
