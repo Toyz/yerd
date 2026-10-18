@@ -576,7 +576,7 @@ Add scripts to `package.json` so nobody has to remember the commands. Vite doesn
 }
 ```
 
-Action tokens and session cookies are signed with a secret. Without `YERD_SECRET`, yerd invents a random one per process, so every restart logs everyone out and breaks open forms. Generate one (it must be at least 32 bytes) and keep it out of git.
+Action tokens and session cookies are signed with a secret. Without `YERD_SECRET`, yerd invents a random one per process, so every restart logs everyone out and breaks open forms. (The dev server keeps its random secret in `node_modules/.cache`, so this only bites in production.) Generate one (it must be at least 32 bytes) and keep it out of git.
 
 ```sh
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"

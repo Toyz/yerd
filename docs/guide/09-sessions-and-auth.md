@@ -350,7 +350,7 @@ YERD_SECRET="new-secret-at-least-32-bytes-long....,old-secret-at-least-32-bytes-
 New tokens and sessions use the first secret; any listed secret is accepted. `yerd({ secret })` takes a string or a list and wins over the variable.
 
 > [!WARNING]
-> Without a secret, yerd uses a random one per process: every restart logs everyone out and breaks open forms, and two instances can't read each other's cookies. It warns at boot when `NODE_ENV=production`. Set `YERD_SECRET` in production.
+> Without a secret, yerd uses a random one per process: every restart logs everyone out and breaks open forms, and two instances can't read each other's cookies. It warns at boot when `NODE_ENV=production`. Set `YERD_SECRET` in production. (In development, with `NODE_ENV` unset or `development`, the random secret is saved to `node_modules/.cache/yerd/secret` and reused, so dev server restarts keep you signed in.)
 
 > [!NOTE]
 > A signed token proves the server rendered those arguments, not that this user may act on them. An action bound to `{ id }` still has to check that `this.me` owns `id`.

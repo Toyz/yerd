@@ -308,6 +308,10 @@ Give file forms `enctype="multipart/form-data"`: the runtime switches to multipa
 
 Throw an [HttpError](api:yerd.HttpError) (or let `parse()` throw one) and, with JavaScript, its message is written into the form's `[data-yx-error]` element. Validation failures show each issue's message.
 
+Where there's no `[data-yx-error]` (a form without one, an action on a button or input), the runtime shows the message in a small notice at the bottom of the page. It also does when the server can't be reached. To show notices your own way, listen for `yx:notice` and call `preventDefault()`; the message is `event.detail.message`.
+
+If the server restarted with a different secret, was redeployed, or the page sat open past the token's lifetime, the page's actions are stale. The runtime notices, re-fetches the page with fresh tokens and tells the user to try again (the action didn't run, so that's safe). In development the secret is kept in `node_modules/.cache/yerd/secret`, so restarting the dev server doesn't break the open page at all.
+
 > [!WARNING]
 > Without JavaScript, a thrown error renders the error page instead. For forms that must work either way, catch the error, store a message with `session.flash()`, and `return redirect()` back to the form. See [sessions and auth](09-sessions-and-auth.md).
 
