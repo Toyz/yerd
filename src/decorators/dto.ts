@@ -313,7 +313,14 @@ function parseDto<T>(dto: DtoClass<T>, raw: unknown, path: string, issues: Issue
     const at = path ? `${path}.${key}` : key;
     const value = Object.hasOwn(raw, key) ? raw[key] : undefined;
     if (value === undefined) {
-      if (instance[key] === undefined && !spec.optional) issue(issues, at, "Required");
+      if (instance[key] === undefined) {
+        if (!spec.optional) issue(issues, at, "Required");
+        // `title?: string` still becomes an own `title: undefined` on the
+        // instance (class fields are defined, not just declared). Remove it,
+        // so the DTO holds exactly what was sent: spreading or Object.assign-ing
+        // a partial update (a PATCH) then can't wipe fields the client left out.
+        else delete instance[key];
+      }
       continue;
     }
     const parsed = spec.parse(value, at, issues);

@@ -14,7 +14,25 @@
  * - Nothing acceptable and no default: 406.
  */
 
-const SHORTHAND: Record<string, string> = {
+/** Short names `@accepts` and negotiate() understand. */
+export type MediaShorthand = "html" | "json" | "ndjson" | "text" | "sse" | "xml" | "csv";
+
+/** Common full types, listed so editors can complete them. */
+export type CommonMediaType =
+  | "text/html" | "text/plain" | "text/csv" | "text/xml" | "text/event-stream" | "text/markdown" | "text/calendar"
+  | "application/json" | "application/x-ndjson" | "application/xml" | "application/xhtml+xml" | "application/ld+json"
+  | "application/problem+json" | "application/pdf" | "application/zip" | "application/octet-stream"
+  | "application/atom+xml" | "application/rss+xml" | "application/manifest+json"
+  | "image/png" | "image/jpeg" | "image/webp" | "image/avif" | "image/svg+xml";
+
+/**
+ * A media type for content negotiation: a shorthand (`"json"`), a common
+ * type, or any other `type/subtype` (`"application/vnd.api+json"`). Anything
+ * else, like a typo such as `"jsno"`, doesn't compile.
+ */
+export type MediaType = MediaShorthand | CommonMediaType | `${string}/${string}`;
+
+const SHORTHAND: Record<MediaShorthand, string> = {
   html: "text/html",
   json: "application/json",
   ndjson: "application/x-ndjson",
@@ -26,7 +44,7 @@ const SHORTHAND: Record<string, string> = {
 
 /** "json" -> "application/json"; full types pass through, lowercased. */
 export function expandType(type: string): string {
-  return (SHORTHAND[type] ?? type).toLowerCase();
+  return (SHORTHAND[type as MediaShorthand] ?? type).toLowerCase();
 }
 
 interface Range {
@@ -118,7 +136,8 @@ export function choose(variants: readonly (readonly string[])[], accept: string 
 const NEGOTIATED: unique symbol = Symbol.for("yerd.negotiated");
 
 /** negotiate()'s argument: a producer per type, keyed by shorthand or mime type. The first key is the default. */
-export type Variants = Record<string, () => unknown>;
+/** negotiate()'s variants: a producer per media type, the first being the default. */
+export type Variants = { [K in MediaType]?: () => unknown };
 
 /** What negotiate() returns; the response pipeline picks and runs one variant. */
 export interface Negotiated {
@@ -141,6 +160,9 @@ export interface Negotiated {
  */
 export function negotiate(variants: Variants): Negotiated {
   if (Object.keys(variants).length === 0) throw new TypeError("negotiate() needs at least one variant");
+  for (const key of Object.keys(variants)) {
+    if (!(key in SHORTHAND) && !/^[\w.+-]+\/[\w.+-]+$/.test(key)) throw new TypeError(`negotiate(): "${key}" isn't a media type (use a shorthand like "json" or a type/subtype)`);
+  }
   return { [NEGOTIATED]: true, variants };
 }
 

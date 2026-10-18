@@ -7,7 +7,7 @@ import { brotliCompressSync, gzipSync } from "node:zlib";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, extname, join } from "node:path";
 import { ACCESSORS, ARGS, type Resolver } from "../decorators/kit.js";
-import { ACCEPTS, METHOD_LAYOUTS, NO_LAYOUT, PRERENDER, applyLayouts, joinLayouts, resetRouteRegistry, VERBS, resolveRoute, routeRegistry, type LayoutProps, type PageMeta, type RouteDef, type Verb } from "../decorators/route.js";
+import { ACCEPTS, METHOD_LAYOUTS, NO_LAYOUT, PRERENDER, applyLayouts, joinLayouts, resetRouteRegistry, type When, VERBS, resolveRoute, routeRegistry, type LayoutProps, type PageMeta, type RouteDef, type Verb } from "../decorators/route.js";
 import { choose, expandType, isNegotiated } from "../respond/negotiate.js";
 import { Container, Scope, ServiceCollection, currentServices, keyName, runWithServices, type Lifetime, type Registration } from "../di/container.js";
 
@@ -101,6 +101,8 @@ interface Handler {
   accepts: string[] | undefined;
   /** Every guard in front of this handler, outermost first. */
   guards: GuardSpec[];
+  /** `@get(when)`: a variant that serves only requests the test accepts. */
+  when: { test: When; vary: string | undefined } | undefined;
   /** The guards in front of every handler and action of the class (app, group, class), without method guards. */
   classGuards: GuardSpec[];
 }
@@ -116,7 +118,10 @@ interface ResolvedGuard {
 /** Every handler for one pattern + verb: a default and/or @accepts variants. */
 type HandlerGroup = Handler[];
 
-function pickHandler(group: HandlerGroup, accept: string | undefined): Handler | undefined {
+/** The handler for a request among those without a `when` test: the default, or an @accepts variant. */
+function pickHandler(all: HandlerGroup, accept: string | undefined): Handler | undefined {
+  const group = all.some((h) => h.when) ? all.filter((h) => !h.when) : all;
+  if (group.length === 0) return undefined;
   if (group.length === 1 && !group[0]!.accepts) return group[0];
   const fallback = group.find((h) => !h.accepts);
   const variants = group.filter((h) => h.accepts);
@@ -567,19 +572,20 @@ export class YerdApp {
       }
       const bareMethods = NO_LAYOUT.from(def.metadata);
       const acceptsByMethod = ACCEPTS.from(def.metadata);
-      for (const { verb, method } of verbs) {
+      for (const { verb, method, when } of verbs) {
         const byVerb = groups.get(info.pattern) ?? new Map<Verb, HandlerGroup>();
         groups.set(info.pattern, byVerb);
         const group = byVerb.get(verb) ?? [];
         byVerb.set(verb, group);
         const accepts = acceptsByMethod?.get(method)?.map(expandType);
         const label = `${def.className}.${String(method)}`;
-        if (!accepts && group.some((h) => !h.accepts)) {
-          const other = group.find((h) => !h.accepts)!;
+        // `@get(when)` variants sit beside the default; only plain handlers can clash.
+        if (!when && !accepts && group.some((h) => !h.accepts && !h.when)) {
+          const other = group.find((h) => !h.accepts && !h.when)!;
           problems.push(`Duplicate route: ${verb} ${info.pattern} (${label} and ${other.def.className}.${String(other.method)}; give one of them @accepts)`);
           continue;
         }
-        const clash = accepts && group.find((h) => h.accepts?.some((t) => accepts.includes(t)));
+        const clash = !when && accepts && group.find((h) => !h.when && h.accepts?.some((t) => accepts.includes(t)));
         if (clash) {
           problems.push(`${label} and ${clash.def.className}.${String(clash.method)} both @accepts the same type for ${verb} ${info.pattern}`);
           continue;
@@ -592,6 +598,7 @@ export class YerdApp {
           accepts,
           guards: [...classGuards, ...(METHOD_GUARDS.from(def.metadata)?.get(method) ?? [])],
           classGuards,
+          when,
         });
       }
     }
@@ -898,21 +905,24 @@ export class YerdApp {
       match.handlers.get(method) ??
       (method === "HEAD" ? match.handlers.get("GET") : undefined) ??
       match.handlers.get("ALL");
-    const negotiated = group !== undefined && (group.length > 1 || group[0]!.accepts !== undefined);
+    // `@get(when)` variants are tested once the request context exists; the rest is picked now.
+    const variants = group ? group.filter((h) => h.when) : [];
+    const plain = variants.length && group ? group.filter((h) => !h.when) : group;
+    const negotiated = plain !== undefined && (plain.length > 1 || plain[0]?.accepts !== undefined);
     const handler = group && pickHandler(group, req.headers.accept);
-    if (group && !handler) return this.#sendError(new HttpError(406, "Not Acceptable"), req, res, target, method, { vary: "accept" });
+    if (group && !handler && variants.length === 0) return this.#sendError(new HttpError(406, "Not Acceptable"), req, res, target, method, { vary: "accept" });
     const candidates = [...new Set([...match.handlers.values()].flat())];
     const mayBeAction =
       method === "POST" &&
       isFormBody(req.headers["content-type"]) &&
       candidates.some((h) => (ACTIONS.from(h.def.metadata)?.size ?? 0) > 0);
 
-    if (!handler && !mayBeAction) {
+    if (!handler && !mayBeAction && variants.length === 0) {
       const allow = [...match.handlers.keys()].filter((v) => v !== "ALL");
       if (allow.includes("GET") && !allow.includes("HEAD")) allow.push("HEAD");
       return this.#sendError(new HttpError(405, "Method Not Allowed"), req, res, target, method, { allow: allow.join(", ") });
     }
-    const base = handler ?? candidates[0]!;
+    const base = handler ?? variants[0] ?? candidates[0]!;
 
     const sessions = this.#sessions;
     const prerendering = this.#prerenderToken !== undefined && req.headers["x-yerd-prerender"] === this.#prerenderToken;
@@ -941,14 +951,27 @@ export class YerdApp {
             const fromAction = await this.#dispatchAction(candidates, context, scope);
             if (fromAction) return fromAction;
           }
-          if (!handler) throw new HttpError(405, "Method Not Allowed");
-          const blocked = await this.#runGuards(handler.guards, handler.layouts, context);
+          // The first `@get(when)` variant whose test passes serves the request;
+          // otherwise the default does. Prerendering has no request to test.
+          let chosen = handler;
+          if (variants.length > 0 && !prerendering) {
+            for (const variant of variants) {
+              if (variant.accepts && choose([variant.accepts], req.headers.accept, false) === undefined) continue;
+              if (await this.#matches(variant.when!.test, context)) {
+                chosen = variant;
+                break;
+              }
+            }
+          }
+          if (!chosen) throw new HttpError(variants.length > 0 ? 404 : 405, variants.length > 0 ? "Not Found" : "Method Not Allowed");
+          const serving = chosen;
+          const blocked = await this.#runGuards(serving.guards, serving.layouts, context);
           if (blocked) return blocked;
-          context.declared = METHOD_RESPONSE.from(handler.def.metadata)?.get(handler.method);
-          const instance = this.#routeInstance(handler, scope);
-          const fn = instance[handler.method] as ((...args: unknown[]) => unknown) | undefined;
-          if (typeof fn !== "function") throw new Error(`${handler.def.className}.${String(handler.method)} is not a method`);
-          const args = handler.args ? await Promise.all(handler.args.map((r) => r.resolve(context))) : [];
+          context.declared = METHOD_RESPONSE.from(serving.def.metadata)?.get(serving.method);
+          const instance = this.#routeInstance(serving, scope);
+          const fn = instance[serving.method] as ((...args: unknown[]) => unknown) | undefined;
+          if (typeof fn !== "function") throw new Error(`${serving.def.className}.${String(serving.method)} is not a method`);
+          const args = serving.args ? await Promise.all(serving.args.map((r) => r.resolve(context))) : [];
           let result = await fn.apply(instance, args);
           if (isNegotiated(result)) {
             const keys = Object.keys(result.variants);
@@ -956,8 +979,8 @@ export class YerdApp {
             if (chosen === undefined) throw new HttpError(406, "Not Acceptable");
             const key = chosen === "default" ? keys[0]! : keys[chosen]!;
             const type = expandType(key);
-            result = await result.variants[key]!();
-            const out = await coerce(result, { layouts: handler.layouts, meta: context.meta, dynamic });
+            result = await (result.variants as Record<string, () => unknown>)[key]!();
+            const out = await coerce(result, { layouts: serving.layouts, meta: context.meta, dynamic });
             if (type === "application/json") {
               // Strings and nulls are JSON here too, not text or 204.
               if (!out.headers["content-type"]?.startsWith("application/json")) {
@@ -971,10 +994,12 @@ export class YerdApp {
             addVary(out.headers, "accept");
             return out;
           }
-          const out = await coerce(result, { layouts: handler.layouts, meta: context.meta, dynamic });
+          const out = await coerce(result, { layouts: serving.layouts, meta: context.meta, dynamic });
           if (negotiated) addVary(out.headers, "accept");
           return out;
         }));
+        // Whichever handler answered, the response depended on what the variants' tests read.
+        for (const variant of variants) if (variant.when!.vary) addVary(out.headers, variant.when!.vary);
         // Render up to the first chunk now, so an error at the top of the page
         // (a layout, an early component) still becomes the error page.
         if (isPageStream(out)) out = await inRequest(() => primeStream(out));
@@ -1062,6 +1087,15 @@ export class YerdApp {
     } finally {
       if (!scope.isEmpty) await scope.dispose().catch((error) => requestLog.error("failed to dispose request services", { error }));
     }
+  }
+
+  /** Whether a `@get(when)` test accepts this request: a function's truthy result, or a guard letting it through. */
+  async #matches(test: When, context: YerdContext): Promise<boolean> {
+    if (isGuardRef(test)) {
+      const result = await test.run(context);
+      return result === true || result === undefined;
+    }
+    return Boolean(await test(context));
   }
 
   /**

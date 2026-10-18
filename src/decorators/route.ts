@@ -1,5 +1,7 @@
 import type { Component } from "../jsx/jsx-runtime.js";
-import type { GuardSpec } from "./guards.js";
+import type { GuardRef, GuardSpec } from "./guards.js";
+import type { YerdContext } from "../server/context.js";
+import type { MediaType } from "../respond/negotiate.js";
 import { createKey } from "./keys.js";
 
 /** An HTTP method a handler can answer. "ALL" answers any method the route has no specific handler for. */
@@ -8,6 +10,51 @@ export type Verb = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIO
 export interface VerbEntry {
   verb: Verb;
   method: string | symbol;
+  /** Set by `@get(when)`: this handler serves only requests the test accepts. */
+  when?: { test: When; vary: string | undefined };
+}
+
+/**
+ * A test that picks a handler for a request: truthy means "this handler serves
+ * it". If its answer depends on a request header, build it with varies() so
+ * responses carry the matching Vary header (isBot is built that way).
+ */
+export type WhenTest = ((ctx: YerdContext) => unknown) & { readonly vary?: string };
+
+/** A request test for `@get(when)`: a function, or a guard from createGuard() (passing means match). */
+export type When = WhenTest | GuardRef;
+
+/**
+ * A request test that depends on a request header. Caches (a CDN, the
+ * browser) store one response per URL unless told otherwise; this tells them,
+ * through `Vary: <header>` on every response from the route, to keep one per
+ * value of that header, so the variant meant for some clients is never served
+ * to others.
+ *
+ * ```tsx
+ * const fromApp = varies("x-client", (ctx) => ctx.headers["x-client"] === "app");
+ *
+ * @get(fromApp) forApp() { return { feed }; }     // Vary: x-client
+ * @get page() { return <Feed items={feed} />; }
+ * ```
+ */
+export function varies(header: string, test: (ctx: YerdContext) => unknown): WhenTest {
+  return Object.assign((ctx: YerdContext) => test(ctx), { vary: header.toLowerCase() });
+}
+
+/** A verb decorator: bare (`@get`) for the default handler, or called (`@get(isBot)`) for a variant. */
+export interface VerbDecorator {
+  // Order matters: the request-test form comes first so an inline test
+  // (`@post(async (ctx) => ...)`) gets `ctx` typed from it.
+  // The `never` second parameter keeps a bare `@get` (called with method and
+  // context) from matching the test form.
+  (when: (ctx: YerdContext) => unknown, _?: never): (method: Function, context: ClassMethodDecoratorContext) => void;
+  (guard: GuardRef, _?: never): (method: Function, context: ClassMethodDecoratorContext) => void;
+  (method: Function, context: ClassMethodDecoratorContext): void;
+}
+
+function isDecoratorContext(value: unknown): value is ClassMethodDecoratorContext {
+  return typeof value === "object" && value !== null && "kind" in value && "metadata" in value;
 }
 
 /**
@@ -215,21 +262,36 @@ export function route(pattern: string, options: RouteOptions = {}) {
   };
 }
 
-function verb(name: Verb) {
+function verb(name: Verb): VerbDecorator {
   const label = name === "DELETE" ? "del" : name.toLowerCase();
-  return (_method: Function, context: ClassMethodDecoratorContext): void => {
+  const attach = (context: ClassMethodDecoratorContext, when?: VerbEntry["when"]): void => {
     if (context.static || context.private) {
       throw new TypeError(`@${label} must decorate a public instance method (got ${String(context.name)})`);
     }
-    VERBS.ownArray<VerbEntry>(context.metadata).push({ verb: name, method: context.name });
+    VERBS.ownArray<VerbEntry>(context.metadata).push({ verb: name, method: context.name, ...(when ? { when } : {}) });
   };
+  return function (first: unknown, second?: unknown) {
+    if (isDecoratorContext(second)) return attach(second);
+    if (typeof first !== "function") {
+      throw new TypeError(`@${label}(...) takes a request test (a function or a guard), not a path: one route class serves one path`);
+    }
+    const test = first as When;
+    const vary = (test as { vary?: string }).vary;
+    return (_method: Function, context: ClassMethodDecoratorContext) => attach(context, { test, vary: vary?.toLowerCase() });
+  } as VerbDecorator;
 }
 
 /**
  * Handle GET requests to the route's pattern with this method. Also answers
- * HEAD (without the body) unless the route has a @head handler. Takes no
- * arguments: one route class serves one pattern, so a second @get on the
- * same route needs @accepts.
+ * HEAD (without the body) unless the route has a @head handler. One route
+ * class serves one pattern, so there's no path argument; a second handler for
+ * the same verb is a variant: `@accepts(...)` picks by Accept header, and
+ * `@get(when)` by any request test.
+ *
+ * ```tsx
+ * @get page() { return <InteractivePage />; }        // everyone else
+ * @get(isBot) crawlable() { return <FullPage />; }   // search engines and link previews
+ * ```
  */
 export const get = verb("GET");
 /** Handle POST requests to the route's pattern with this method. */
@@ -295,8 +357,13 @@ export function layout(...args: Component<LayoutProps>[] | [...Component<LayoutP
  * @get @accepts("json") data() { return { todos }; }
  * ```
  */
-export function accepts(...types: string[]) {
+export function accepts(...types: [MediaType, ...MediaType[]]) {
   if (types.length === 0) throw new TypeError("@accepts needs at least one type");
+  for (const type of types) {
+    if (!/^[\w.+-]+(\/[\w.+-]+)?$/.test(type) || (!type.includes("/") && !["html", "json", "ndjson", "text", "sse", "xml", "csv"].includes(type))) {
+      throw new TypeError(`@accepts("${type}"): not a media type (use a shorthand like "json" or a type/subtype)`);
+    }
+  }
   return (_method: Function, context: ClassMethodDecoratorContext): void => {
     const map = ACCEPTS.hasOwn(context.metadata) ? ACCEPTS.from(context.metadata)! : new Map(ACCEPTS.from(context.metadata));
     map.set(context.name, types);

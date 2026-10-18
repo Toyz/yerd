@@ -7,7 +7,10 @@ export { Session, CookieStore, MemoryStore, seal, unseal, type SessionData, type
 export { parseCookies, serializeCookie, type CookieOptions } from "./server/cookies.js";
 export { currentContext, setMeta, type YerdContext, type RouteInfo } from "./server/context.js";
 
-export { route, group, get, post, put, patch, del, head, options, all, layout, noLayout, accepts, prerender, resetRouteRegistry } from "./decorators/route.js";
+export {
+  route, group, get, post, put, patch, del, head, options, all, layout, noLayout, accepts, prerender, resetRouteRegistry, varies,
+  type When, type WhenTest, type VerbDecorator,
+} from "./decorators/route.js";
 export type { Verb, RouteOptions, GroupOptions, PageMeta, LayoutProps, PrerenderOptions } from "./decorators/route.js";
 export { createAccessor, args, type AccessorDecorator, type AccessorOptions, type Resolver, type Resolves } from "./decorators/kit.js";
 export { readBody, readNdjson, type ParsedBody, type FormFields } from "./server/body.js";
@@ -39,6 +42,7 @@ export { raw, escapeHtml, json, type RawHtml } from "./render/escape.js";
 export { Dynamic, type DynamicProps } from "./render/dynamic.js";
 export { Fragment, createElement, type Child, type Component, type YerdNode } from "./jsx/jsx-runtime.js";
 export { status, setHeader, catches } from "./decorators/response.js";
+export { isBot } from "./server/bots.js";
 export { ILogger, teeLogger, type Level, type LogRecord, type SpanRecord } from "./log/ilogger.js";
 export { Logger, log, logger } from "./log/logger.js";
 export { ConsoleLogger, type ConsoleLoggerOptions } from "./log/console.js";

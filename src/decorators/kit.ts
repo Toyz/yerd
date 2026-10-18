@@ -178,10 +178,18 @@ type ArgTypes<R extends readonly Resolves<unknown>[]> = {
  * are awaited first, so parameters get plain values.
  *
  * ```ts
- * @post
- * @args(param("id", { transform: toInt }), body({ transform: parsePatch }))
- * update(id: number, patch: Patch) { ... }
+ * class TodoChanges {
+ *   @is.string({ optional: true }) title?: string;
+ *   @is.boolean({ optional: true }) done?: boolean;
+ * }
+ *
+ * @patch
+ * @args(param("id", { transform: toInt }), body(TodoChanges))
+ * update(id: number, changes: TodoChanges) { ... }
  * ```
+ *
+ * Any accessor works here, with the same options it takes as a field:
+ * `body({ transform: dto(TodoChanges) })` or `query("page", { transform: toInt })`.
  */
 export function args<const R extends readonly Resolves<unknown>[]>(...resolvers: R) {
   return function <This>(
