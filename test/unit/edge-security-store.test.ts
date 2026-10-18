@@ -418,6 +418,11 @@ describe("SessionManager: the cookie size limit", () => {
     expect((over as Error).message).toMatch(/too big for a cookie \(4002 bytes\); use MemoryStore/);
   });
 
+  // Question: the 4000 limit counts only the value. Browsers cap name + value
+  // at 4096, so a long cookieName (100+ characters) lets a value pass the
+  // check that the browser then silently drops.
+  it.todo("counts the cookie name toward the size limit");
+
   it("a big session is fine in a MemoryStore: the cookie only holds an id", async () => {
     const manager = new SessionManager({ store: new MemoryStore() }, [SECRET]);
     const { line } = await roundTrip(manager, {}, (s) => s.set("name" as never, "x".repeat(100_000) as never));
@@ -439,6 +444,16 @@ describe("SessionManager: ids and generateId", () => {
     expect(() => checkSessionOptions({ generateId: () => "x" })).toThrow(TypeError);
     expect(() => checkSessionOptions({ generateId: () => "x", store: new MemoryStore() })).not.toThrow();
   });
+
+  it.each(["bad name", "semi;colon", "", "eq=ual", "café"])("refuses cookieName %j up front, not on the first write", (cookieName) => {
+    expect(() => checkSessionOptions({ cookieName })).toThrow(/Invalid cookie name/);
+    expect(() => new SessionManager({ cookieName }, [SECRET])).toThrow(/Invalid cookie name/);
+  });
+
+  // Question: a generateId that repeats another live session's id makes the
+  // two visitors share one record (set() overwrites it). The docs say ids must
+  // be unique; checking would cost a store read per new session.
+  it.todo("refuses (or retries) a generated id that already names another live session");
 
   it("uses an async generateId", async () => {
     const store = new MemoryStore();

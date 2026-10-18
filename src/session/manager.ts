@@ -28,6 +28,8 @@ export function checkSessionOptions(options: SessionOptions): void {
   if (options.generateId && (options.store?.kind ?? "cookie") !== "id") {
     throw new TypeError("sessions({ generateId }) needs a store that keeps ids (kind: \"id\"), like MemoryStore; a CookieStore keeps the data in the cookie and has no ids");
   }
+  // Otherwise the first session write would be a 500.
+  if (options.cookieName !== undefined) serializeCookie(options.cookieName, "");
 }
 
 /** Loads a request's session before the handler and writes it back after. */
