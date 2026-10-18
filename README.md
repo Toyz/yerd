@@ -94,8 +94,6 @@ each export and member first shipped in.
 - [examples/todo](examples/todo): a full app (auth, actions, live sync,
   prerendered pages). `npm run todo` from a checkout.
 
-`@toyz/yerd/client` is reserved for islands and is a placeholder for now.
-
 ## License
 
 MIT

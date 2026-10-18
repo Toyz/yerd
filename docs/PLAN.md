@@ -733,7 +733,6 @@ yerd/
       attribute.ts        attribute(), the built-in prefetch attribute, client source
     client/
       runtime.ts          the browser runtime (one self-contained function, served at /_yerd/runtime.js)
-      index.ts, server.ts @toyz/yerd/client twins (M0 stubs; islands planned)
     live/
       channels.ts         Channels, channel<T>(), ChannelBackend, MemoryBackend
     session/
@@ -1029,11 +1028,10 @@ are not.
 
 Published to npm as **`@toyz/yerd`** (same scope as `@toyz/loom`). Subpath
 exports today: `@toyz/yerd` (server), `@toyz/yerd/jsx-runtime`,
-`@toyz/yerd/jsx-dev-runtime`, `@toyz/yerd/client` (`node` / `default`
-conditions), `@toyz/yerd/vite`, `@toyz/yerd/auth`. Ships `dist/` (tsc output
-of `tsconfig.build.json`, with `.d.ts` files), `LICENSE` and `README.md`, with
-zero runtime `dependencies`; requires Node 24 or later. Apps set
-`"jsxImportSource": "@toyz/yerd"`.
+`@toyz/yerd/jsx-dev-runtime`, `@toyz/yerd/vite`, `@toyz/yerd/auth`. Ships
+`dist/` (tsc output of `tsconfig.build.json`, with `.d.ts` files), `LICENSE`
+and `README.md`, with zero runtime `dependencies`; requires Node 24 or later.
+Apps set `"jsxImportSource": "@toyz/yerd"`.
 
 Planned: `@toyz/yerd/kit` and `@toyz/yerd/async-context` subpaths, a `yerd`
 bin, `vite` / `esbuild` / `typescript` as optional peer dependencies for the

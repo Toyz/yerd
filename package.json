@@ -45,11 +45,6 @@
       "types": "./dist/src/jsx/jsx-dev-runtime.d.ts",
       "import": "./dist/src/jsx/jsx-dev-runtime.js"
     },
-    "./client": {
-      "types": "./dist/src/client/index.d.ts",
-      "node": "./dist/src/client/server.js",
-      "default": "./dist/src/client/index.js"
-    },
     "./vite": {
       "types": "./dist/src/vite/index.d.ts",
       "import": "./dist/src/vite/index.js"

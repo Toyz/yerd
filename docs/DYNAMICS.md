@@ -716,8 +716,7 @@ served at `/_yerd/runtime.js` with `cache-control: no-cache`, followed by the
 custom attributes' client halves. Because it ships as source it must be
 compiled at ES2017 or later (`runtimeSource()` refuses a build with async
 lowered to helpers). `<Scripts />` writes the `<script type="module">` tag.
-`src/client/index.ts` and `server.ts` are the `@toyz/yerd/client` twins, still
-M0 stubs.
+There is no `@toyz/yerd/client` export yet; it arrives with islands.
 
 The planned layout once islands and sprinkles land:
 

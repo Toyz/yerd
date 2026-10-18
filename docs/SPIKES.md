@@ -3,7 +3,9 @@
 Toolchain: Node 26.12.0, npm 11.20.0, TypeScript 7.0.2 (`latest`, the Go-native
 compiler), Vite 8.3.4, esbuild 0.28.2, Chrome stable (system install).
 
-Spike code lives in `spikes/m0/`; each one is runnable.
+Spike code lives in `spikes/m0/`; each one is runnable, except spike 3, whose
+island files went (with the stub `@toyz/yerd/client` export they exercised)
+once nothing used them; they're in git history.
 
 | # | Question | Result |
 |---|----------|--------|
