@@ -1,5 +1,6 @@
 // Compile-only: the method and class decorator builders are typed as declared.
 import { classFlag, classList, classValue, createMethodDecorator, methodFlag, methodList, methodValue } from "@toyz/yerd";
+import type { BareClassValue, BareMethodDecoratorFactory, BareMethodValue, ClassValue, MethodDecoratorFactory, MethodValue } from "@toyz/yerd";
 
 const audit = methodFlag("audit");
 const rateLimit = methodValue<number>("rateLimit");
@@ -67,3 +68,9 @@ const readers: [boolean, number | undefined, readonly string[], boolean, string 
 export { readers };
 const labels: readonly [label?: string][] = timed.get(Fine, "b");
 export { labels };
+
+// The named types describe what the builders return.
+const typed: [MethodValue<number>, BareMethodValue<number>, ClassValue<string>, BareClassValue<{ paths?: string[] }>, BareMethodDecoratorFactory<[label?: string]>, MethodDecoratorFactory<[times: number]>] = [
+  rateLimit, cache, feature, prerendered, timed, retry,
+];
+export { typed };

@@ -16,8 +16,8 @@ export type { Verb, RouteOptions, GroupOptions, PageMeta, LayoutProps, Prerender
 export {
   createAccessor, args, methodFlag, methodValue, methodList, classFlag, classValue, classList, createMethodDecorator,
   type AccessorDecorator, type AccessorOptions, type Resolver, type Resolves, type DecoratorTarget,
-  type MethodFlag, type MethodValue, type MethodList, type ValueOptions, type ClassFlag, type ClassValue, type ClassList,
-  type MethodDecoratorFactory, type MethodDecoratorOptions,
+  type MethodFlag, type MethodValue, type BareMethodValue, type MethodList, type ValueOptions, type ClassFlag, type ClassValue, type BareClassValue, type ClassList,
+  type MethodDecoratorFactory, type BareMethodDecoratorFactory, type MethodDecoratorOptions,
 } from "./decorators/kit.js";
 export { readBody, readNdjson, type ParsedBody, type FormFields } from "./server/body.js";
 export { YerdKey, createKey, localKey, registeredKeys, findLocalStore, metadataOf } from "./decorators/keys.js";

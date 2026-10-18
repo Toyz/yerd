@@ -253,8 +253,6 @@ export function args<const R extends readonly Resolves<unknown>[]>(
 
 // ── Method and class decorators ──
 
-/** A member name, as decorator contexts give it. */
-type Member = string | symbol;
 
 /**
  * What the kit's readers take: a class, or its decorator metadata object
@@ -342,16 +340,16 @@ function runValidate<A extends unknown[]>(validate: ((...args: A) => string | vo
  * what this class already added for the member, but after what it inherited.
  */
 class MemberLists<T> {
-  readonly #key: YerdKey<Map<Member, T[]>>;
+  readonly #key: YerdKey<Map<string | symbol, T[]>>;
   /** Per class, per member: how many entries came from the parent class. */
-  readonly #inherited = new WeakMap<object, Map<Member, number>>();
+  readonly #inherited = new WeakMap<object, Map<string | symbol, number>>();
 
   constructor(name: string) {
-    this.#key = localKey<Map<Member, T[]>>(`kit:${name}`);
+    this.#key = localKey<Map<string | symbol, T[]>>(`kit:${name}`);
   }
 
-  add(metadata: DecoratorMetadataObject, member: Member, items: readonly T[]): void {
-    const map = this.#key.ownMap<Member, T[]>(metadata);
+  add(metadata: DecoratorMetadataObject, member: string | symbol, items: readonly T[]): void {
+    const map = this.#key.ownMap<string | symbol, T[]>(metadata);
     let counts = this.#inherited.get(metadata);
     if (!counts) this.#inherited.set(metadata, (counts = new Map()));
     let list = map.get(member);
@@ -365,11 +363,11 @@ class MemberLists<T> {
     list!.splice(at, 0, ...items);
   }
 
-  get(target: DecoratorTarget, member: Member): readonly T[] {
+  get(target: DecoratorTarget, member: string | symbol): readonly T[] {
     return this.#key.from(metadataFor(target))?.get(member) ?? NO_ITEMS;
   }
 
-  entries(target: DecoratorTarget): ReadonlyMap<Member, readonly T[]> {
+  entries(target: DecoratorTarget): ReadonlyMap<string | symbol, readonly T[]> {
     return this.#key.from(metadataFor(target)) ?? NO_ENTRIES;
   }
 }
@@ -383,7 +381,7 @@ class MemberLists<T> {
  * ```
  */
 export interface MethodFlag {
-  (method: Function, context: MethodContext): void;
+  (method: Function, context: ClassMethodDecoratorContext<any, any>): void;
   /**
    * Whether `member` carries the flag (its own or inherited).
    *
@@ -391,7 +389,7 @@ export interface MethodFlag {
    * audit.has(Invoice, "refund"); // true
    * ```
    */
-  has(target: DecoratorTarget, member: Member): boolean;
+  has(target: DecoratorTarget, member: string | symbol): boolean;
   /**
    * Every flagged member, in the order they were decorated.
    *
@@ -399,7 +397,7 @@ export interface MethodFlag {
    * for (const member of audit.members(Invoice)) console.log(String(member));
    * ```
    */
-  members(target: DecoratorTarget): ReadonlySet<Member>;
+  members(target: DecoratorTarget): ReadonlySet<string | symbol>;
   /**
    * Flag the method `context` names, from inside another decorator.
    *
@@ -407,7 +405,7 @@ export interface MethodFlag {
    * const sensitive = (_method: Function, context: ClassMethodDecoratorContext) => audit.mark(context);
    * ```
    */
-  mark(context: MethodContext): void;
+  mark(context: ClassMethodDecoratorContext<any, any>): void;
 }
 
 /**
@@ -428,18 +426,18 @@ export interface MethodFlag {
  */
 export function methodFlag(name: string): MethodFlag {
   const label = labelFor(name);
-  const key = localKey<Set<Member>>(`kit:${name}`);
+  const key = localKey<Set<string | symbol>>(`kit:${name}`);
   const mark = (context: MethodContext): void => {
     checkMethod(context, label);
-    key.ownSet<Member>(context.metadata).add(context.name);
+    key.ownSet<string | symbol>(context.metadata).add(context.name);
   };
   const decorator = (_method: Function, context: MethodContext): void => {
     refuseCall(context, label);
     mark(context);
   };
   return Object.assign(decorator, {
-    has: (target: DecoratorTarget, member: Member) => key.from(metadataFor(target))?.has(member) ?? false,
-    members: (target: DecoratorTarget): ReadonlySet<Member> => key.from(metadataFor(target)) ?? NO_MEMBERS,
+    has: (target: DecoratorTarget, member: string | symbol) => key.from(metadataFor(target))?.has(member) ?? false,
+    members: (target: DecoratorTarget): ReadonlySet<string | symbol> => key.from(metadataFor(target)) ?? NO_MEMBERS,
     mark,
   });
 }
@@ -461,7 +459,16 @@ export interface ValueOptions<T> {
   validate?: (value: T) => string | void;
 }
 
-interface MethodValueReaders<T> {
+/**
+ * A method decorator that stores one value per method, as methodValue()
+ * returns it: `@summary("List todos")`.
+ *
+ * ```ts
+ * export const summary: MethodValue<string> = methodValue<string>("summary");
+ * ```
+ */
+export interface MethodValue<T> {
+  (value: T): (method: Function, context: ClassMethodDecoratorContext<any, any>) => void;
   /**
    * The value on `member` (its own, else inherited), or undefined.
    *
@@ -469,7 +476,7 @@ interface MethodValueReaders<T> {
    * summary.get(Todos, "list"); // "List todos"
    * ```
    */
-  get(target: DecoratorTarget, member: Member): T | undefined;
+  get(target: DecoratorTarget, member: string | symbol): T | undefined;
   /**
    * Every decorated member with its value, in the order they were decorated.
    *
@@ -477,7 +484,7 @@ interface MethodValueReaders<T> {
    * for (const [member, text] of summary.entries(Todos)) console.log(String(member), text);
    * ```
    */
-  entries(target: DecoratorTarget): ReadonlyMap<Member, T>;
+  entries(target: DecoratorTarget): ReadonlyMap<string | symbol, T>;
   /**
    * Store a value for the method `context` names, from inside another decorator.
    *
@@ -485,23 +492,21 @@ interface MethodValueReaders<T> {
    * const undocumented = (_method: Function, context: ClassMethodDecoratorContext) => summary.set(context, "TODO");
    * ```
    */
-  set(context: MethodContext, value: T): void;
+  set(context: ClassMethodDecoratorContext<any, any>, value: T): void;
 }
 
 /**
- * A method decorator that stores one value per method, as methodValue()
- * returns it: `@summary("List todos")`. `MethodValue<T, true>` is the type
- * made with `bare`, which also works uncalled.
+ * A method decorator made by methodValue() with `bare`: it also works
+ * uncalled (`@cache`) or called empty (`@cache()`), storing the bare value.
  *
  * ```ts
- * export const summary: MethodValue<string> = methodValue<string>("summary");
- * export const cache: MethodValue<number, true> = methodValue("cache", { bare: () => 60 });
+ * export const cache: BareMethodValue<number> = methodValue("cache", { bare: () => 60 });
  * ```
  */
-export type MethodValue<T, Bare extends boolean = false> = MethodValueReaders<T> &
-  (Bare extends true
-    ? { (value?: T, _?: never): MethodDecoratorFn; (method: Function, context: MethodContext): void }
-    : (value: T) => MethodDecoratorFn);
+export interface BareMethodValue<T> extends MethodValue<T> {
+  (value?: T): (method: Function, context: ClassMethodDecoratorContext<any, any>) => void;
+  (method: Function, context: ClassMethodDecoratorContext<any, any>): void;
+}
 
 /**
  * Make a method decorator that stores a value per method:
@@ -522,14 +527,14 @@ export type MethodValue<T, Bare extends boolean = false> = MethodValueReaders<T>
  * cache.get(Todos, "list");   // 60
  * ```
  */
-export function methodValue<T>(name: string, options: ValueOptions<T> & { bare: () => T }): MethodValue<T, true>;
+export function methodValue<T>(name: string, options: ValueOptions<T> & { bare: () => T }): BareMethodValue<T>;
 export function methodValue<T>(name: string, options?: ValueOptions<T>): MethodValue<T>;
-export function methodValue<T>(name: string, options: ValueOptions<T> & { bare?: () => T } = {}): MethodValue<T, boolean> {
+export function methodValue<T>(name: string, options: ValueOptions<T> & { bare?: () => T } = {}): MethodValue<T> {
   const label = labelFor(name);
-  const key = localKey<Map<Member, T>>(`kit:${name}`);
+  const key = localKey<Map<string | symbol, T>>(`kit:${name}`);
   const store = (context: MethodContext, value: T): void => {
     checkMethod(context, label);
-    key.ownMap<Member, T>(context.metadata).set(context.name, value);
+    key.ownMap<string | symbol, T>(context.metadata).set(context.name, value);
   };
   const set = (context: MethodContext, value: T): void => {
     runValidate(options.validate, label, value);
@@ -545,10 +550,10 @@ export function methodValue<T>(name: string, options: ValueOptions<T> & { bare?:
     return decorate(value);
   };
   return Object.assign(factory, {
-    get: (target: DecoratorTarget, member: Member) => key.from(metadataFor(target))?.get(member),
-    entries: (target: DecoratorTarget): ReadonlyMap<Member, T> => key.from(metadataFor(target)) ?? NO_ENTRIES,
+    get: (target: DecoratorTarget, member: string | symbol) => key.from(metadataFor(target))?.get(member),
+    entries: (target: DecoratorTarget): ReadonlyMap<string | symbol, T> => key.from(metadataFor(target)) ?? NO_ENTRIES,
     set,
-  }) as unknown as MethodValue<T, boolean>;
+  }) as unknown as BareMethodValue<T>;
 }
 
 /**
@@ -560,7 +565,7 @@ export function methodValue<T>(name: string, options: ValueOptions<T> & { bare?:
  * ```
  */
 export interface MethodList<T> {
-  (...items: T[]): MethodDecoratorFn;
+  (...items: T[]): (method: Function, context: ClassMethodDecoratorContext<any, any>) => void;
   /**
    * The member's values: its parent's first, then its own top to bottom.
    * Empty when it has none.
@@ -569,7 +574,7 @@ export interface MethodList<T> {
    * tags.get(Reports, "monthly"); // ["billing", "admin"]
    * ```
    */
-  get(target: DecoratorTarget, member: Member): readonly T[];
+  get(target: DecoratorTarget, member: string | symbol): readonly T[];
   /**
    * Every decorated member with its values, in the order they were
    * decorated. A member decorated with no values is listed, with none.
@@ -578,7 +583,7 @@ export interface MethodList<T> {
    * for (const [member, list] of tags.entries(Reports)) index.add(String(member), list);
    * ```
    */
-  entries(target: DecoratorTarget): ReadonlyMap<Member, readonly T[]>;
+  entries(target: DecoratorTarget): ReadonlyMap<string | symbol, readonly T[]>;
   /**
    * Add values for the method `context` names, from inside another decorator.
    *
@@ -586,7 +591,7 @@ export interface MethodList<T> {
    * const billing = (_method: Function, context: ClassMethodDecoratorContext) => tags.add(context, "billing");
    * ```
    */
-  add(context: MethodContext, ...items: T[]): void;
+  add(context: ClassMethodDecoratorContext<any, any>, ...items: T[]): void;
 }
 
 /**
@@ -622,7 +627,7 @@ export function methodList<T>(name: string, options: ValueOptions<T> = {}): Meth
     return (_method, context) => store(context, items);
   };
   return Object.assign(factory, {
-    get: (target: DecoratorTarget, member: Member) => lists.get(target, member),
+    get: (target: DecoratorTarget, member: string | symbol) => lists.get(target, member),
     entries: (target: DecoratorTarget) => lists.entries(target),
     add,
   });
@@ -636,7 +641,7 @@ export function methodList<T>(name: string, options: ValueOptions<T> = {}): Meth
  * ```
  */
 export interface ClassFlag {
-  (value: Function, context: ClassContext): void;
+  (value: Function, context: ClassDecoratorContext<any>): void;
   /**
    * Whether the class (or a parent of it) carries the flag.
    *
@@ -652,7 +657,7 @@ export interface ClassFlag {
    * const ops = (_cls: Function, context: ClassDecoratorContext) => internal.mark(context);
    * ```
    */
-  mark(context: ClassContext): void;
+  mark(context: ClassDecoratorContext<any>): void;
 }
 
 /**
@@ -687,7 +692,16 @@ export function classFlag(name: string): ClassFlag {
   });
 }
 
-interface ClassValueReaders<T> {
+/**
+ * A class decorator that stores one value per class, as classValue()
+ * returns it: `@feature("beta")`.
+ *
+ * ```ts
+ * export const feature: ClassValue<string> = classValue<string>("feature");
+ * ```
+ */
+export interface ClassValue<T> {
+  (value: T): (value: Function, context: ClassDecoratorContext<any>) => void;
   /**
    * The class's value (its own, else its parent's), or undefined.
    *
@@ -703,22 +717,22 @@ interface ClassValueReaders<T> {
    * const beta = (_cls: Function, context: ClassDecoratorContext) => feature.set(context, "beta");
    * ```
    */
-  set(context: ClassContext, value: T): void;
+  set(context: ClassDecoratorContext<any>, value: T): void;
 }
 
 /**
- * A class decorator that stores one value per class, as classValue()
- * returns it: `@feature("beta")`. `ClassValue<T, true>` is the type made
- * with `bare`, which also works uncalled.
+ * A class decorator made by classValue() with `bare`: it also works
+ * uncalled (`@prerender`) or called empty (`@prerender()`), storing the bare
+ * value.
  *
  * ```ts
- * export const feature: ClassValue<string> = classValue<string>("feature");
+ * export const prerendered: BareClassValue<{ paths?: string[] }> = classValue("prerendered", { bare: () => ({}) });
  * ```
  */
-export type ClassValue<T, Bare extends boolean = false> = ClassValueReaders<T> &
-  (Bare extends true
-    ? { (value?: T, _?: never): ClassDecoratorFn; (value: Function, context: ClassContext): void }
-    : (value: T) => ClassDecoratorFn);
+export interface BareClassValue<T> extends ClassValue<T> {
+  (value?: T): (value: Function, context: ClassDecoratorContext<any>) => void;
+  (value: Function, context: ClassDecoratorContext<any>): void;
+}
 
 /**
  * Make a class decorator that stores a value per class: `@feature("beta")`.
@@ -739,9 +753,9 @@ export type ClassValue<T, Bare extends boolean = false> = ClassValueReaders<T> &
  * const app = yerd({ routes });
  * ```
  */
-export function classValue<T>(name: string, options: ValueOptions<T> & { bare: () => T }): ClassValue<T, true>;
+export function classValue<T>(name: string, options: ValueOptions<T> & { bare: () => T }): BareClassValue<T>;
 export function classValue<T>(name: string, options?: ValueOptions<T>): ClassValue<T>;
-export function classValue<T>(name: string, options: ValueOptions<T> & { bare?: () => T } = {}): ClassValue<T, boolean> {
+export function classValue<T>(name: string, options: ValueOptions<T> & { bare?: () => T } = {}): ClassValue<T> {
   const label = labelFor(name);
   const key = localKey<T>(`kit:${name}`);
   const store = (context: ClassContext, value: T): void => {
@@ -764,7 +778,7 @@ export function classValue<T>(name: string, options: ValueOptions<T> & { bare?: 
   return Object.assign(factory, {
     get: (target: DecoratorTarget) => key.from(metadataFor(target)),
     set,
-  }) as unknown as ClassValue<T, boolean>;
+  }) as unknown as BareClassValue<T>;
 }
 
 /**
@@ -776,7 +790,7 @@ export function classValue<T>(name: string, options: ValueOptions<T> & { bare?: 
  * ```
  */
 export interface ClassList<T> {
-  (...items: T[]): ClassDecoratorFn;
+  (...items: T[]): (value: Function, context: ClassDecoratorContext<any>) => void;
   /**
    * The class's values: its parent's first, then its own top to bottom.
    *
@@ -792,7 +806,7 @@ export interface ClassList<T> {
    * const admin = (_cls: Function, context: ClassDecoratorContext) => scopes.add(context, "admin");
    * ```
    */
-  add(context: ClassContext, ...items: T[]): void;
+  add(context: ClassDecoratorContext<any>, ...items: T[]): void;
 }
 
 const CLASS_SLOT = Symbol("class");
@@ -862,16 +876,25 @@ export interface MethodDecoratorOptions<A extends unknown[]> {
   /** Checks the arguments of a called use (`@x(...)`); return a message to refuse them (or throw your own error). */
   validate?: (...args: A) => string | void;
   /** Runs where the decorator is applied, with its arguments. Throw to refuse. */
-  apply?: (context: MethodContext, ...args: A) => void;
+  apply?: (context: ClassMethodDecoratorContext<any, any>, ...args: A) => void;
   /** Return a function to replace the method (calling `method` from it), or nothing to keep it. */
-  wrap?: (method: Function, context: MethodContext, ...args: A) => Function | void;
+  wrap?: (method: Function, context: ClassMethodDecoratorContext<any, any>, ...args: A) => Function | void;
   /** true: static and #private methods are accepted too. For wrappers; readers key by name. */
   anyMember?: boolean;
   /** true: symbol-named methods are refused. */
   stringNamed?: boolean;
 }
 
-interface MethodDecoratorReaders<A extends unknown[]> {
+/**
+ * A method decorator as createMethodDecorator() returns it: called with its
+ * arguments, plus readers for where it's used.
+ *
+ * ```ts
+ * export const retry: MethodDecoratorFactory<[times: number]> = createMethodDecorator("retry", { wrap: retrying });
+ * ```
+ */
+export interface MethodDecoratorFactory<A extends unknown[]> {
+  (...args: A): <M extends Function>(method: M, context: ClassMethodDecoratorContext<any, any>) => M | void;
   /**
    * Whether `member` carries the decorator (its own or inherited).
    *
@@ -879,7 +902,7 @@ interface MethodDecoratorReaders<A extends unknown[]> {
    * timed.has(Reports, "monthly"); // true
    * ```
    */
-  has(target: DecoratorTarget, member: Member): boolean;
+  has(target: DecoratorTarget, member: string | symbol): boolean;
   /**
    * The arguments of each use on `member`, top to bottom (an empty list for
    * an uncalled use). Empty when it isn't decorated.
@@ -888,7 +911,7 @@ interface MethodDecoratorReaders<A extends unknown[]> {
    * timed.get(Reports, "yearly"); // [["yearly report"]]
    * ```
    */
-  get(target: DecoratorTarget, member: Member): readonly A[];
+  get(target: DecoratorTarget, member: string | symbol): readonly A[];
   /**
    * Every decorated member with the arguments of each use.
    *
@@ -896,22 +919,20 @@ interface MethodDecoratorReaders<A extends unknown[]> {
    * for (const [member, uses] of timed.entries(Reports)) console.log(String(member), uses.length);
    * ```
    */
-  entries(target: DecoratorTarget): ReadonlyMap<Member, readonly A[]>;
+  entries(target: DecoratorTarget): ReadonlyMap<string | symbol, readonly A[]>;
 }
 
 /**
- * A method decorator as createMethodDecorator() returns it: called with its
- * arguments, plus its readers. `MethodDecoratorFactory<A, true>` is the type
- * made with `bare: true`, which also works uncalled.
+ * A method decorator made by createMethodDecorator() with `bare: true`: it
+ * also works uncalled, with no arguments.
  *
  * ```ts
- * export const timed: MethodDecoratorFactory<[label?: string], true> = createMethodDecorator("timed", { bare: true, wrap: timer });
+ * export const timed: BareMethodDecoratorFactory<[label?: string]> = createMethodDecorator("timed", { bare: true, wrap: timer });
  * ```
  */
-export type MethodDecoratorFactory<A extends unknown[], Bare extends boolean = false> = MethodDecoratorReaders<A> &
-  (Bare extends true
-    ? { (...args: A): WrappingDecoratorFn; <M extends Function>(method: M, context: MethodContext): M | void }
-    : (...args: A) => WrappingDecoratorFn);
+export interface BareMethodDecoratorFactory<A extends unknown[]> extends MethodDecoratorFactory<A> {
+  <M extends Function>(method: M, context: ClassMethodDecoratorContext<any, any>): M | void;
+}
 
 /**
  * Make any other method decorator: one that wraps the method, checks where
@@ -940,9 +961,9 @@ export type MethodDecoratorFactory<A extends unknown[], Bare extends boolean = f
  * }
  * ```
  */
-export function createMethodDecorator<A extends unknown[] = []>(name: string, options: MethodDecoratorOptions<A> & { bare: true }): MethodDecoratorFactory<A, true>;
+export function createMethodDecorator<A extends unknown[] = []>(name: string, options: MethodDecoratorOptions<A> & { bare: true }): BareMethodDecoratorFactory<A>;
 export function createMethodDecorator<A extends unknown[] = []>(name: string, options?: MethodDecoratorOptions<A>): MethodDecoratorFactory<A>;
-export function createMethodDecorator<A extends unknown[] = []>(name: string, options: MethodDecoratorOptions<A> = {}): MethodDecoratorFactory<A, boolean> {
+export function createMethodDecorator<A extends unknown[] = []>(name: string, options: MethodDecoratorOptions<A> = {}): MethodDecoratorFactory<A> {
   const label = labelFor(name);
   const lists = new MemberLists<A>(name);
   const decorate =
@@ -962,10 +983,10 @@ export function createMethodDecorator<A extends unknown[] = []>(name: string, op
     return decorate(args as A);
   };
   return Object.assign(factory, {
-    has: (target: DecoratorTarget, member: Member) => lists.get(target, member).length > 0,
-    get: (target: DecoratorTarget, member: Member) => lists.get(target, member),
+    has: (target: DecoratorTarget, member: string | symbol) => lists.get(target, member).length > 0,
+    get: (target: DecoratorTarget, member: string | symbol) => lists.get(target, member),
     entries: (target: DecoratorTarget) => lists.entries(target),
-  }) as unknown as MethodDecoratorFactory<A, boolean>;
+  }) as unknown as BareMethodDecoratorFactory<A>;
 }
 
 /** Per handler method: the request values @args passes it. */
