@@ -19,12 +19,18 @@ export const pageStyles = css`
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   a.external::after { content: " ↗"; font-size: 0.8em; color: var(--text-faint); }
-  /* Links to API pages: a dotted underline says "hover for a summary". */
-  a.api-ref { text-decoration: none; border-bottom: 1px dotted var(--accent-dim); }
-  a.api-ref:hover { text-decoration: none; border-bottom-style: solid; }
-  a.api-ref code { color: var(--accent); }
-  pre a.api-ref { border-bottom-color: transparent; }
-  pre a.api-ref:hover { border-bottom: 1px solid var(--tok-type); }
+  /* Anything with data-api links to an API page and has a hover card: a
+     dashed underline says so, in prose and inside code alike. */
+  [data-api] {
+    text-decoration: underline dashed var(--accent-dim);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 4px;
+    cursor: help;
+  }
+  [data-api]:hover { text-decoration-style: solid; text-decoration-color: var(--accent); }
+  [data-api] code { color: var(--accent); }
+  pre [data-api] { text-decoration-color: rgba(139, 213, 160, 0.45); text-underline-offset: 3px; }
+  pre [data-api]:hover { text-decoration-color: currentColor; }
 
   h1 { font-size: 2rem; line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 12px; }
   h2 { font-size: 1.35rem; margin: 2.2em 0 0.6em; padding-top: 0.4em; border-top: 1px solid var(--border); letter-spacing: -0.01em; }

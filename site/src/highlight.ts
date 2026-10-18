@@ -48,7 +48,10 @@ function highlightTs(code: string, link?: CodeLinker): string {
     else if (number) out += `<span class="tok-number">${escape(text)}</span>`;
     else if (tag) out += `<span class="tok-tag">${escape(text)}</span>`;
     else if (word) {
-      if (KEYWORDS.has(word)) out += `<span class="tok-keyword">${word}</span>`;
+      // `get` / `set` are keywords in getters but also yerd's verb decorators,
+      // so a keyword the block imports from yerd still links.
+      const keywordLink = KEYWORDS.has(word) && code[TS.lastIndex - word.length - 1] !== "." ? link?.(word, "word") : undefined;
+      if (KEYWORDS.has(word)) out += linked(`<span class="tok-keyword">${word}</span>`, keywordLink);
       else {
         // A property access (`.word`) is never an export of its own.
         const id = code[TS.lastIndex - word.length - 1] === "." ? undefined : link?.(word, "word");
