@@ -49,7 +49,8 @@
  * - [data-yx-sync]      keep the element's looping CSS animations in step with every
  *                       other page, against the server's clock (/_yerd/clock)
  * - [data-yx-cue]       play when the server plays one of these cues (/_yerd/cues,
- *                       rooms from data-yx-cue-room): sets data-yx-cued, plays
+ *                       rooms from data-yx-cue-room, or the app's own stream at
+ *                       data-yx-cue-from): sets data-yx-cued, plays
  *                       <audio>/<video>, dispatches a cancelable "yx:cue"
  * - <yerd-local>        client-side state from <Local>: data-yx-on-* handlers
  *                       run against it, data-yx-text / data-yx-bind follow it
@@ -1726,27 +1727,39 @@ export function yerdRuntime(): void {
   });
 
   // Built in: cue. Elements naming cues listen to their rooms through one
-  // EventSource on /_yerd/cues, open while any are on the page. Each cue says
-  // when it plays on the server's clock: it's played then, or straight away
-  // and partway through if that's already passed (a late arrival, a slow link).
+  // EventSource on /_yerd/cues (the public rooms), and elements with
+  // data-yx-cue-from through the app's own stream route there (rooms behind
+  // its guards); each source is open while an element needs it. Each cue
+  // says when it plays on the server's clock: it's played then, or straight
+  // away and partway through if that's already passed (a late arrival, a
+  // slow link).
   type CueMessage = { id: string; name: string; room: string; at: number; lasts?: number; data?: unknown };
   const cueing = new Set<Element>();
-  // Cue id -> when it's over (server time): a reconnect replays what's still running, and each plays once.
+  // Source + cue id -> when it's over (server time): a reconnect replays what's still running, and each plays once.
   const heard = new Map<string, number>();
   const cueRuns = new WeakMap<Element, number>();
-  let cueSource: EventSource | undefined;
-  let cueRooms = "";
+  const cueSources = new Map<string, EventSource>();
   let cueQueued = false;
+  const PUBLIC_CUES = "/_yerd/cues?";
   const roomOf = (el: Element): string => el.getAttribute("data-yx-cue-room") || "main";
+  const fromOf = (el: Element): string | null => el.getAttribute("data-yx-cue-from") || null;
 
-  function playCue(cue: CueMessage): void {
+  /** Whether a cue that came from `url` is for `el`. */
+  function cueFor(el: Element, url: string, cue: CueMessage): boolean {
+    if (!(el.getAttribute("data-yx-cue") ?? "").split(/\s+/).includes(cue.name)) return false;
+    const from = fromOf(el);
+    // Public stream: the element's room. Its own route: whatever the route sends, narrowed by cueRoom if it has one.
+    if (!from) return url.startsWith(PUBLIC_CUES) && roomOf(el) === cue.room;
+    return from === url && (!el.hasAttribute("data-yx-cue-room") || roomOf(el) === cue.room);
+  }
+
+  function playCue(cue: CueMessage, url: string): void {
     const behind = serverNow() - cue.at;
     // Within a frame is on time (a timer firing a little late): no seeking for that.
     const late = behind < 16 ? 0 : behind;
     if (cue.lasts !== undefined && late >= cue.lasts) return;
     for (const el of Array.from(cueing)) {
-      if (!el.isConnected || roomOf(el) !== cue.room) continue;
-      if (!(el.getAttribute("data-yx-cue") ?? "").split(/\s+/).includes(cue.name)) continue;
+      if (!el.isConnected || !cueFor(el, url, cue)) continue;
       const detail = { name: cue.name, room: cue.room, data: cue.data, at: cue.at, late };
       // preventDefault(): the listener plays it its own way.
       if (!el.dispatchEvent(new CustomEvent("yx:cue", { bubbles: true, cancelable: true, detail }))) continue;
@@ -1780,25 +1793,27 @@ export function yerdRuntime(): void {
     }
   }
 
-  function hear(cue: CueMessage): void {
-    if (!cue || typeof cue.id !== "string" || typeof cue.name !== "string" || typeof cue.room !== "string" || typeof cue.at !== "number" || heard.has(cue.id)) return;
-    heard.set(cue.id, cue.at + (cue.lasts ?? 0));
+  function hear(cue: CueMessage, url: string): void {
+    if (!cue || typeof cue.id !== "string" || typeof cue.name !== "string" || typeof cue.room !== "string" || typeof cue.at !== "number") return;
+    const key = url + "\n" + cue.id;
+    if (heard.has(key)) return;
+    heard.set(key, cue.at + (cue.lasts ?? 0));
     if (heard.size > 256) {
       const old = serverNow() - 60000;
       for (const [id, end] of heard) if (end < old) heard.delete(id);
     }
     void clockReady().then(() => {
       const wait = cue.at - serverNow();
-      if (wait > 0) setTimeout(() => playCue(cue), wait);
-      else playCue(cue);
+      if (wait > 0) setTimeout(() => playCue(cue, url), wait);
+      else playCue(cue, url);
     });
   }
 
-  function openCues(rooms: string[], delay: number): void {
-    const source = new EventSource("/_yerd/cues?" + rooms.map((room) => "room=" + encodeURIComponent(room)).join("&"));
+  function openCues(url: string, delay: number): void {
+    const source = new EventSource(url);
     source.onmessage = (event: MessageEvent<string>) => {
       try {
-        hear(JSON.parse(event.data) as CueMessage);
+        hear(JSON.parse(event.data) as CueMessage, url);
       } catch {
         // Not a cue.
       }
@@ -1807,26 +1822,32 @@ export function yerdRuntime(): void {
       delay = 1000;
     };
     source.onerror = () => {
-      // CLOSED (2): the browser won't retry this one itself (a restarting server, say).
+      // CLOSED (2): the browser won't retry this one itself (a restarting server, a refused room).
       if (source.readyState !== 2) return;
       setTimeout(() => {
-        if (cueSource === source) openCues(rooms, Math.min(delay * 2, 30000));
+        if (cueSources.get(url) === source) openCues(url, Math.min(delay * 2, 30000));
       }, delay);
     };
-    cueSource = source;
+    cueSources.set(url, source);
   }
 
   function connectCues(): void {
     cueQueued = false;
-    const rooms = Array.from(new Set(Array.from(cueing, roomOf))).sort();
-    const key = rooms.join("\n");
-    if (key === cueRooms && (cueSource || rooms.length === 0)) return;
-    cueSource?.close();
-    cueSource = undefined;
-    cueRooms = key;
-    if (rooms.length === 0) return;
-    void clockReady();
-    openCues(rooms, 1000);
+    const urls = new Set<string>();
+    const rooms = new Set<string>();
+    for (const el of cueing) {
+      const from = fromOf(el);
+      if (from) urls.add(from);
+      else rooms.add(roomOf(el));
+    }
+    if (rooms.size) urls.add(PUBLIC_CUES + Array.from(rooms).sort().map((room) => "room=" + encodeURIComponent(room)).join("&"));
+    for (const [url, source] of Array.from(cueSources)) {
+      if (urls.has(url)) continue;
+      source.close();
+      cueSources.delete(url);
+    }
+    if (urls.size) void clockReady();
+    for (const url of urls) if (!cueSources.has(url)) openCues(url, 1000);
   }
   function queueCues(): void {
     if (cueQueued) return;
@@ -1844,11 +1865,13 @@ export function yerdRuntime(): void {
       },
     };
   });
-  // A room changed on its own (a morph): listen to the new one.
-  attribute("data-yx-cue-room", () => {
-    queueCues();
-    return { update: queueCues, disconnect: queueCues };
-  });
+  // A room or source changed on its own (a morph): listen to the new one.
+  for (const name of ["data-yx-cue-room", "data-yx-cue-from"]) {
+    attribute(name, () => {
+      queueCues();
+      return { update: queueCues, disconnect: queueCues };
+    });
+  }
 }
 
 let source: string | undefined;

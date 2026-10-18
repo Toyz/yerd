@@ -1,4 +1,4 @@
-import { ActionForm, Channels, HttpError, Region, action, get, group, inject, query, route, signal, sse, type Action } from "@toyz/yerd";
+import { ActionForm, Channels, Cues, HttpError, Region, action, css, get, group, inject, keyframes, query, route, signal, sse, type Action } from "@toyz/yerd";
 import { Ago, Price } from "../attributes.js";
 import { CATEGORIES, CATEGORY_IDS, Catalog, DroppedPhotos, EditProductForm, NewProductForm, imageUrl, type Product } from "../catalog.js";
 import { Stock } from "../components.js";
@@ -6,6 +6,7 @@ import { Orders, orderChannel, type Uuid } from "../cart.js";
 import { AdminLayout } from "../layouts.js";
 import { EventLog, eventLogChannel } from "../events.js";
 import { FindOrder, Returns } from "../returns.js";
+import { STAFF_ROOM } from "../reactions.js";
 import { SalesFeed, salesChannel } from "../sales.js";
 import { Presence } from "../shop.js";
 import { auth } from "../users.js";
@@ -33,6 +34,33 @@ export class AdminEvents {
     return sse(this.channels.subscribe(salesChannel, this.stop), { heartbeat: 10_000, retry: 2_000 });
   }
 }
+
+/**
+ * The staff cue room's stream. Cues work like channels: the built-in
+ * /_yerd/cues only serves public rooms, so a private one comes from a route
+ * like this, behind the group's staff guard. The dashboard's bell listens
+ * here with `cueFrom`.
+ */
+@route("/cues", { group: Admin })
+export class AdminCues {
+  @inject(Cues) accessor cues!: Cues;
+  @signal accessor stop!: AbortSignal;
+
+  @get @sse feed() {
+    return this.cues.listen([STAFF_ROOM], this.stop);
+  }
+}
+
+const ring = keyframes`
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(-4deg) scale(1.04); }
+  40% { transform: rotate(4deg) scale(1.04); }
+  60% { transform: rotate(-2deg); }
+`;
+const bell = css`
+  display: inline-block;
+  &[data-yx-cued] { animation: ${ring} 600ms ease-in-out 2; color: var(--accent); font-weight: 600; }
+`;
 
 const started = Date.now();
 
@@ -62,6 +90,10 @@ export class Dashboard {
     return (
       <>
         <h1 class="page-title">Dashboard</h1>
+        {/* A private cue room: rings on every open dashboard at once when an order comes in. */}
+        <p class={["muted", bell]} horn cue="ka-ching" cueFrom="/admin/cues" aria-live="polite">
+          New orders ring a bell here, on every staff screen at once.
+        </p>
         {/* Every sale refreshes this page's Regions. */}
         <div data-yx-live="/admin/events" hidden></div>
         <div class="stats">

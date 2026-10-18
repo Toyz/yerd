@@ -290,7 +290,7 @@ When a cue plays, each element that names it:
 
 | `play()` option | What it does |
 | --- | --- |
-| `room` | Which pages hear it. Pages listen to the rooms their `cueRoom` props name, or `"main"` when there's none. Default `"main"`. |
+| `room` | Which pages hear it. Pages listen to the rooms their `cueRoom` props name (`"main"` when there's none), or to what their `cueFrom` route serves. See [public and private rooms](#public-and-private-rooms). Default `"main"`. |
 | `in` | How far ahead to schedule it, in ms. The lead gives the message time to reach every page, so they start together. Default 250. |
 | `lasts` | How long it runs, in ms. A page that connects while it's running starts it partway. `data-yx-cued` comes off when it ends. |
 | `cooldown` | Ignore plays of the same cue for this long, in ms. A button the whole room mashes plays once per window. `play()` returns undefined for an ignored play. |
@@ -345,9 +345,47 @@ export const horn = attribute<boolean>("horn", {
 
 The same clock is available to your own client code: `yerd.now()` is the server's time, and `yerd.clock()` measures it and resolves with `{ now, offset, rtt }`.
 
-### Rooms, instances and counts
+### Public and private rooms
 
-- **Rooms aren't private.** Any page can listen to any room by name, so don't put anything secret in `data`. A room name is 1 to 128 characters with no control characters.
+Rooms work like [channels](#channels). The built-in stream that `cue` elements listen on, `/_yerd/cues`, only serves the rooms you make public, and it refuses the rest with a 403. Out of the box only `"main"` is public:
+
+```ts
+yerd({ cues: { public: ["main", "rave"] } });                 // these rooms
+yerd({ cues: { public: (room) => room.startsWith("lobby:") } }); // rooms that pass a test
+yerd({ cues: { public: true } });                            // every room
+yerd({ cues: { public: false } });                           // no built-in stream at all
+```
+
+Any other room is private: serve it from a stream route of your own, behind whatever guards it needs, and point the elements at that route with `cueFrom`. `cues.listen(rooms, signal)` is the stream; return it from an `@sse` method.
+
+```tsx
+@route("/teams/:id/cues", { guards: [auth.required, onTeam] })
+export class TeamCues {
+  @inject(Cues) accessor cues!: Cues;
+  @param("id") accessor id!: string;
+  @signal accessor stop!: AbortSignal;
+
+  @get @sse feed() {
+    return this.cues.listen([`team:${this.id}`], this.stop);
+  }
+}
+
+// on the team's page
+<div class={confetti} cue="goal" cueFrom={`/teams/${team.id}/cues`} />
+
+// anywhere
+await this.cues.play("goal", { room: `team:${team.id}` });
+```
+
+- Every cue a `cueFrom` route sends is for its elements. If the route serves several rooms, `cueRoom` on an element narrows it to one.
+- A page can mix both: elements without `cueFrom` share one public stream, and each `cueFrom` URL gets its own.
+- If a page asks `/_yerd/cues` for a private room, the server logs a warning naming the room, once.
+- A room name is 1 to 128 characters with no control characters.
+
+The kitchen sink has both: the rave's room is public, and the back office's order bell is a private `"staff"` room streamed from `/admin/cues`, behind the staff guard.
+
+### Instances and counts
+
 - **Instances:** cues go out through [Channels](api:yerd.Channels). With a shared [ChannelBackend](api:yerd.ChannelBackend), pages on every instance hear every cue. `cooldown` is counted per process.
 - **Counts:** `cues.watching(room)` is how many pages are listening through this process right now. The kitchen sink shows it as "tabs raving".
 - **Testing:** `cues.listen(rooms, signal)` is the same feed the runtime reads, so a test can play a cue and check that it arrived.

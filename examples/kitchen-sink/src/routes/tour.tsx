@@ -153,6 +153,7 @@ const FEATURES: Array<[string, Feature[]]> = [
     { name: "Custom attributes", href: "/", how: "money (prices in your locale), ago (times that tick), ticker (client only)." },
     { name: "prefetch and <Scripts auto />", href: "/", how: "Hover a product: it's fetched before you click." },
     { name: "Server-synced animation: sync and Cues", href: "/rave", how: "Two windows: the gnomes bob on one beat, and the airhorn and the drop play on every screen at once (late joiners start partway)." },
+    { name: "A private cue room with cueFrom", href: "/admin", how: "Keep the dashboard open and place an order elsewhere: the bell rings on every staff screen, streamed from /admin/cues behind the staff guard." },
   ]],
   ["Pages and assets", [
     { name: "Lazy images with srcset, eager hero", href: "/", how: "The hero is fetchpriority=high; product images load as you scroll." },

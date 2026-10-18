@@ -37,8 +37,28 @@
  * to play the cue your own way.
  *
  * Cues go out through Channels, so with a shared ChannelBackend every
- * instance's pages hear them. Rooms aren't private: any page can listen to
- * any room by name, so don't put secrets in `data`.
+ * instance's pages hear them.
+ *
+ * Rooms work like channels: the built-in stream serves only the rooms you
+ * make public (`yerd({ cues: { public: [...] } })`, default `["main"]`).
+ * Any other room is yours to serve from a stream route, behind your guards,
+ * and elements listen there with `cueFrom`:
+ *
+ * ```tsx
+ * @route("/teams/:id/cues", { guards: [auth.required, onTeam] })
+ * export class TeamCues {
+ *   @inject(Cues) accessor cues!: Cues;
+ *   @param("id") accessor id!: string;
+ *   @signal accessor stop!: AbortSignal;
+ *
+ *   @get @sse feed() {
+ *     return this.cues.listen([`team:${this.id}`], this.stop);
+ *   }
+ * }
+ *
+ * <div class={confetti} cue="goal" cueFrom={`/teams/${team.id}/cues`} />
+ * await this.cues.play("goal", { room: `team:${team.id}` });
+ * ```
  */
 
 import { inject } from "../di/decorators.js";
@@ -52,11 +72,49 @@ export const CLOCK_PATH = "/_yerd/clock";
 /** The room a cue goes to when none is given, and the one `cue` elements listen to without `cueRoom`. */
 export const DEFAULT_ROOM = "main";
 
+/**
+ * Which rooms the built-in cue stream (`/_yerd/cues`, what `cue` elements
+ * without `cueFrom` listen on) serves to anyone who asks. Any other room is
+ * refused there (403), and reaches pages only through a stream route of
+ * your own, behind whatever guards you like, that returns
+ * `cues.listen(rooms, signal)`; elements point at it with `cueFrom`.
+ * `true` serves every room, `false` turns the built-in stream off.
+ * Default `["main"]`.
+ *
+ * ```ts
+ * yerd({ cues: { public: ["main", "rave"] } });
+ * yerd({ cues: { public: (room) => room.startsWith("lobby:") } });
+ * ```
+ */
+export type PublicRooms = boolean | readonly string[] | ((room: string) => boolean);
+
+/** Options for the cue streams: `yerd({ cues })`. */
+export interface CuesOptions {
+  /**
+   * Rooms anyone may listen to on the built-in stream. See PublicRooms.
+   * Default `["main"]`.
+   *
+   * ```ts
+   * yerd({ cues: { public: ["main", "rave"] } });
+   * ```
+   */
+  public?: PublicRooms;
+}
+
+/** Whether the built-in stream serves `room` under `rooms`. */
+export function isPublicRoom(rooms: PublicRooms | undefined, room: string): boolean {
+  if (rooms === undefined) return room === DEFAULT_ROOM;
+  if (typeof rooms === "boolean") return rooms;
+  if (typeof rooms === "function") return rooms(room) === true;
+  return rooms.includes(room);
+}
+
 /** Options for Cues.play(). */
 export interface CueOptions {
   /**
    * The room: pages listen to the rooms their `cueRoom` elements name
-   * (`"main"` without one). Default `"main"`.
+   * (`"main"` without one), or whatever their `cueFrom` route serves.
+   * Default `"main"`.
    *
    * ```ts
    * await this.cues.play("confetti", { room: `team:${teamId}` });

@@ -1,4 +1,4 @@
-import { Channels, inject, logger, maybe, on, service, type Logger } from "@toyz/yerd";
+import { Channels, Cues, inject, logger, maybe, on, service, type Logger } from "@toyz/yerd";
 import { formatMoney } from "./attributes.js";
 import { orderChannel, type Uuid } from "./cart.js";
 import { Catalog } from "./catalog.js";
@@ -66,5 +66,27 @@ export class OrderFeed {
   @on(OrderStatusChanged) async changed(event: OrderStatusChanged) {
     await this.channels.publish(orderChannel, { id: event.orderId as Uuid, userId: event.userId, status: event.status });
     this.eventLog.ran(event.id, "OrderFeed.changed", "ok");
+  }
+}
+
+/**
+ * The staff cue room. Not in `cues.public`, so /_yerd/cues refuses it: staff
+ * pages hear it through /admin/cues, which the back office's staff guard covers.
+ */
+export const STAFF_ROOM = "staff";
+
+/** Rings a bell on every open back-office dashboard when an order comes in, at the same moment on all of them. */
+@service
+export class OrderBell {
+  @inject(Cues) accessor cues!: Cues;
+  @inject(EventLog) accessor eventLog!: EventLog;
+
+  @on(OrderPlaced) async ring(event: OrderPlaced) {
+    await this.cues.play("ka-ching", {
+      room: STAFF_ROOM,
+      lasts: 1500,
+      data: { text: `Order ${event.number}: ${formatMoney(event.totalCents)} from @${event.customer}` },
+    });
+    this.eventLog.ran(event.id, "OrderBell.ring", "ok");
   }
 }

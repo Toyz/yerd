@@ -257,10 +257,10 @@ test("events: the cart's shipping is a call, and an order fans out to every hand
   await expect(page).toHaveURL(/\/orders\/[0-9a-f-]{36}$/);
   const number = (await page.locator(".receipt h1").textContent())!.replace("Order ", "");
 
-  // The staff tab updates by itself: one order.placed, five handlers (the Warehouse may need a retry or two).
+  // The staff tab updates by itself: one order.placed, six handlers (the Warehouse may need a retry or two).
   const entry = log.locator('.event-row[data-name="order.placed"]', { hasText: number });
   await expect(entry).toHaveCount(1);
-  for (const handler of ["Receipts.send", "Warehouse.reserve", "SalesFeed.fromOrder", "Carts.forget", "OrderFeed.placed"]) {
+  for (const handler of ["Receipts.send", "Warehouse.reserve", "SalesFeed.fromOrder", "Carts.forget", "OrderFeed.placed", "OrderBell.ring"]) {
     await expect(entry.locator(`.handler.ok[data-handler="${handler}"]`)).toHaveCount(1, { timeout: 10_000 });
   }
   await expect(log.locator('.event-row[data-name="shipping.quote"]').first()).toContainText("Shipping.quote");
@@ -619,4 +619,32 @@ test("service lifetimes: singleton stays, scoped is one per request and disposed
   await expect(page.locator("#visit-id")).not.toHaveText(visit!);
   // The previous request's Visit was disposed when it ended.
   await expect(page.locator("#disposed")).toContainText(visit!);
+});
+
+test("private cue room: an order rings the bell on every staff dashboard, and nobody else can listen", async ({ page, browser, baseURL }) => {
+  const staff = await browser.newContext({ baseURL });
+  const dashboard = await staff.newPage();
+  await ada(dashboard, "/admin");
+  const bell = dashboard.locator('[data-yx-cue="ka-ching"]');
+  await expect(bell).toHaveAttribute("data-yx-cue-from", "/admin/cues");
+
+  // The staff room isn't public, and its own route is behind the staff guard.
+  expect((await page.request.get("/_yerd/cues?room=staff")).status()).toBe(403);
+  await cy(page);
+  expect((await page.request.get("/admin/cues", { maxRedirects: 0 })).status()).toBe(403);
+
+  await page.locator(".add-form button:enabled").first().click();
+  await page.goto("/cart");
+  await page.getByLabel("Name").fill("Cy Rock");
+  await page.getByLabel("Address").fill("1 Boulder Lane, Lisbon");
+  await page.getByLabel("Card number").fill("4242 4242 4242 4242");
+  await page.getByLabel("CVC").fill("123");
+  await page.getByRole("button", { name: "Place order" }).click();
+  await expect(page).toHaveURL(/\/orders\/[0-9a-f-]{36}$/);
+  const number = (await page.locator(".receipt h1").textContent())!.replace("Order ", "");
+
+  await expect(bell).toHaveAttribute("data-yx-cued", "ka-ching");
+  await expect(bell).toContainText(`Order ${number}:`);
+  await expect(bell).toContainText("from @cy");
+  await staff.close();
 });

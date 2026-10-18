@@ -8,7 +8,7 @@ declare module "@toyz/yerd" {
     ago?: string;
     /** An SSE URL: the element shows the latest sale from it. */
     ticker?: string;
-    /** Plays a synthesized airhorn when a cue reaches the element, and says who sent it. */
+    /** Plays a cue as synthesized sound when it reaches the element, and shows its message. */
     horn?: boolean;
   }
 }
@@ -123,8 +123,8 @@ export const ticker = attribute<string>("ticker", {
 
 /**
  * `horn`: listens for the `yx:cue` event a cue element gets and plays it as
- * sound, made with Web Audio (no audio file), and shows who sent it from the
- * cue's data. Browsers only allow sound once the visitor has clicked
+ * sound, made with Web Audio (no audio file), and shows its message (or who
+ * sent it) from the cue's data. Browsers only allow sound once the visitor has clicked
  * somewhere on the page, so the audio context starts on the first press.
  * A cue heard well after it was due (a tab coming back) shows, but stays
  * quiet: a horn half a second late is just noise.
@@ -139,19 +139,20 @@ export const horn = attribute<boolean>("horn", {
     };
     document.addEventListener("pointerdown", unlock);
     const play = (event: Event) => {
-      const { name, data, late } = (event as CustomEvent<{ name: string; data?: { who?: string }; late: number }>).detail;
-      if (data?.who) el.textContent = `@${data.who} ${name === "drop" ? "dropped the beat" : "hit the horn"}`;
+      const { name, data, late } = (event as CustomEvent<{ name: string; data?: { who?: string; text?: string }; late: number }>).detail;
+      if (data?.text) el.textContent = data.text;
+      else if (data?.who) el.textContent = `@${data.who} ${name === "drop" ? "dropped the beat" : "hit the horn"}`;
       if (!audio || audio.state !== "running" || late > 400) return;
       const start = audio.currentTime;
-      const length = name === "drop" ? 1.6 : 0.8;
+      const length = name === "drop" ? 1.6 : name === "ka-ching" ? 0.5 : 0.8;
       const gain = audio.createGain();
       gain.connect(audio.destination);
       gain.gain.setValueAtTime(0.0001, start);
       gain.gain.exponentialRampToValueAtTime(0.2, start + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.0001, start + length);
-      for (const pitch of name === "drop" ? [55, 82.5] : [415, 466, 554]) {
+      for (const pitch of name === "drop" ? [55, 82.5] : name === "ka-ching" ? [1319, 1760] : [415, 466, 554]) {
         const tone = audio.createOscillator();
-        tone.type = "sawtooth";
+        tone.type = name === "ka-ching" ? "triangle" : "sawtooth";
         tone.frequency.setValueAtTime(pitch, start);
         if (name === "drop") tone.frequency.exponentialRampToValueAtTime(pitch / 2, start + length);
         tone.connect(gain);

@@ -346,13 +346,26 @@ export interface GlobalAttributes extends CustomAttributes {
    */
   cue?: string | readonly string[];
   /**
-   * The room `cue` listens to. Default `"main"`, where cues go without a `room`.
+   * The room `cue` listens to. Default `"main"`, where cues go without a
+   * `room`. The built-in stream only serves public rooms (`yerd({ cues: {
+   * public } })`); serve the others from your own route with `cueFrom`.
    *
    * ```tsx
    * <div class={confetti} cue="goal" cueRoom={`match:${matchId}`} />
    * ```
    */
   cueRoom?: string;
+  /**
+   * Listen for `cue` on your own stream route instead of the public one: a
+   * route returning `cues.listen(rooms, signal)` behind whatever guards the
+   * room needs. Every cue it sends is for this element (narrowed to
+   * `cueRoom` if that's set too).
+   *
+   * ```tsx
+   * <div class={confetti} cue="goal" cueFrom={`/teams/${team.id}/cues`} />
+   * ```
+   */
+  cueFrom?: string;
   /**
    * Not an attribute: the JSX key. On an element it renders as `data-key`,
    * which the runtime uses to match elements when it morphs a list.

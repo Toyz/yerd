@@ -226,11 +226,17 @@ function renderNode(node: YerdNode, state: State): Step {
     const { dropTo, ...rest } = attrs;
     attrs = { ...rest, "data-yx-drop-to": dropTo };
   }
-  if (attrs.sync !== undefined || attrs.cue !== undefined || attrs.cueRoom !== undefined) {
+  if (attrs.sync !== undefined || attrs.cue !== undefined || attrs.cueRoom !== undefined || attrs.cueFrom !== undefined) {
     // Server-timed animation (see Cues): the runtime reads these.
-    const { sync, cue, cueRoom, ...rest } = attrs;
+    const { sync, cue, cueRoom, cueFrom, ...rest } = attrs;
     const names = Array.isArray(cue) ? cue.join(" ") : cue;
-    attrs = { ...rest, "data-yx-sync": sync === true ? true : undefined, "data-yx-cue": names || undefined, "data-yx-cue-room": names ? cueRoom : undefined };
+    attrs = {
+      ...rest,
+      "data-yx-sync": sync === true ? true : undefined,
+      "data-yx-cue": names || undefined,
+      "data-yx-cue-room": names ? cueRoom : undefined,
+      "data-yx-cue-from": names ? cueFrom : undefined,
+    };
   }
   // null is nothing, as for any attribute: a null key isn't written, and
   // data-key={null} doesn't stand in for the key.

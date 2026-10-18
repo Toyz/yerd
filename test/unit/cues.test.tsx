@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ChannelBackend, Cues, MemoryBackend, action, attribute, get, inject, renderToString, route, yerd, type Cue } from "@toyz/yerd";
+import { ChannelBackend, Cues, HttpError, MemoryBackend, action, attribute, createGuard, get, inject, param, renderToString, route, signal, sse, yerd, type Cue, type CuesOptions } from "@toyz/yerd";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -290,7 +290,7 @@ describe("/_yerd/cues", () => {
   });
 
   it("listens to the default room without a room, and to several with several", async () => {
-    const app = yerd({ routes: [], services: [], handleSignals: false });
+    const app = yerd({ routes: [], services: [], handleSignals: false, cues: { public: true } });
     const server = await app.listen(0, "127.0.0.1");
     try {
       const cues = app.container.get(Cues);
@@ -317,7 +317,7 @@ describe("/_yerd/cues", () => {
   });
 
   it("refuses bad rooms and too many of them", async () => {
-    const app = yerd({ routes: [], services: [], handleSignals: false });
+    const app = yerd({ routes: [], services: [], handleSignals: false, cues: { public: true } });
     const server = await app.listen(0, "127.0.0.1");
     try {
       expect((await fetch(server.url + "/_yerd/cues?room=")).status).toBe(400);
@@ -415,5 +415,94 @@ describe("reserved names", () => {
   it("sync and cue can't be custom attributes (the renderer handles them)", () => {
     expect(() => attribute("sync", {})).toThrow(/built-in yerd attribute/);
     expect(() => attribute("cue", {})).toThrow(/built-in yerd attribute/);
+  });
+});
+
+describe("public and private rooms", () => {
+  /** The status /_yerd/cues answers for these rooms, under `cues`. */
+  async function status(cues: CuesOptions | undefined, rooms: string[]): Promise<number> {
+    const app = yerd({ routes: [], services: [], handleSignals: false, cues });
+    const server = await app.listen(0, "127.0.0.1");
+    try {
+      const abort = new AbortController();
+      const res = await fetch(server.url + "/_yerd/cues" + (rooms.length ? "?" + rooms.map((r) => `room=${encodeURIComponent(r)}`).join("&") : ""), { signal: abort.signal });
+      abort.abort();
+      return res.status;
+    } finally {
+      await server.close();
+    }
+  }
+
+  it("serves only the main room by default", async () => {
+    expect(await status(undefined, [])).toBe(200);
+    expect(await status(undefined, ["main"])).toBe(200);
+    expect(await status(undefined, ["rave"])).toBe(403);
+    expect(await status(undefined, ["main", "rave"])).toBe(403);
+    expect(await status({}, ["rave"])).toBe(403);
+  });
+
+  it("takes a list, a function, true or false", async () => {
+    expect(await status({ public: ["main", "rave"] }, ["main", "rave"])).toBe(200);
+    expect(await status({ public: ["rave"] }, ["main"])).toBe(403);
+    expect(await status({ public: ["rave"] }, [])).toBe(403);
+    expect(await status({ public: (room) => room.startsWith("lobby:") }, ["lobby:1", "lobby:2"])).toBe(200);
+    expect(await status({ public: (room) => room.startsWith("lobby:") }, ["team:1"])).toBe(403);
+    expect(await status({ public: true }, ["anything", "at:all"])).toBe(200);
+    expect(await status({ public: false }, [])).toBe(403);
+    expect(await status({ public: false }, ["main"])).toBe(403);
+  });
+
+  it("a function that doesn't return true refuses", async () => {
+    expect(await status({ public: (() => "yes") as unknown as (room: string) => boolean }, ["main"])).toBe(403);
+  });
+
+  it("checks rooms are valid before whether they're public", async () => {
+    expect(await status(undefined, [""])).toBe(400);
+  });
+
+  const onTeam = createGuard("onTeam", (ctx) => {
+    return ctx.headers["x-team"] === ctx.params.id ? true : new HttpError(403, "not your team");
+  });
+
+  @route("/teams/:id/cues", { guards: [onTeam] })
+  class TeamCues {
+    @inject(Cues) accessor cues!: Cues;
+    @param("id") accessor id!: string;
+    @signal accessor stop!: AbortSignal;
+
+    @get @sse({ heartbeat: 0 }) feed() {
+      return this.cues.listen([`team:${this.id}`], this.stop);
+    }
+  }
+
+  it("a private room streams from the app's own guarded route", async () => {
+    const app = yerd({ routes: [TeamCues], services: [], handleSignals: false });
+    const server = await app.listen(0, "127.0.0.1");
+    try {
+      expect((await fetch(server.url + "/teams/7/cues", { headers: { "x-team": "8" } })).status).toBe(403);
+      expect((await fetch(server.url + "/_yerd/cues?room=team%3A7")).status).toBe(403);
+      const abort = new AbortController();
+      const res = await fetch(server.url + "/teams/7/cues", { headers: { "x-team": "7" }, signal: abort.signal });
+      expect(res.status).toBe(200);
+      const got = messages(res, 1);
+      await sleep(20);
+      const cues = app.container.get(Cues);
+      await cues.play("other", { room: "team:8" });
+      await cues.play("goal", { room: "team:7", data: { by: "ada" } });
+      expect((await got).map((m) => JSON.parse(m) as Cue)).toMatchObject([{ name: "goal", room: "team:7", data: { by: "ada" } }]);
+      expect(cues.watching("team:7")).toBe(1);
+      abort.abort();
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("cueFrom", () => {
+  it("renders with a cue, and not without one", async () => {
+    expect(await renderToString(<div cue="goal" cueFrom="/teams/7/cues" />)).toBe('<div data-yx-cue="goal" data-yx-cue-from="/teams/7/cues"></div>');
+    expect(await renderToString(<div cue="goal" cueFrom="/t" cueRoom="team:7" />)).toBe('<div data-yx-cue="goal" data-yx-cue-room="team:7" data-yx-cue-from="/t"></div>');
+    expect(await renderToString(<div cueFrom="/t" />)).toBe("<div></div>");
+    expect(await renderToString(<div cue="a" cueFrom={'/t?a=1&b="2"'} />)).toBe('<div data-yx-cue="a" data-yx-cue-from="/t?a=1&amp;b=&quot;2&quot;"></div>');
   });
 });

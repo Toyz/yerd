@@ -12,7 +12,8 @@ import { BootInfo, Disposals, Visit, bootInfo } from "./lifetimes.js";
 export function createApp() {
   return (
     // Photo uploads (up to four 2 MB files per product) need more than the default 1 MiB body.
-    yerd({ bodyLimit: 10 * 1024 * 1024 })
+    // The rave's room is public (anyone may listen on /_yerd/cues); the staff room isn't, see /admin/cues.
+    yerd({ bodyLimit: 10 * 1024 * 1024, cues: { public: ["main", "rave"] } })
       .layout(RootLayout)
       .errorPage(ErrorPage)
       // Sessions in this process (carts can outgrow a cookie), with ids in a format of our choosing.

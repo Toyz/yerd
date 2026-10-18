@@ -21,7 +21,7 @@ import { coerce, type Outgoing } from "../respond/coerce.js";
 import { HttpError } from "../respond/response.js";
 import { LONG_LIVED, sse } from "../respond/stream.js";
 import { Channels } from "../live/channels.js";
-import { CLOCK_PATH, CUES_PATH, Cues, DEFAULT_ROOM, validRoom } from "../live/cues.js";
+import { CLOCK_PATH, CUES_PATH, Cues, DEFAULT_ROOM, isPublicRoom, validRoom, type CuesOptions } from "../live/cues.js";
 import { TestClient, answer } from "./in-process.js";
 import { compilePath } from "../log/paths.js";
 import { cssBundleClasses, cssBundleHash, cssBundleText, resetCss, resetCssBundle, useCssBundle } from "../render/css.js";
@@ -51,6 +51,7 @@ import { REQUEST_SPAN, bindLogging, endRequestSpan, startRequestSpan, type LogBi
 
 /** yerd's own log targets. */
 const lifecycleLog = new Logger("yerd::lifecycle");
+const cueLog = new Logger("yerd::cues");
 const requestLog = new Logger("yerd::request");
 
 /**
@@ -113,6 +114,15 @@ export interface YerdOptions {
   trustedOrigins?: string[];
   /** Behind a reverse proxy: believe X-Forwarded-Host for the origin check. Default false. */
   trustProxy?: boolean;
+  /**
+   * The built-in cue stream: which rooms anyone may listen to (see Cues).
+   * Default `{ public: ["main"] }`.
+   *
+   * ```ts
+   * yerd({ cues: { public: ["main", "rave"] } });
+   * ```
+   */
+  cues?: CuesOptions;
 }
 
 /** Options for app.logging(): which records are written, and how. */
@@ -396,6 +406,8 @@ export class YerdApp {
   readonly #singletonRoutes = new Map<RouteDef, object>();
   /** Long-lived responses to end at shutdown: stream routes' request contexts, and the runtime's cue streams. */
   readonly #streams = new Set<{ abort(reason: unknown): void }>();
+  /** Private cue rooms someone asked /_yerd/cues for: warned about once each. */
+  readonly #warnedRooms = new Set<string>();
   #router: Router<HandlerGroup> | undefined;
   #container: Container | undefined;
   #secrets: string[] = [];
@@ -1478,6 +1490,15 @@ export class YerdApp {
     const asked = new URLSearchParams(search).getAll("room");
     const rooms = asked.length ? [...new Set(asked)] : [DEFAULT_ROOM];
     if (rooms.length > 32 || !rooms.every(validRoom)) return send(res, errorResponse(400), false, undefined);
+    const closed = rooms.filter((room) => !isPublicRoom(this.#options.cues?.public, room));
+    if (closed.length) {
+      for (const room of closed) {
+        if (this.#warnedRooms.has(room) || this.#warnedRooms.size > 100) continue;
+        this.#warnedRooms.add(room);
+        cueLog.warn(`cue room ${JSON.stringify(room)} isn't public, so /_yerd/cues refused it: list it in yerd({ cues: { public } }), or serve it from your own @sse route (cues.listen) and point the elements at it with cueFrom`);
+      }
+      return send(res, errorResponse(403), false, undefined);
+    }
     const abort = new AbortController();
     const gone = () => {
       if (!res.writableFinished) abort.abort(new Error("client disconnected"));

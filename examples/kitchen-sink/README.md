@@ -161,6 +161,10 @@ the ticker with named `event()`s) and `sse()` as a function (the dashboard);
 the gnomes on one beat in every tab, and `Cues` plays the airhorn (with a
 `cooldown`) and a countdown-then-drop (two cues, one timeline) on every page
 at the same moment; the `horn` attribute turns `yx:cue` events into Web Audio.
+The rave's room is public (`yerd({ cues: { public: ["main", "rave"] } })`);
+the back office's order bell is a private `"staff"` room, streamed from
+`/admin/cues` behind the staff guard and heard with `cueFrom` (`OrderBell` in
+`src/reactions.ts` plays it on every `OrderPlaced`).
 
 **Interactivity** (no client code anywhere):
 

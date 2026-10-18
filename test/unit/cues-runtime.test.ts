@@ -31,7 +31,8 @@ class FakeEventSource {
     this.onmessage?.({ data: JSON.stringify(cue) });
   }
 }
-const open = () => FakeEventSource.all.filter((s) => !s.closed);
+// Closed by the page, or given up on by the browser (readyState 2): not open.
+const open = () => FakeEventSource.all.filter((s) => !s.closed && s.readyState !== 2);
 const rooms = (source: FakeEventSource) => new URL(source.url, "http://x").searchParams.getAll("room");
 
 let clockCalls = 0;
@@ -311,6 +312,82 @@ describe("cue", () => {
     const count = FakeEventSource.all.length;
     await tick(5000);
     expect(FakeEventSource.all.length).toBe(count);
+  });
+});
+
+describe("cueFrom", () => {
+  it("opens the app's own stream next to the public one, and closes each when its elements go", async () => {
+    document.body.innerHTML = `<div id="pub" data-yx-cue="horn"></div><div id="team" data-yx-cue="goal" data-yx-cue-from="/teams/7/cues"></div><div id="team2" data-yx-cue="goal" data-yx-cue-from="/teams/7/cues"></div>`;
+    await settle();
+    expect(open().map((s) => s.url).sort()).toEqual(["/_yerd/cues?room=main", "/teams/7/cues"]);
+    document.getElementById("pub")!.remove();
+    await settle();
+    expect(open().map((s) => s.url)).toEqual(["/teams/7/cues"]);
+    document.getElementById("team")!.remove();
+    await settle();
+    expect(open().map((s) => s.url)).toEqual(["/teams/7/cues"]);
+    document.getElementById("team2")!.remove();
+    await settle();
+    expect(open()).toEqual([]);
+  });
+
+  it("a cue from a route plays on that route's elements only, whatever its room", async () => {
+    document.body.innerHTML = `<div id="pub" data-yx-cue="goal"></div><div id="team" data-yx-cue="goal" data-yx-cue-from="/teams/7/cues"></div><div id="other" data-yx-cue="goal" data-yx-cue-from="/teams/8/cues"></div>`;
+    await settle();
+    const team = open().find((s) => s.url === "/teams/7/cues")!;
+    team.send(cue({ name: "goal", room: "team:7", at: server() }));
+    await settle();
+    expect(document.getElementById("team")!.getAttribute("data-yx-cued")).toBe("goal");
+    expect(document.getElementById("pub")!.hasAttribute("data-yx-cued")).toBe(false);
+    expect(document.getElementById("other")!.hasAttribute("data-yx-cued")).toBe(false);
+  });
+
+  it("a public cue doesn't reach elements listening on a route", async () => {
+    document.body.innerHTML = `<div id="pub" data-yx-cue="goal"></div><div id="team" data-yx-cue="goal" data-yx-cue-from="/teams/7/cues"></div>`;
+    await settle();
+    open().find((s) => s.url.startsWith("/_yerd/cues"))!.send(cue({ name: "goal", room: "main", at: server() }));
+    await settle();
+    expect(document.getElementById("pub")!.hasAttribute("data-yx-cued")).toBe(true);
+    expect(document.getElementById("team")!.hasAttribute("data-yx-cued")).toBe(false);
+  });
+
+  it("cueRoom narrows what a route sends", async () => {
+    document.body.innerHTML = `<div id="red" data-yx-cue="goal" data-yx-cue-from="/match/cues" data-yx-cue-room="red"></div><div id="blue" data-yx-cue="goal" data-yx-cue-from="/match/cues" data-yx-cue-room="blue"></div>`;
+    await settle();
+    expect(open().map((s) => s.url)).toEqual(["/match/cues"]);
+    open()[0]!.send(cue({ name: "goal", room: "blue", at: server() }));
+    await settle();
+    expect(document.getElementById("blue")!.hasAttribute("data-yx-cued")).toBe(true);
+    expect(document.getElementById("red")!.hasAttribute("data-yx-cued")).toBe(false);
+  });
+
+  it("the same cue from two sources plays on each source's elements", async () => {
+    document.body.innerHTML = `<div id="pub" data-yx-cue="goal"></div><div id="team" data-yx-cue="goal" data-yx-cue-from="/teams/7/cues"></div>`;
+    await settle();
+    const both = cue({ name: "goal", room: "main", at: server() });
+    for (const source of open()) source.send(both);
+    await settle();
+    expect(document.getElementById("pub")!.hasAttribute("data-yx-cued")).toBe(true);
+    expect(document.getElementById("team")!.hasAttribute("data-yx-cued")).toBe(true);
+  });
+
+  it("follows a cueFrom that changes", async () => {
+    document.body.innerHTML = `<div id="a" data-yx-cue="goal" data-yx-cue-from="/teams/7/cues"></div>`;
+    await settle();
+    document.getElementById("a")!.setAttribute("data-yx-cue-from", "/teams/8/cues");
+    await settle();
+    expect(open().map((s) => s.url)).toEqual(["/teams/8/cues"]);
+  });
+
+  it("reopens a route's stream the browser gave up on", async () => {
+    document.body.innerHTML = `<div data-yx-cue="goal" data-yx-cue-from="/teams/7/cues"></div>`;
+    await settle();
+    const first = open()[0]!;
+    first.readyState = 2;
+    first.onerror?.();
+    await tick(1000);
+    expect(FakeEventSource.all.at(-1)!.url).toBe("/teams/7/cues");
+    expect(FakeEventSource.all.at(-1)).not.toBe(first);
   });
 });
 
