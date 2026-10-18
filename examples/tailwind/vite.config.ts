@@ -7,7 +7,8 @@ const src = (path: string) => fileURLToPath(new URL(`../../src/${path}`, import.
 
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
-  plugins: [tailwindcss(), yerd({ entry: "/src/main.tsx" })],
+  // `client`: files built for the browser (hashed, in the manifest), so <Stylesheet> can link them.
+  plugins: [tailwindcss(), yerd({ entry: "/src/main.tsx", client: ["src/app.css"] })],
   resolve: {
     alias: [
       { find: "@toyz/yerd/auth", replacement: src("auth/index.ts") },

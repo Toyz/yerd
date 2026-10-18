@@ -1,7 +1,5 @@
 /// <reference types="vite/client" />
-import { Region, Scripts, action, get, raw, route, yerd, type LayoutProps } from "@toyz/yerd";
-// `?inline`: Vite runs the CSS through Tailwind and hands the result over as a string.
-import css from "./app.css?inline";
+import { Region, Scripts, Stylesheet, action, get, route, yerd, type LayoutProps } from "@toyz/yerd";
 
 function RootLayout({ children, meta }: LayoutProps) {
   return (
@@ -10,7 +8,8 @@ function RootLayout({ children, meta }: LayoutProps) {
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{meta.title ?? "yerd + tailwind"}</title>
-        <style>{raw(css)}</style>
+        {/* Vite serves (and Tailwind builds) this in dev; after `vite build` it's the hashed file. */}
+        <Stylesheet href="src/app.css" />
         <Scripts />
       </head>
       <body class="min-h-dvh bg-stone-100 text-stone-900 antialiased dark:bg-stone-950 dark:text-stone-100">{children}</body>
