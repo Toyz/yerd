@@ -241,6 +241,11 @@ export interface WaitOptions<E> {
 }
 
 const eventTopic = (name: string) => `event:${name}`;
+
+function isDevelopment(): boolean {
+  const env = process.env.NODE_ENV;
+  return env === undefined || env === "development";
+}
 const callTopic = (name: string) => `call:${name}`;
 
 /**
@@ -257,6 +262,7 @@ export class Events {
   readonly #running = new Set<Promise<unknown>>();
   readonly #unsubscribe: Array<() => void> = [];
   #replies: (() => void) | undefined;
+  readonly #unheard = new Set<string>();
   #stopped: AbortController = new AbortController();
 
   constructor(transport: EventTransport = new MemoryTransport()) {
@@ -390,7 +396,13 @@ export class Events {
     const name = eventName(event.constructor);
     const message: EventMessage = { name, data: toWire(event) };
     try {
-      await this.#transport.publish(eventTopic(name), message);
+      const reached = await this.#transport.publish(eventTopic(name), message);
+      // In development, once per event: an event nothing hears is usually a
+      // handler-only @service whose module is never imported.
+      if (reached === 0 && isDevelopment() && !this.#unheard.has(name)) {
+        this.#unheard.add(name);
+        log.warn(`nothing handles ${name}: is the module with its @on handlers imported? A @service registers when its module loads`);
+      }
     } catch (error) {
       log.error(`couldn't send ${name}`, { error });
     }

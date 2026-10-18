@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  BootError, Call, Events, EventTransport, HttpError, MemoryTransport, get, inject, named, on, handles, post, resolve, route,
+  BootError, Call, Events, EventTransport, HttpError, ILogger, MemoryTransport, get, inject, named, on, handles, post, resolve, route,
   scoped, service, yerd, type RunningServer, type YerdApp,
 } from "@toyz/yerd";
 import { maybeContext } from "../../src/server/context.js";
@@ -255,5 +255,32 @@ describe("shutdown", () => {
     await tick(5);
     await s.close();
     expect(finished).toBe(true);
+  });
+});
+
+describe("development warnings", () => {
+  it("say once when an event reaches no handler", async () => {
+    const before = process.env.NODE_ENV;
+    process.env.NODE_ENV = "development";
+    const records: Array<{ level: string; message: string }> = [];
+    @named("test.unheard")
+    class Unheard {}
+    const quiet = yerd({ routes: [], services: [], handleSignals: false }).services((s) =>
+      s.value(ILogger, { write: (r) => records.push(r) }),
+    );
+    try {
+      await quiet.start();
+      await quiet.scope(async () => {
+        const events = resolve(Events);
+        await events.emitNow(new Unheard());
+        await events.emitNow(new Unheard());
+      });
+      expect(records.filter((r) => r.level === "warn").map((r) => r.message)).toEqual([
+        "nothing handles test.unheard: is the module with its @on handlers imported? A @service registers when its module loads",
+      ]);
+    } finally {
+      process.env.NODE_ENV = before;
+      await quiet.stop();
+    }
   });
 });

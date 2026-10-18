@@ -308,6 +308,7 @@ export class Warehouse {
 - **As JSON.** Events are copied through JSON even in memory, so handlers can't mutate a shared object, and an event that wouldn't survive a real transport fails in development rather than after the first deploy. They arrive as instances of their class (getters and methods work) built without running the constructor. Give the class a static `fromJSON(data)` for Dates, Maps and the like.
 - **On shutdown,** the app stops taking events and waits for running handlers, up to `shutdownTimeout`.
 - **In tests,** `await events.waitFor(OrderPlaced, { where: (e) => e.orderId === id })` resolves with the next match.
+- **Import your handlers.** A `@service` registers when its module loads, and a service that only has `@on` handlers is never injected anywhere, so nothing else imports it. Import such modules from your app's entry (`import "./reactions.js"`) or list them in `discover()`. In development, yerd warns the first time an event reaches no handler at all.
 
 ### Calls: asking for an answer
 
