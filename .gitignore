@@ -8,3 +8,4 @@ playwright-report/
 examples/*/dist/
 *.tgz
 site/public/data/
+.claude/worktrees/

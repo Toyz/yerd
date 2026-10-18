@@ -394,6 +394,8 @@ Validation failures go by field. Each invalid field gets `aria-invalid="true"` (
 - into `[data-yx-error="title"]` if the form has a box for that field, or
 - into the form's own `[data-yx-error]`, labelled with the field: "Title: Can't be empty" (the field's `<label>`, or its name).
 
+An issue about one item of a list (`photos[0]`, `tags[1]`) goes to the list's field (`photos`) unless the form has a box for the item itself.
+
 ```tsx
 <form action={this.save}>
   <label for="title">Title</label>

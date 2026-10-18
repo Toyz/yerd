@@ -458,15 +458,19 @@ export function yerdRuntime(): void {
   function showIssues(form: HTMLFormElement, issues: Issue[]): string[] {
     const left: string[] = [];
     let first: HTMLElement | undefined;
+    const boxes = Array.from(form.querySelectorAll<HTMLElement>("[data-yx-error]"));
     for (const { path, message } of issues) {
-      const named = path && path !== "(root)" ? form.elements.namedItem(path) : null;
+      // An item of a list ("photos[0]", "tags[1]") belongs to its field ("photos") when there's nothing for the item itself.
+      const owner = path.replace(/(\[\d+\])+$/, "");
+      const lookup = (name: string) => (name && name !== "(root)" ? form.elements.namedItem(name) : null);
+      const named = lookup(path) ?? lookup(owner);
       const field = named instanceof RadioNodeList ? (named[0] as HTMLElement | undefined) : (named as HTMLElement | null);
       if (field) {
         field.setAttribute("aria-invalid", "true");
         field.setAttribute("data-yx-invalid", "");
         first ??= field;
       }
-      const box = Array.from(form.querySelectorAll<HTMLElement>("[data-yx-error]")).find((b) => b.getAttribute("data-yx-error") === path);
+      const box = boxes.find((b) => b.getAttribute("data-yx-error") === path) ?? boxes.find((b) => owner !== path && b.getAttribute("data-yx-error") === owner);
       if (box) {
         box.textContent = message;
         continue;

@@ -392,6 +392,22 @@ describe("element actions", () => {
       expect(document.activeElement).toBe(document.getElementById("title"));
     });
 
+    it("for an item of a list (photos[0], tags[1]) go to the list's field", async () => {
+      stubFetch(() => issuesResponse([
+        { path: "photos[0]", message: "File type text/plain isn't accepted (image/*)" },
+        { path: "tags[1]", message: "Can't be empty" },
+      ]));
+      show(`<form id="f" action="/p" method="post" data-yx>
+        <input type="file" name="photos" multiple><span data-yx-error="photos"></span>
+        <label for="tags">Tags</label><input id="tags" name="tags">
+        <p data-yx-error role="alert"></p><button>Save</button></form>`);
+      document.querySelector<HTMLButtonElement>("#f button")!.click();
+      await flush();
+      expect(document.querySelector('[data-yx-error="photos"]')!.textContent).toBe("File type text/plain isn't accepted (image/*)");
+      expect(document.querySelector("p[data-yx-error]")!.textContent).toBe("Tags: Can't be empty");
+      for (const name of ["photos", "tags"]) expect(document.querySelector(`[name=${name}]`)!.getAttribute("aria-invalid")).toBe("true");
+    });
+
     it("are cleared on the next submit", async () => {
       let fail = true;
       stubFetch(() => (fail ? issuesResponse([{ path: "title", message: "Can't be empty" }]) : new Response(null, { status: 204 })));
