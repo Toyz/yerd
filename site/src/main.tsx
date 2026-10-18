@@ -18,5 +18,8 @@ import "./pages/api-entry";
 import "./pages/benchmarks";
 import "./pages/not-found";
 
+// Every guide extension on one page, for working on them (#/dev/kitchen); never built for production.
+if (import.meta.env.DEV) await import("./pages/kitchen");
+
 app.use(new LoomRouter({ mode: "hash" }));
 app.start();
