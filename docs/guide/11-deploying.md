@@ -1,10 +1,10 @@
 # Deploying
 
-This page covers building and running a yerd app in production, with or without Vite, plus static files, environment variables, proxies and shutdown.
+Building and running in production, with or without Vite, plus static files, environment variables, proxies and shutdown.
 
 ## With Vite (recommended)
 
-The Vite plugin gives you a dev server with reloads and a one-command production build. Install `vite` and `esbuild` as dev dependencies, then:
+The Vite plugin gives you a reloading dev server and a one-command production build. Install `vite` and `esbuild` as dev dependencies, then:
 
 ```ts
 // vite.config.ts
@@ -26,7 +26,7 @@ export default yerd()
   .discover(import.meta.glob("./routes/**/*.{ts,tsx}", { eager: true }));
 ```
 
-The entry default-exports the app and doesn't call `listen()`: the plugin runs it for you, in dev and in production.
+The entry default-exports the app and doesn't call `listen()`; the plugin runs it in dev and production.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -34,7 +34,7 @@ The entry default-exports the app and doesn't call `listen()`: the plugin runs i
 | `client` | `[]` | client build entries (stylesheets, assets), relative to the Vite root; hashed in production. `*.client.ts` modules are added for you |
 | `outDir` | `"dist"` | build output directory, relative to the Vite root |
 
-See [YerdViteOptions](api:vite.YerdViteOptions). The plugin also lowers TC39 decorators with esbuild, because Vite's own transformer doesn't support them yet.
+See [YerdViteOptions](api:vite.YerdViteOptions). The plugin also lowers TC39 decorators with esbuild, which Vite can't yet.
 
 ## Dev: vite
 
@@ -42,7 +42,10 @@ See [YerdViteOptions](api:vite.YerdViteOptions). The plugin also lowers TC39 dec
 npx vite
 ```
 
-One server, one port: Vite serves its assets and yerd gets everything else. When you change a server file, the next request stops the old app (hosted services, timers, `@onShutdown`, disposal), re-imports your code and serves from the fresh app. A server file is a module the app imports (a `?url` or `?raw` import counts) or a new module file; stylesheets linked with `assetUrl()`, `public/` files and data your app writes don't restart it, and neither does a file it only reads with `node:fs`. Boot errors show up in Vite's error overlay.
+- One server, one port: Vite serves its assets and yerd gets everything else.
+- Changing a module the app imports (a `?url` or `?raw` import counts) or adding a module restarts the app on the next request, with a full shutdown and fresh boot.
+- Stylesheets linked with `assetUrl()`, `public/` files, and files the app reads with `node:fs` or writes don't restart it.
+- Boot errors show in Vite's error overlay.
 
 ## Build: vite build
 
@@ -51,9 +54,7 @@ npx tsc --noEmit && npx vite build
 node dist/server/server.js
 ```
 
-Vite's `base` option carries through: with `base: "/app/"` the built server serves the client files under `/app/` and every asset URL (`assetUrl()`, `<Stylesheet>`, the `css` stylesheet from `<Styles />`) points there; with a full URL (`base: "https://cdn.example.com/"`) the links go to the CDN while the server still serves the files from `/` for the CDN to pull. Your routes keep their own paths either way.
-
-Vite doesn't type-check, so run `tsc --noEmit` first. The built server runs with `NODE_ENV=production` unless you set it to something else, so production behavior (JSON logs, no stack traces, the missing-secret warning) is the default. The build writes:
+Vite doesn't type-check, so run `tsc --noEmit` first. The build writes:
 
 ```text
 dist/
@@ -65,18 +66,19 @@ dist/
     prerender.js            the app without listening, used during the build
 ```
 
-- `server.js` listens on `PORT` (default 3000) and `HOST` (default: all interfaces).
-- Link stylesheets with `<Stylesheet href="src/styles.css" />` (or `assetUrl()`). In production they resolve through the manifest to hashed file names.
-- Files in `public/` (Vite's `publicDir`) are copied into `dist/client` as they are and served from the site root: `public/robots.txt` is `/robots.txt`, in dev and production. Refer to them by their path from `public/`: `assetUrl("favicon.svg")` or plain `/favicon.svg`, never `public/favicon.svg`. In development, `assetUrl()` warns about that mistake, about missing files, and about source files missing from `client` (they'd work in dev and 404 after the build). See [assets](05-pages-and-layouts.md#assets).
-- Routes marked `@prerender` are rendered to HTML files in `dist/client` at build time and served as files from then on. See [05-pages-and-layouts.md](05-pages-and-layouts.md).
-- The client runtime (`/_yerd/runtime.js`) isn't a build output of your app. It ships minified inside the `@toyz/yerd` package; the server appends your custom attributes' client halves, compresses it once (brotli and gzip, about 8 KB), and serves it with an `ETag` so browsers get a cheap 304 on later pages. Four features most pages don't use are separate chunks beside it, served the same way: `/_yerd/runtime-local.js` ([Local](api:yerd.Local), about 2 KB), `/_yerd/runtime-dnd.js` (drop targets and `dropTo`, about 1.5 KB), `/_yerd/runtime-cues.js` (`sync` and cues, about 1.2 KB) and `/_yerd/runtime-lazy.js` (loads your [client modules](17-client-code.md), about 1.6 KB). A page downloads only the ones it uses: `<Scripts />` adds a `<link rel="modulepreload">` for each so they arrive with the runtime, and the runtime loads any others a page later needs. If a proxy or CDN serves `/_yerd/` from somewhere else, keep the chunks next to `runtime.js`: the runtime asks for them relative to its own URL.
+- `server.js` listens on `PORT` (default 3000) and `HOST` (default all interfaces), with `NODE_ENV=production` unless you set it (JSON logs, no stack traces, the missing-secret warning).
+- `<Stylesheet>` and `assetUrl()` resolve through the manifest to hashed names; see [assets](05-pages-and-layouts.md#assets) for `public/` files and the dev warnings.
+- Files in `public/` are copied to `dist/client` and served from the site root (`public/robots.txt` is `/robots.txt`).
+- `@prerender` routes become HTML files in `dist/client` (see [prerendering](05-pages-and-layouts.md#prerendering)).
+- Vite's `base` carries through: with `base: "/app/"` client files and asset URLs live under `/app/`; with a full URL (a CDN) links point there while the server still serves the files from `/` for the CDN to pull. Routes keep their own paths.
+- The client runtime ships prebuilt in the package and is served from `/_yerd/` with its chunks. If a proxy or CDN serves `/_yerd/` from elsewhere, keep the chunks next to `runtime.js`.
 
 > [!NOTE]
-> Vite's server build leaves packages from `node_modules` (yerd included) as imports. Deploy `dist/` together with `package.json` and production dependencies (`npm ci --omit=dev`). yerd itself has no dependencies, so that's small.
+> Vite's server build leaves `node_modules` packages (yerd included) as imports. Deploy `dist/` with `package.json` and production dependencies (`npm ci --omit=dev`); yerd itself has none.
 
 ## Without Vite: tsc and node
 
-yerd runs on plain `tsc` output too. Call `listen()` yourself and discover routes from the compiled directory.
+On plain `tsc` output, call `listen()` yourself and discover routes from the compiled directory.
 
 ```ts
 // src/server.ts
@@ -97,12 +99,12 @@ node dist/server.js
 ```
 
 - `discover(url)` imports every `.js` and `.mjs` file under the directory, recursively, before boot.
-- `listen(port, host?)` resolves once `@onBoot` hooks have run and the port is open. It returns `{ server, url, close }`.
-- There's no client build in this mode: link plain files from `public/` yourself.
+- `listen(port, host?)` resolves once `@onBoot` hooks have run and the port is open, returning `{ server, url, close }`.
+- There's no client build: link plain files from `public/` yourself.
 
 ## Static files
 
-`app.static(prefix, dir)` serves files from a directory. Routes always win; files fill the URLs no route matched.
+`app.static(prefix, dir)` serves files from a directory for URLs no route matched.
 
 ```ts
 yerd()
@@ -117,26 +119,25 @@ yerd()
 | `dotfiles` | `false` | serve names starting with `.` |
 | `cacheControl` | see below | `(path) => string` for the `Cache-Control` header |
 | `followSymlinks` | `false` | serve symlinks pointing outside the directory |
+| `index` | `true` | serve a directory's `index.html` |
 
-- Hashed names like `app-C8SwBHde.css` get `public, max-age=31536000, immutable`. Everything else gets `no-cache` and revalidates with its `ETag` (a 304 when unchanged).
-- If `style.css.br` or `style.css.gz` sits next to `style.css` and the client accepts it, yerd serves the precompressed file. yerd doesn't create them; your build step does.
+- Hashed names like `app-C8SwBHde.css` get `public, max-age=31536000, immutable`; everything else `no-cache` with an `ETag`.
+- A precompressed `style.css.br` or `.gz` next to `style.css` is served when the client accepts it (your build makes them).
 - Traversal (`..`, encoded or not), NUL bytes and dotfiles are refused.
-
-- A request for a directory (`/`, `/docs/`) gets its `index.html`. Turn that off with `{ index: false }`. Routes still win: a `/` route answers before the file.
 
 ## Environment variables
 
 | Variable | Used for |
 | --- | --- |
 | `YERD_SECRET` | signing action tokens and sealing cookie sessions; comma-separated list to rotate, newest first, each at least 32 bytes ([security](15-security.md#secrets)) |
-| `YERD_LOG` | log filter, e.g. `info,UserRepo=debug` ([10-logging.md](10-logging.md#filtering-with-yerd_log)) |
+| `YERD_LOG` | log filter, e.g. `info,UserRepo=debug` ([logging](10-logging.md#filtering-with-yerd_log)) |
 | `YERD_LOG_FORMAT` | `pretty` or `json` console output |
 | `NODE_ENV` | `production`: JSON logs by default and a boot warning if `YERD_SECRET` is missing; `test`: default log level `warn` |
 | `PORT`, `HOST` | where the Vite-built `server.js` listens |
 | `NO_COLOR` | no colors in pretty logs |
 
 > [!WARNING]
-> Set `YERD_SECRET` in production. Without it every process invents its own secret, so restarts log everyone out and multiple instances reject each other's forms and cookies.
+> Set `YERD_SECRET` in production, or restarts log everyone out and instances reject each other's forms and cookies.
 
 ## Behind a proxy
 
@@ -149,23 +150,23 @@ yerd({
 });
 ```
 
-- `trustProxy` makes the cross-site check compare against `X-Forwarded-Host`, and makes sessions use `X-Forwarded-Proto` to decide on `Secure` cookies (with the `__Host-` prefix).
-- `trustedOrigins` lists other origins allowed to send POST, PUT, PATCH and DELETE requests.
+- `trustProxy` makes the cross-site check use `X-Forwarded-Host`, and sessions use `X-Forwarded-Proto` for `Secure` (`__Host-`) cookies.
+- `trustedOrigins` lists other origins allowed to send POST, PUT, PATCH and DELETE.
 
 > [!WARNING]
-> Only turn on `trustProxy` behind a proxy that sets those headers and strips any the client sent. Otherwise anyone can claim to be on HTTPS or on your host.
+> Only turn on `trustProxy` behind a proxy that sets those headers and strips any the client sent; otherwise anyone can claim HTTPS or your host.
 
 ## Graceful shutdown
 
-`listen()` handles `SIGINT` and `SIGTERM` for you. On a signal, yerd:
+`listen()` handles `SIGINT` and `SIGTERM`. On a signal, yerd:
 
 1. stops accepting connections and closes idle keep-alive sockets;
-2. ends long-lived streams (SSE, NDJSON) and waits for in-flight requests;
+2. ends long-lived streams (SSE, NDJSON, cues) and waits for in-flight requests;
 3. aborts `@hosted` services and `@every` timers and waits for them;
 4. runs `@onShutdown` hooks (newest first), disposes singletons and flushes the logger;
 5. exits with code 0 (1 if shutdown failed).
 
-Steps 2 and 3 each wait at most `shutdownTimeout` (default 10 seconds). After that, remaining connections are cut and shutdown carries on.
+Steps 2 and 3 each wait at most `shutdownTimeout` (10 s), then cut what's left.
 
 ```ts
 import { yerd } from "@toyz/yerd";
@@ -178,8 +179,8 @@ process.on("SIGTERM", async () => {
 });
 ```
 
-Pass `handleSignals: false` (to `yerd()` or as `listen(port, host, { handleSignals: false })`) when something else owns the process's signals, like a test runner or your own supervisor.
+Pass `handleSignals: false` (to `yerd()` or `listen(port, host, { handleSignals: false })`) when a test runner or supervisor owns the signals.
 
 ## Before you go live
 
-Run through the [security checklist](15-security.md#checklist): a real `YERD_SECRET`, sessions on, `trustProxy` only behind a proxy that sets the headers, and actions that check who may do what. With several instances, sessions need a shared store (or the default cookie store) and events need a [transport](14-events.md#several-instances-and-other-apps); channels need a [backend](07-streaming-and-live.md#channels).
+Run through the [security checklist](15-security.md#checklist). With several instances, sessions need a shared store (or the default cookie store), events a [transport](14-events.md#several-instances-and-other-apps), and channels a [backend](07-streaming-and-live.md#channels).

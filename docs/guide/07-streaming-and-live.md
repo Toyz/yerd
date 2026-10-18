@@ -421,23 +421,7 @@ export class Clock {
 
 ## Graceful shutdown
 
-On `SIGINT`, `SIGTERM`, or `close()` on the [RunningServer](api:yerd.RunningServer) from `app.listen()`, yerd:
-
-1. Stops accepting connections.
-2. Aborts every `@sse` and `@ndjson` stream, and cue streams.
-3. Waits for in-flight requests up to `shutdownTimeout` (10 s), then cuts the rest.
-4. Stops background work and disposes services (see [services](08-services.md)).
-
-```ts
-import { yerd } from "@toyz/yerd";
-
-const app = yerd({ shutdownTimeout: 5_000 });
-const server = await app.listen(3000);
-// later, e.g. in a test:
-await server.close();
-```
+On `SIGINT`, `SIGTERM`, or `close()` on the [RunningServer](api:yerd.RunningServer), yerd stops accepting connections, aborts every `@sse`, `@ndjson` and cue stream so their generators finish, then waits for in-flight requests up to `shutdownTimeout` (10 s). The full sequence is in [deploying](11-deploying.md#graceful-shutdown).
 
 > [!WARNING]
 > Only `@sse` and `@ndjson` streams count as long-lived. A plain async iterable that never ends holds shutdown until the timeout; use `ndjson()`/`sse()` for endless feeds, or end your loop when the signal aborts.
-
-Pass `handleSignals: false` to `yerd()` or `listen()` to handle signals yourself. See [deploying](11-deploying.md).
