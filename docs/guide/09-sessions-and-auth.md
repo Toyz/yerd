@@ -41,9 +41,11 @@ The type is only a view: every route sees the same session, so two routes can us
 
 ### A class for methods and defaults
 
-Pass a class to `@session` and the session gets its methods, getters and setters, with `this` as the session. Field initializers are defaults: a missing value reads as the default, and it's only saved once it changes, so a visitor who only reads gets no cookie.
+Pass a class to `@session` and the session gets its methods, getters and setters, with `this` as the session. Field initializers are defaults: a missing value reads as the default, and it's only saved once it changes, so reading a default never writes the session by itself.
 
 ```tsx
+import { get, post, redirect, route, session, type Session } from "@toyz/yerd";
+
 class Cart {
   items: string[] = [];
   coupon?: string;
@@ -78,11 +80,40 @@ export class CartPage {
 - Session members win, so a method or getter named like one (`clear`, `delete`, `flash`, `get`, ...) would never run: a shape with one is refused the first time it's used.
 - `@args(session(Cart))` gives a handler parameter the same view.
 
-### App-wide keys
+### Outside a route: session.as()
 
-Keys every route shares can go on the global `SessionData` interface instead. Plain `Session`, without a type argument, uses it, and so does `currentContext().session` outside a route class:
+Code that isn't a route class gets the plain session: auth hooks, `currentContext().session` in a component, a helper function. [`session.as(Shape)`](api:yerd.Session) gives it the same typed view `@session(Shape)` gives a route, methods and defaults included; `session.as<T>()` with no argument is a type-only view, like `Session<T>`:
 
 ```tsx
+import { currentContext } from "@toyz/yerd";
+
+class Prefs {
+  theme: "light" | "dark" = "light";
+
+  toggle() {
+    this.theme = this.theme === "dark" ? "light" : "dark";
+  }
+}
+
+export function ThemeLabel() {
+  const prefs = currentContext().session.as(Prefs); // Session<Prefs>
+  return <span class={`theme-${prefs.theme}`}>{prefs.theme}</span>;
+}
+
+export function lastSearch(): string | undefined {
+  return currentContext().session.as<{ lastSearch?: string }>().lastSearch;
+}
+```
+
+Views are cheap and share one session: `as(Prefs)` in a component and `@session(Prefs)` in the route see, and change, the same `theme`.
+
+### App-wide keys
+
+Most apps never need this. If a few keys really are everywhere (a theme every layout reads, say) and you'd rather not write `.as()` each time, declare them once on the global `SessionData` interface. Plain `Session` and `currentContext().session` are typed by it:
+
+```tsx
+import { post, redirect, route, session, type Session } from "@toyz/yerd";
+
 declare module "@toyz/yerd" {
   interface SessionData {
     theme?: "light" | "dark";
@@ -100,13 +131,15 @@ export class Theme {
 }
 ```
 
+The interface is global, so every key on it is visible (and writable) from every route. Keep it to a handful; for anything that belongs to one feature, a shape class and `.as()` keep its keys next to its code.
+
 ## The session API
 
 | Method | Does |
 | --- | --- |
 | `session.key` / `session.key = value` | read and write a value (`undefined` removes it); a shape class adds its own methods |
 | `get(key)` / `set(key, value)` | the same, by name |
-| `delete(key)` / `clear()` | remove one value / all of them |
+| `delete(key)` / `clear()` | remove one value / all of them (sign-in and the CSRF nonce included, so open forms stop working) |
 | `flash(key, value)` | keep a value for the next request only (a notice after a redirect) |
 | `flash(key)` | read and consume a flash set by the previous request |
 | `regenerate()` | new session id, same data; do this on login |
@@ -116,6 +149,9 @@ export class Theme {
 HTML pages sent to someone with a session get `Cache-Control: private, no-cache` (unless the handler set its own), so a shared cache or the browser's Back button can't show a signed-in page to the wrong person, or a signed-out page after signing in.
 
 Changes are saved after the handler runs, including ones made in place. A request that changed nothing sends no cookie (unless a rolling session is due for a refresh).
+
+> [!NOTE]
+> When an app has actions, every page request starts a session if there isn't one: action tokens are bound to a per-session nonce, and the nonce has to be saved before any form is rendered. So with sessions and actions on, first-time visitors get a cookie (and pages get `Cache-Control: private, no-cache`) whether or not your code writes anything. An app without `@action` methods only starts sessions when something is set.
 
 > [!NOTE]
 > If a request ends in an unhandled crash (anything other than an `HttpError`), the session isn't saved. A half-finished login or update never sticks.
@@ -144,9 +180,78 @@ export const app = yerd().sessions({
 | `trustProxy` | the app's `trustProxy` | believe `X-Forwarded-Proto` when deciding whether the request was HTTPS |
 | `generateId` | 32 random bytes | makes the id for a new or regenerated session; only for stores that keep ids (`kind: "id"`) |
 
-`MemoryStore` takes `maxSize` (evicts the least recently saved past it; default no cap) and `sweepInterval` (how often, at most, a save also clears expired sessions; default 60 s). It's for dev, tests and single-process deploys. Under the Vite dev server its sessions survive app reloads, so editing a file doesn't sign you out (stores share records by `name`, default `"default"`). For anything else, implement [SessionStore](api:yerd.SessionStore): `kind: "id"` plus `get`, `set` and `destroy`.
-
 Cookies are always `HttpOnly`, `SameSite=Lax` and `Path=/`.
+
+### MemoryStore
+
+`MemoryStore` takes `maxSize` (evicts the least recently saved past it; default no cap) and `sweepInterval` (how often, at most, a save also clears expired sessions; default 60 s). It's for dev, tests and single-process deploys. Under the Vite dev server its sessions survive app reloads, so editing a file doesn't sign you out (stores share records by `name`, default `"default"`; give two stores in one app different names).
+
+### Which store
+
+| Store | Good for | Watch out for |
+| --- | --- | --- |
+| `CookieStore` (default) | small sessions (an id, a theme, a short cart), any number of instances, no infrastructure | ~4 KB after sealing: a bigger session is a 500 naming the size. Can't revoke a session server-side before it expires |
+| `MemoryStore` | dev, tests, one process | lost on restart; each instance has its own |
+| your own `SessionStore` | several instances, big sessions, "sign out everywhere" | one store lookup per request with a session |
+
+### Your own store
+
+A store is three methods over any key-value database. Here `Kv` stands for your Redis client or similar:
+
+```ts
+// src/session-store.ts
+import { createHash } from "node:crypto";
+import type { SessionRecord, SessionStore } from "@toyz/yerd";
+
+interface Kv {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string, options: { px: number }): Promise<unknown>;
+  del(key: string): Promise<unknown>;
+}
+
+export class KvSessionStore implements SessionStore {
+  readonly kind = "id";
+  readonly #kv: Kv;
+
+  constructor(kv: Kv) {
+    this.#kv = kv;
+  }
+
+  // Keyed by a hash of the id, so a dump of the database can't be replayed as cookies.
+  #key(id: string): string {
+    return `session:${createHash("sha256").update(id).digest("base64url")}`;
+  }
+
+  async get(id: string): Promise<SessionRecord | undefined> {
+    const raw = await this.#kv.get(this.#key(id));
+    return raw ? (JSON.parse(raw) as SessionRecord) : undefined;
+  }
+
+  async set(id: string, record: SessionRecord, ttlMs: number): Promise<void> {
+    await this.#kv.set(this.#key(id), JSON.stringify(record), { px: Math.max(1, Math.round(ttlMs)) });
+  }
+
+  async destroy(id: string): Promise<void> {
+    await this.#kv.del(this.#key(id));
+  }
+}
+```
+
+```ts
+// src/app.ts
+import { yerd } from "@toyz/yerd";
+import { KvSessionStore } from "./session-store.js";
+
+export const app = yerd().sessions({ store: new KvSessionStore(kv) }); // kv: your connected client
+```
+
+- `get` returns `undefined` for an unknown or expired id; yerd then starts a fresh session.
+- `set` replaces the whole record. `ttlMs` is how long it may live: the idle `maxAge`, capped by what's left of `absoluteMaxAge`. Letting the database expire it keeps the store from filling up.
+- `destroy` runs on logout and when the id is rotated (`regenerate()`, login).
+- The record is JSON-safe (`data`, `flash`, `createdAt`), so `JSON.stringify` is all the serializing it needs.
+- Methods may be sync or async.
+
+To sign a user out everywhere, have the store keep an index of sessions per user: `set` sees the record's data, signed-in user id included (under `createAuth`'s `sessionKey`, `"__yerd_uid"` by default), so it can remember which keys belong to whom and delete them all.
 
 ### Custom session ids
 
@@ -194,7 +299,9 @@ export const auth = createAuth<User>({
   roles: (user) => user.roles,
   loginPath: "/login",
 });
+```
 
+```ts
 // src/app.ts
 import { yerd } from "@toyz/yerd";
 import { auth } from "./auth.js";
@@ -217,35 +324,20 @@ export const app = yerd().sessions().use(auth);
 
 ## Login and logout
 
-`auth.login(user)` regenerates the session id (so a pre-login id can't be reused) and stores the user's id. If someone else was signed in on that session, it starts a fresh one instead, so nothing of theirs carries over to the new user. `auth.logout()` destroys the session.
+`auth.login(user)` signs a user in:
 
-### Carrying a guest's cart across sign-in
+1. It rotates the session id, so an id someone saw or planted before login is worthless afterwards.
+2. If someone else was signed in on this session (a shared computer, no logout), it starts a fresh session, so nothing of theirs carries over to the new user. A guest's data (a cart) does carry over.
+3. It stores the user's id, then runs your `onLogin` hook, if any.
 
-`onLogin` runs right after `login()` has rotated the session, and `onLogout` right before `logout()` destroys it. Use them to merge what a guest collected into the user's own data, and to keep it for next time (another day, another device):
-
-```ts
-export const auth = createAuth<User>({
-  load: (id) => resolve(Users).find(id),
-  async onLogin(user, session) {
-    const saved = await resolve(Carts).load(user.id);
-    session.set("cart", mergeCarts(saved, session.get("cart"))); // guest items join the saved cart
-  },
-  async onLogout(user, session) {
-    if (user) await resolve(Carts).save(user.id, session.get("cart") ?? []);
-  },
-});
-
-// In the action: await it, so the session is ready before the response.
-await auth.login(user);
-```
-
-Either hook may be async; then `login()` and `logout()` return their promise, so `await` them. Save on every cart change too if a user might never sign out.
+`auth.logout()` runs `onLogout`, then destroys the session and its cookie.
 
 ```tsx
-import { ActionForm, HttpError, action, get, inject, query, redirect, route } from "@toyz/yerd";
+// src/routes/login.tsx
+import { ActionForm, HttpError, action, get, inject, post, query, redirect, route } from "@toyz/yerd";
 import { safeNext, verifyPassword } from "@toyz/yerd/auth";
-import { auth } from "./auth.js";
-import { Users, type User } from "./users.js";
+import { auth } from "../auth.js";
+import { Users, type User } from "../users.js";
 
 @route("/login")
 export class Login {
@@ -259,6 +351,7 @@ export class Login {
       <form action={this.submit}>
         <input name="name" autocomplete="username" />
         <input name="password" type="password" autocomplete="current-password" />
+        <p data-yx-error role="alert"></p>
         <button>Log in</button>
       </form>
     );
@@ -269,15 +362,52 @@ export class Login {
     if (!(await verifyPassword(form.string("password"), user?.passwordHash)) || !user) {
       throw new HttpError(401, "Wrong name or password");
     }
-    auth.login(user);
+    await auth.login(user);
     return redirect(safeNext(this.next));
   }
 }
+
+@route("/logout")
+export class Logout {
+  // A POST, not a link: a prefetch or a crawler must not be able to sign anyone out.
+  @post async leave() {
+    await auth.logout();
+    return redirect("/");
+  }
+}
+
+// in a layout: <form action="/logout" method="post"><button>Log out</button></form>
 ```
 
 - [hashPassword](api:auth.hashPassword) hashes with argon2id (scrypt where Node lacks it) in PHC format. [verifyPassword](api:auth.verifyPassword) reads both.
 - Pass `undefined` to `verifyPassword` for an unknown user, as above: it still spends a full hash, so timing doesn't reveal which names exist.
 - [safeNext](api:auth.safeNext) only lets same-site paths through. `//evil.com`, `https://...` and friends become the fallback (default `"/"`). Always run `?next=` through it.
+- `login()` and `logout()` return a promise when a hook is async. `await` them either way: the session must be ready before the response goes out.
+
+### Keeping a guest's cart across sign-in
+
+`onLogin` runs right after `login()` has rotated the session and stored the user, and `onLogout` right before `logout()` destroys the session. Use them to merge what a guest collected into the user's own data, and to keep it for next time (another day, another device):
+
+```ts
+// src/auth.ts
+import { resolve } from "@toyz/yerd";
+import { createAuth } from "@toyz/yerd/auth";
+import { Cart, Carts } from "./cart.js";
+import { Users, type User } from "./users.js";
+
+export const auth = createAuth<User>({
+  load: (id) => resolve(Users).find(id),
+  async onLogin(user, session) {
+    const cart = session.as(Cart); // the same view as @session(Cart): methods, defaults
+    cart.merge(await resolve(Carts).load(user.id)); // the guest's items join the saved cart
+  },
+  async onLogout(user, session) {
+    if (user) await resolve(Carts).save(user.id, session.as(Cart).items);
+  },
+});
+```
+
+Here `Cart` is the shape class from [above](#a-class-for-methods-and-defaults) with one more method, `merge(saved: string[])`, and `Carts` is your own service that keeps each user's cart. The hooks get the plain session; [`session.as(Cart)`](#outside-a-route-sessionas) gives them the cart view without declaring any app-wide keys. A user who never signs out never triggers `onLogout`, so save on every cart change too. The [recipes guide](16-recipes.md#show-a-saved-cart-after-sign-in) builds the whole thing: the cart shape, the saved carts, the merge and a welcome-back notice.
 
 ## Protecting routes
 
@@ -347,6 +477,8 @@ Named guards live on services, so they can inject things. Declare one with [guar
 
 ```ts
 import { guard, guards, inject, post, route, service, type YerdContext } from "@toyz/yerd";
+import { auth } from "./auth.js";
+import { FlagStore } from "./flags.js";
 
 @service
 export class Flags {
@@ -372,31 +504,14 @@ export class Beta {
 
 ## The security model
 
-yerd blocks the common attacks by default. Here's what it does, and the knobs.
+yerd blocks the common attacks by default. In short:
 
-**Cross-site requests.** Every POST, PUT, PATCH and DELETE is checked before any guard, handler or action runs. A browser request from another site is refused with 403, judged by `Sec-Fetch-Site`, then `Origin`, then `Referer` against the `Host`. Requests with none of those headers (curl, server-to-server) pass, since they can't be carrying a victim's cookies.
-
-```ts
-yerd({
-  trustedOrigins: ["https://admin.example.com"], // other origins allowed to post
-  trustProxy: true, // behind a proxy: believe X-Forwarded-Host and X-Forwarded-Proto
-  // csrf: false,   // turns the check off entirely
-});
-```
-
-**Action tokens.** Every action form carries a signed `_yx` token, so the action and its bound arguments can't be forged. It expires after `actionTtl` seconds (default 86400), and with sessions on it's bound to the visitor's session: a token rendered for someone else is a 403.
-
-**Secrets.** Tokens are signed and cookie sessions sealed with `YERD_SECRET`. Each secret must be at least 32 bytes.
-
-```sh
-# rotate: put the new secret first, deploy, drop the old one later
-YERD_SECRET="new-secret-at-least-32-bytes-long....,old-secret-at-least-32-bytes-long...."
-```
-
-New tokens and sessions use the first secret; any listed secret is accepted. `yerd({ secret })` takes a string or a list and wins over the variable.
-
-> [!WARNING]
-> Without a secret, yerd uses a random one per process: every restart logs everyone out and breaks open forms, and two instances can't read each other's cookies. It warns at boot when `NODE_ENV=production`. Set `YERD_SECRET` in production. (In development, with `NODE_ENV` unset or `development`, the random secret is saved to `node_modules/.cache/yerd/secret` and reused, so dev server restarts keep you signed in.)
+- **Cross-site requests.** Every POST, PUT, PATCH and DELETE from another site is refused with a 403 before any guard, handler or action runs. `trustedOrigins` lists other origins allowed to post; `trustProxy` makes the check use `X-Forwarded-Host`.
+- **Action tokens.** Every action carries a signed token, so its arguments can't be forged. It expires after `actionTtl` seconds (a day) and, with sessions on, only works in the session it was rendered for.
+- **Sessions.** Sealed with AES-256-GCM, `HttpOnly`, `SameSite=Lax`, and `Secure` with a `__Host-` name over HTTPS. `login()` rotates the id and starts fresh when the user changes.
+- **Secrets.** Set `YERD_SECRET` (at least 32 bytes, a comma-separated list to rotate) in production. Without it, every restart signs everyone out.
 
 > [!NOTE]
 > A signed token proves the server rendered those arguments, not that this user may act on them. An action bound to `{ id }` still has to check that `this.me` owns `id`.
+
+The [security guide](15-security.md) has the details of each, the knobs, and a checklist for going live.
