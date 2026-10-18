@@ -301,6 +301,27 @@ describe("responses", () => {
     expect(calls.map((c) => c.method)).toEqual(["POST"]);
   });
 
+  // An app that redirects to a URL it was given (an unchecked ?next=) mustn't
+  // become script execution: browsers never follow a Location to javascript:.
+  it.each(["javascript:window.pwned=1", "JavaScript:window.pwned=1", " javascript:window.pwned=1", "java\tscript:window.pwned=1", "data:text/html,<script>window.pwned=1</script>", "vbscript:x"])(
+    "yx-location %j is refused",
+    async (target) => {
+      const assign = vi.spyOn(location, "assign").mockImplementation(() => {});
+      stubFetch(() => html("", 200, { "yx-location": target }));
+      show('<form data-yx method="post" action="/a"></form>');
+      submit();
+      await flush();
+      expect(assign).not.toHaveBeenCalled();
+      expect((window as unknown as { pwned?: number }).pwned).toBeUndefined();
+    },
+  );
+
+  it("yerd.load refuses a javascript: URL too", async () => {
+    const assign = vi.spyOn(location, "assign").mockImplementation(() => {});
+    await (window as unknown as { yerd: { load(url: string, push: boolean): Promise<void> } }).yerd.load("javascript:alert(1)", true);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
   it("aria-busy and disabled buttons last exactly as long as the request", async () => {
     let release!: (r: Response) => void;
     stubFetch(() => new Promise<Response>((resolve) => (release = resolve)));

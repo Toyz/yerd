@@ -309,8 +309,10 @@ export function yerdRuntime(): void {
   async function load(url: string, push: boolean): Promise<void> {
     const target = new URL(url, location.href);
     // Only our own pages are morphed in; anything else is a real navigation.
+    // Never to script, though: browsers don't follow a redirect to javascript:,
+    // so an app's unchecked redirect target (?next=...) can't become XSS here.
     if (target.origin !== location.origin) {
-      location.assign(target.href);
+      if (!/^(javascript|data|vbscript):$/.test(target.protocol)) location.assign(target.href);
       return;
     }
     const seq = ++nav;
