@@ -61,12 +61,13 @@ const BY_DIR = {
   session: "Sessions",
   auth: "Auth",
   live: "Live and streaming",
+  events: "Events",
   log: "Logging",
   vite: "Vite",
 };
 const SECTION_ORDER = [
   "Server", "Routing", "Request data", "DTOs and validation", "Responses", "Rendering", "JSX",
-  "Actions and dynamics", "Guards", "Dependency injection", "Sessions", "Auth", "Live and streaming",
+  "Actions and dynamics", "Guards", "Dependency injection", "Events", "Sessions", "Auth", "Live and streaming",
   "Logging", "Assets", "Decorator kit", "Vite", "Runtime",
 ];
 

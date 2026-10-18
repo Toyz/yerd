@@ -21,6 +21,7 @@ import { coerce, type Outgoing } from "../respond/coerce.js";
 import { HttpError } from "../respond/response.js";
 import { LONG_LIVED } from "../respond/stream.js";
 import { Channels } from "../live/channels.js";
+import { EventTransport, Events, HANDLES, ON_EVENT, eventName } from "../events/events.js";
 import { ACTIONS, ActionForm, CSRF_FIELD, checkActionToken, fillHoles, resolveSecrets, safeBack, verifyAction } from "../actions/action.js";
 import { CLASS_GUARDS, METHOD_GUARDS, guardRegistry, isGuardRef, resetGuardRegistry, type GuardSpec } from "../decorators/guards.js";
 import { SessionManager, checkSessionOptions, type LoadedSession } from "../session/manager.js";
@@ -537,6 +538,11 @@ export class YerdApp {
       impl: Channels,
       create: (c) => c.construct(Channels, undefined, "singleton"),
     });
+    container.register({
+      key: Events,
+      lifetime: "singleton",
+      create: (c) => new Events(c.registration(EventTransport) ? c.get(EventTransport) : undefined),
+    });
     container.register({ key: Logger, lifetime: "singleton", create: () => new Logger("app") });
     const services = serviceRegistry.filter((d) => !allowedServices || allowedServices.has(d.cls));
     for (const def of services) container.register(registrationFor(def));
@@ -660,18 +666,25 @@ export class YerdApp {
       }
     }
 
+    const answering = new Map<string, string>();
     for (const registration of container.registrations()) {
       if (!registration.impl) continue;
       const metadata = metadataOfClass(registration.impl);
       const name = registration.impl.name || keyName(registration.key);
       checkInjections(name, registration.lifetime, metadata, container, problems);
       if (registration.lifetime !== "singleton") {
-        for (const hookKey of [ON_BOOT, ON_SHUTDOWN, EVERY]) {
+        for (const hookKey of [ON_BOOT, ON_SHUTDOWN, EVERY, ON_EVENT, HANDLES]) {
           if ((hookKey.from(metadata) ?? []).length > 0) {
-            problems.push(`${name} (${registration.lifetime}): @onBoot, @onShutdown and @every need a singleton service`);
+            problems.push(`${name} (${registration.lifetime}): @onBoot, @onShutdown, @every, @on and @handles need a singleton service`);
             break;
           }
         }
+      }
+      for (const { type, method } of HANDLES.from(metadata) ?? []) {
+        const call = eventName(type);
+        const other = answering.get(call);
+        if (other) problems.push(`${call} is answered twice: by ${other} and ${name}.${String(method)} (a call has one @handles)`);
+        else answering.set(call, `${name}.${String(method)}`);
       }
     }
 
@@ -751,8 +764,11 @@ export class YerdApp {
         const boot = ON_BOOT.from(metadata) ?? [];
         const shutdown = ON_SHUTDOWN.from(metadata) ?? [];
         const periodic = EVERY.from(metadata) ?? [];
-        if (boot.length === 0 && shutdown.length === 0 && periodic.length === 0) continue;
+        const ons = ON_EVENT.from(metadata) ?? [];
+        const answers = HANDLES.from(metadata) ?? [];
+        if (boot.length === 0 && shutdown.length === 0 && periodic.length === 0 && ons.length === 0 && answers.length === 0) continue;
         const instance = container.get(registration.key) as Record<string | symbol, (...a: unknown[]) => unknown>;
+        if (ons.length || answers.length) container.get(Events).wire(container, instance, registration.impl!.name, ons, answers);
         for (const method of boot) await instance[method]!.call(instance);
         for (const method of shutdown) lifecycle.shutdown.push(() => instance[method]!.call(instance));
         for (const { method, ms, immediate } of periodic) {
@@ -795,7 +811,8 @@ export class YerdApp {
     for (const stream of this.#streams) stream.abort(new Error("server shutting down"));
     if (lifecycle) {
       lifecycle.abort.abort();
-      const background = Promise.all([...lifecycle.hosted, ...lifecycle.periodic.map((p) => p.stop())]);
+      const events = this.#container?.get(Events);
+      const background = Promise.all([...lifecycle.hosted, ...lifecycle.periodic.map((p) => p.stop()), events?.stop(timeout)]);
       if (!(await withTimeout(background, timeout))) {
         lifecycleLog.warn(`background work didn't stop within ${timeout}ms; continuing shutdown`);
       }
@@ -1025,7 +1042,10 @@ export class YerdApp {
         // (a layout, an early component) still becomes the error page.
         if (isPageStream(out)) out = await inRequest(() => primeStream(out));
         out = context.finish(out, false);
+        // The handler succeeded: what it emitted goes out now (see Events).
+        this.#container!.get(Events).release(context);
       } catch (error) {
+        this.#container!.get(Events).discard(context);
         if (prerendering) this.#prerenderErrors.set(url.pathname, error instanceof Error ? error.message : String(error));
         // The route's @catches, then app.onError, then the error page.
         const recovered = prerendering ? undefined : await inRequest(() => this.#recover(error, base, context, scope, dynamic));

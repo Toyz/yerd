@@ -266,6 +266,91 @@ Return (or resolve) when `signal` aborts. Shutdown waits up to `shutdownTimeout`
 > [!TIP]
 > `app.start()` runs hooks, timers and hosted services without an HTTP server, for worker processes. `app.stop()` shuts them down.
 
+## Events and calls
+
+When one thing happening should set off others (an order placed: send the receipt, reserve stock, tell the warehouse), don't make checkout call every one of them. Emit an event and let whoever cares react. [Events](api:yerd.Events) is built in.
+
+```tsx
+import { Call, Events, inject, named, on, handles, post, route, service } from "@toyz/yerd";
+
+// An event is a class. @named gives it a stable name for the wire and the logs.
+@named("order.placed")
+export class OrderPlaced {
+  constructor(readonly orderId: string, readonly total: number) {}
+}
+
+@route("/checkout")
+export class Checkout {
+  @inject(Events) accessor events!: Events;
+  @inject(Orders) accessor orders!: Orders;
+
+  @post place() {
+    const order = this.orders.place();
+    this.events.emit(new OrderPlaced(order.id, order.total));
+    return redirect(`/orders/${order.id}`);
+  }
+}
+
+// Any singleton service reacts: in the background, in its own DI scope.
+@service
+export class Receipts {
+  @on(OrderPlaced) async send(e: OrderPlaced) { ... }
+}
+
+@service
+export class Warehouse {
+  @on(OrderPlaced, { retries: 3, backoff: "2s" }) async reserve(e: OrderPlaced) { ... }
+}
+```
+
+- **After the request succeeds.** Events emitted during a request are sent once its handler has finished without throwing. If it throws, they're dropped: a checkout that fails halfway never sends a receipt. Outside a request (a job, a script, another handler), `emit()` sends at once. `emitNow()` sends at once anywhere.
+- **In the background.** `@on` handlers run after the response, in a fresh DI scope (scoped services are per delivery), with no current request. A failure is logged and never reaches the user. `retries` runs it again with doubling waits from `backoff` (default 1s).
+- **As JSON.** Events are copied through JSON even in memory, so handlers can't mutate a shared object, and an event that wouldn't survive a real transport fails in development rather than after the first deploy. They arrive as instances of their class (getters and methods work) built without running the constructor. Give the class a static `fromJSON(data)` for Dates, Maps and the like.
+- **On shutdown,** the app stops taking events and waits for running handlers, up to `shutdownTimeout`.
+- **In tests,** `await events.waitFor(OrderPlaced, { where: (e) => e.orderId === id })` resolves with the next match.
+
+### Calls: asking for an answer
+
+A call is an event that wants a reply. It extends [Call](api:yerd.Call)`<Result>`, one `@handles` method answers it, and `events.call()` resolves to the answer, typed:
+
+```tsx
+@named("shipping.quote")
+export class QuoteShipping extends Call<number> {
+  constructor(readonly grams: number, readonly country: string) {
+    super();
+  }
+}
+
+@service
+export class Shipping {
+  @handles(QuoteShipping) quote(q: QuoteShipping): number {
+    if (q.country === "AQ") throw new HttpError(422, "We don't ship to Antarctica");
+    return 499 + Math.ceil(q.grams / 500) * 150;
+  }
+}
+
+const cents = await this.events.call(new QuoteShipping(1200, "US"), { timeout: "3s" }); // number
+```
+
+- The handler's `HttpError`s come back to the caller as `HttpError`s (status and message), so a 422 from the handler can be a 422 from your route. Other failures arrive as `Error`s with the handler's message.
+- In memory, a call nothing answers fails at once. On a transport that can't tell, it times out (default 10s).
+- A call has one answer: two `@handles` for the same call is a boot error. `@on` and `@handles` belong on singleton services, like `@every`.
+
+### Several instances, other apps
+
+By default events stay in the process. To spread them across instances, or to other apps, register an [EventTransport](api:yerd.EventTransport): `app.services((s) => s.value(EventTransport, myTransport))`. It has two methods:
+
+```ts
+interface EventTransport {
+  publish(topic: string, message: unknown): number | void | Promise<number | void>;
+  subscribe(topic: string, group: string, deliver: (message: unknown) => void | Promise<void>): () => void;
+}
+```
+
+A message goes to every group subscribed to its topic, once per group, to one of the group's members. That's a Redis Streams consumer group, a NATS queue group, or a queue per group. yerd makes each `@on` handler its own group, so with five instances an order still gets one receipt. Add `{ every: true }` for handlers that must run on every instance, like dropping an in-process cache. Calls go out on the call's topic to one answering group, and replies come back on a topic per instance. `publish` may return how many groups it reached, which lets a call nobody answers fail at once.
+
+Name every event that leaves the process with `@named`: the class name is the fallback, and minifiers and other apps don't keep it.
+
 ## Scripts: app.scope()
 
 Seeding a database, a one-off migration, a CLI command: `app.scope()` boots the container and runs your function inside a fresh scope, so even scoped services resolve.

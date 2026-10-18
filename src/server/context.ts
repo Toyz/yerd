@@ -78,6 +78,11 @@ export function runWithContext<T>(context: YerdContext, fn: () => T): T {
   return storage.run(context, fn);
 }
 
+/** Run with no current request, e.g. background work that a request started. */
+export function outsideRequest<T>(fn: () => T): T {
+  return storage.exit(fn);
+}
+
 /**
  * The current request's context, from anywhere in the request's async call
  * chain (handlers, services, components, guards). Throws outside a request.

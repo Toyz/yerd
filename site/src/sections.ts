@@ -12,6 +12,7 @@ export const SECTION_INFO: Record<string, { blurb: string; guide?: string }> = {
   "Dependency injection": { blurb: "Services with singleton, scoped and transient lifetimes, injection, lifecycle hooks and background work.", guide: "services" },
   Sessions: { blurb: "Sealed cookie or memory sessions: data, flash messages, regeneration and expiry.", guide: "sessions-and-auth" },
   Auth: { blurb: "Session-based sign-in with typed users, roles, guards and password hashing.", guide: "sessions-and-auth" },
+  Events: { blurb: "An app-wide bus: emit what happened, react in background handlers, and make typed calls, in one process or across instances.", guide: "services" },
   "Live and streaming": { blurb: "NDJSON and Server-Sent Events, and channels for pushing updates to the right users.", guide: "streaming-and-live" },
   Logging: { blurb: "Structured logs and spans, request ids, filters, sinks and @instrument.", guide: "logging" },
   Assets: { blurb: "Link built CSS and assets through Vite's manifest.", guide: "deploying" },

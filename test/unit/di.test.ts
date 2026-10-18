@@ -174,7 +174,7 @@ describe("DI boot checks", () => {
       @onBoot init() {}
     }
     const error = (await yerd({ routes: [], services: [Wrong] }).boot().catch((e: unknown) => e)) as BootError;
-    expect(error.problems[0]).toMatch(/Wrong \(scoped\): @onBoot, @onShutdown and @every need a singleton service/);
+    expect(error.problems[0]).toMatch(/Wrong \(scoped\): @onBoot, @onShutdown, @every, @on and @handles need a singleton service/);
   });
 });
 
