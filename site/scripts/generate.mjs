@@ -434,8 +434,9 @@ const DESIGN_NOTES = [
 const GUIDE_GROUPS = [
   { group: "Get started", guides: [["getting-started", "Installation"], ["your-first-app", "Your first app"]] },
   { group: "Core concepts", guides: [["routing", "Routing"], ["request-data", "Request data"], ["responses", "Responses"], ["pages-and-layouts", "Pages and layouts"]] },
-  { group: "Building apps", guides: [["interactivity", "Interactivity"], ["streaming-and-live", "Streaming and live"], ["services", "Services and DI"], ["sessions-and-auth", "Sessions and auth"]] },
-  { group: "Production", guides: [["logging", "Logging"], ["deploying", "Deploying"], ["testing", "Testing"]] },
+  { group: "Building apps", guides: [["interactivity", "Interactivity"], ["streaming-and-live", "Streaming and live"], ["services", "Services and DI"], ["events", "Events"], ["sessions-and-auth", "Sessions and auth"]] },
+  { group: "Recipes", guides: [["recipes", "Recipes"]] },
+  { group: "Production", guides: [["logging", "Logging"], ["deploying", "Deploying"], ["testing", "Testing"], ["security", "Security"]] },
 ];
 
 function guideList() {

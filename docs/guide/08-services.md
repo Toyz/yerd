@@ -84,6 +84,9 @@ Route classes have a lifetime too: scoped by default (a fresh instance per reque
 A singleton outlives every request, so it can't hold a scoped service. yerd checks this at boot and refuses to start rather than letting one request's data leak into the next.
 
 ```ts
+import { inject, service } from "@toyz/yerd";
+import { RequestStats } from "./stats.js"; // the scoped service above
+
 @service
 class Cache {
   @inject(RequestStats) accessor stats!: RequestStats; // scoped!
@@ -188,6 +191,45 @@ export function TodoCount() {
 
 It works inside a request, a lifecycle hook, or `app.scope()`. Anywhere else it throws, saying so.
 
+## Request data in a service
+
+Request accessors (`@session`, `@query`, `@header`, `@auth.user` and your own from [createAccessor](03-request-data.md#your-own-accessors)) aren't only for routes. They read the current request whatever class they're on, so a scoped service can gather "who's looking" once, and layouts and components ask it instead of each reading the session their own way:
+
+```tsx
+import { resolve, scoped, service, session, type LayoutProps, type Session } from "@toyz/yerd";
+
+interface Prefs {
+  theme?: "light" | "dark";
+  cart?: string[];
+}
+
+@scoped
+@service
+export class Viewer {
+  @session accessor session!: Session<Prefs>;
+
+  get theme(): "light" | "dark" {
+    return this.session.theme ?? "light";
+  }
+
+  get cartCount(): number {
+    return this.session.cart?.length ?? 0;
+  }
+}
+
+export function ShopLayout({ children }: LayoutProps) {
+  const viewer = resolve(Viewer);
+  return (
+    <div class={`theme-${viewer.theme}`}>
+      <header>Cart ({viewer.cartCount})</header>
+      {children}
+    </div>
+  );
+}
+```
+
+Reading one of these outside a request (in an `@every` job, an `@on` handler, at boot) throws, the same as `currentContext()`. Make such services `@scoped`: nothing about them outlives the request.
+
 ## Disposal
 
 Give a service `[Symbol.dispose]` or `[Symbol.asyncDispose]` and yerd cleans it up for you, newest first.
@@ -270,89 +312,35 @@ Return (or resolve) when `signal` aborts. Shutdown waits up to `shutdownTimeout`
 
 ## Events and calls
 
-When one thing happening should set off others (an order placed: send the receipt, reserve stock, tell the warehouse), don't make checkout call every one of them. Emit an event and let whoever cares react. [Events](api:yerd.Events) is built in.
-
-```tsx
-import { Call, Events, inject, named, on, handles, post, route, service } from "@toyz/yerd";
-
-// An event is a class. @named gives it a stable name for the wire and the logs.
-@named("order.placed")
-export class OrderPlaced {
-  constructor(readonly orderId: string, readonly total: number) {}
-}
-
-@route("/checkout")
-export class Checkout {
-  @inject(Events) accessor events!: Events;
-  @inject(Orders) accessor orders!: Orders;
-
-  @post place() {
-    const order = this.orders.place();
-    this.events.emit(new OrderPlaced(order.id, order.total));
-    return redirect(`/orders/${order.id}`);
-  }
-}
-
-// Any singleton service reacts: in the background, in its own DI scope.
-@service
-export class Receipts {
-  @on(OrderPlaced) async send(e: OrderPlaced) { ... }
-}
-
-@service
-export class Warehouse {
-  @on(OrderPlaced, { retries: 3, backoff: "2s" }) async reserve(e: OrderPlaced) { ... }
-}
-```
-
-- **After the request succeeds.** Events emitted during a request are sent once its handler has finished without throwing. If it throws, they're dropped: a checkout that fails halfway never sends a receipt. Outside a request (a job, a script, another handler), `emit()` sends at once. `emitNow()` sends at once anywhere.
-- **In the background.** `@on` handlers run after the response, in a fresh DI scope (scoped services are per delivery), with no current request. A failure is logged and never reaches the user. `retries` runs it again with doubling waits from `backoff` (default 1s).
-- **As JSON.** Events are copied through JSON even in memory, so handlers can't mutate a shared object, and an event that wouldn't survive a real transport fails in development rather than after the first deploy. They arrive as instances of their class (getters and methods work) built without running the constructor. Give the class a static `fromJSON(data)` for Dates, Maps and the like.
-- **On shutdown,** the app stops taking events and waits for running handlers, up to `shutdownTimeout`.
-- **In tests,** `await events.waitFor(OrderPlaced, { where: (e) => e.orderId === id })` resolves with the next match.
-- **Import your handlers.** A `@service` registers when its module loads, and a service that only has `@on` handlers is never injected anywhere, so nothing else imports it. Import such modules from your app's entry (`import "./reactions.js"`) or list them in `discover()`. In development, yerd warns the first time an event reaches no handler at all.
-
-### Calls: asking for an answer
-
-A call is an event that wants a reply. It extends [Call](api:yerd.Call)`<Result>`, one `@handles` method answers it, and `events.call()` resolves to the answer, typed:
-
-```tsx
-@named("shipping.quote")
-export class QuoteShipping extends Call<number> {
-  constructor(readonly grams: number, readonly country: string) {
-    super();
-  }
-}
-
-@service
-export class Shipping {
-  @handles(QuoteShipping) quote(q: QuoteShipping): number {
-    if (q.country === "AQ") throw new HttpError(422, "We don't ship to Antarctica");
-    return 499 + Math.ceil(q.grams / 500) * 150;
-  }
-}
-
-const cents = await this.events.call(new QuoteShipping(1200, "US"), { timeout: "3s" }); // number
-```
-
-- The handler's `HttpError`s come back to the caller as `HttpError`s (status and message), so a 422 from the handler can be a 422 from your route. Other failures arrive as `Error`s with the handler's message.
-- In memory, a call nothing answers fails at once. On a transport that can't tell, it times out (default 10s).
-- A call has one answer: two `@handles` for the same call is a boot error. `@on` and `@handles` belong on singleton services, like `@every`.
-
-### Several instances, other apps
-
-By default events stay in the process. To spread them across instances, or to other apps, register an [EventTransport](api:yerd.EventTransport): `app.services((s) => s.value(EventTransport, myTransport))`. It has two methods:
+When one thing happening should set off others (an order placed: send the receipt, take the stock, tell the dashboard), emit an event and let singleton services react with `@on`, in the background, after the request has succeeded. When you need an answer from another service, make it a call that one `@handles` method answers.
 
 ```ts
-interface EventTransport {
-  publish(topic: string, message: unknown): number | void | Promise<number | void>;
-  subscribe(topic: string, group: string, deliver: (message: unknown) => void | Promise<void>): () => void;
+import { Events, inject, named, on, service } from "@toyz/yerd";
+
+@named("signup.completed")
+export class SignupCompleted {
+  constructor(readonly email: string) {}
+}
+
+@service
+export class Welcome {
+  @on(SignupCompleted, { retries: 2 }) async send(event: SignupCompleted) {
+    console.log(`welcome mail to ${event.email}`);
+  }
+}
+
+@service
+export class Signups {
+  @inject(Events) accessor events!: Events;
+
+  complete(email: string) {
+    // In a request: sent once the handler has returned without throwing.
+    this.events.emit(new SignupCompleted(email));
+  }
 }
 ```
 
-A message goes to every group subscribed to its topic, once per group, to one of the group's members. That's a Redis Streams consumer group, a NATS queue group, or a queue per group. yerd makes each `@on` handler its own group, so with five instances an order still gets one receipt. Add `{ every: true }` for handlers that must run on every instance, like dropping an in-process cache. Calls go out on the call's topic to one answering group, and replies come back on a topic per instance. `publish` may return how many groups it reached, which lets a call nobody answers fail at once.
-
-Name every event that leaves the process with `@named`: the class name is the fallback, and minifiers and other apps don't keep it.
+The [events guide](14-events.md) covers it all: when events go out, retries, calls, scripts, transports for several instances, and testing.
 
 ## Scripts: app.scope()
 
@@ -369,4 +357,4 @@ await app.scope(async () => {
 await app.stop(); // dispose singletons
 ```
 
-The scope is disposed when the function returns. `app.scope()` doesn't run `@onBoot` hooks; call `app.start()` first if your script needs them.
+The scope is disposed when the function returns. `app.scope()` doesn't start the app: no `@onBoot` hooks, no timers, and no `@on` handlers listening for events. Call `app.start()` first if your script needs any of them, and `app.stop()` at the end either way.

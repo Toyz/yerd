@@ -149,6 +149,7 @@ export class LobbyEvents {
 - It subscribes immediately, so nothing published between the call and the first read is lost.
 - Each subscriber has its own queue. A slow one keeps up to `buffer` messages (1000 by default); past that the oldest are dropped, with a warning.
 - Plain strings work as names too: `publish("todos", msg)`.
+- Channels push to open browser tabs. For work that should happen once per change on the server (send a mail, update a cache), use [events](14-events.md); an `@on` handler can publish to a channel when it's done.
 
 > [!NOTE]
 > The default backend is in-memory, so messages reach subscribers in the same process only. For several instances, implement [ChannelBackend](api:yerd.ChannelBackend) (Redis, NATS, Postgres `LISTEN`) and register it: `app.services((s) => s.value(ChannelBackend, myBackend))`. See [services](08-services.md).
