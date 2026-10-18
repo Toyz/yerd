@@ -85,6 +85,62 @@ export function loadGuide(slug: string): Promise<string> {
   return text;
 }
 
+// ── benchmarks ──
+
+export interface BenchResult {
+  framework: string;
+  reqPerSec: number;
+  latencyP50: number;
+  latencyP99: number;
+  throughputMBs: number;
+  errors: number;
+}
+
+export interface Benchmarks {
+  generated: string;
+  machine: { cpu: string; cores: number; memory: string; os: string; node: string };
+  tool: { name: string; connections: number; duration: number; pipelining: number; runs: number; warmup: number };
+  frameworks: Array<{ id: string; name: string; version: string; url?: string }>;
+  scenarios: Array<{ id: string; title: string; description?: string; results: BenchResult[] }>;
+  notes?: string[];
+}
+
+/** What the benchmarks page shows: the results, whether they're the dev sample, or nothing yet. */
+export interface BenchState {
+  data: Benchmarks | null;
+  sample: boolean;
+}
+
+async function benchFile(name: string): Promise<Benchmarks | null> {
+  try {
+    const response = await fetch(`${base}data/${name}`);
+    if (!response.ok) return null;
+    // A dev server answers a missing file with index.html; only JSON counts.
+    const data = (await response.json()) as Benchmarks;
+    return Array.isArray(data?.scenarios) ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+let benchmarks: Promise<BenchState> | undefined;
+
+/**
+ * bench/compare/results.json, copied in by the generator when the harness has
+ * run. In development only, a sample stands in so the page can be worked on;
+ * a production build never looks for it.
+ */
+export const loadBenchmarks = () =>
+  (benchmarks ??= (async () => {
+    const real = await benchFile("benchmarks.json");
+    if (real) return { data: real, sample: false };
+    if (import.meta.env.DEV) {
+      const sample = await benchFile("benchmarks.sample.json");
+      if (sample) return { data: sample, sample: true };
+    }
+    return { data: null, sample: false };
+  })());
+
 /** `@toyz/yerd/auth` -> `auth`, `@toyz/yerd` -> `yerd`: the short module name used in ids. */
 export function moduleShort(module: string): string {
   return module === "@toyz/yerd" ? "yerd" : module.slice("@toyz/yerd/".length);

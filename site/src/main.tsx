@@ -15,6 +15,7 @@ import "./pages/home";
 import "./pages/guide";
 import "./pages/api-index";
 import "./pages/api-entry";
+import "./pages/benchmarks";
 import "./pages/not-found";
 
 app.use(new LoomRouter({ mode: "hash" }));

@@ -6,6 +6,9 @@
 //                             each one first shipped in
 //   public/data/guides.json   the guides (docs/*.md and the README), by slug
 //   public/data/guides/*.md   their text
+//   public/data/benchmarks.json
+//                             bench/compare/results.json, when the comparison
+//                             harness has been run
 //
 // "Since" versions come from git: for every release tag that's on npm, the
 // same walk runs over that tag's src/, and an export (or member) is stamped
@@ -591,8 +594,25 @@ const api = {
 writeFileSync(join(out, "api.json"), JSON.stringify(api));
 const guides = writeGuides();
 
+// ── benchmarks ──
+//
+// The comparison harness (bench/compare/) writes results.json; the site shows
+// it when it's there and says "not run yet" when it isn't. A stale copy from
+// an earlier run is removed so the page never shows numbers the repo lost.
+const benchSource = join(repo, "bench", "compare", "results.json");
+const benchTarget = join(out, "benchmarks.json");
+let bench = "no benchmark results";
+if (existsSync(benchSource)) {
+  const results = JSON.parse(readFileSync(benchSource, "utf8"));
+  if (!Array.isArray(results.scenarios)) throw new Error(`${relative(repo, benchSource)}: no "scenarios" array`);
+  writeFileSync(benchTarget, JSON.stringify(results));
+  bench = `benchmarks from ${results.generated ?? "an undated run"}`;
+} else if (existsSync(benchTarget)) {
+  rmSync(benchTarget);
+}
+
 console.log(
   `[site] ${current.entries.length} exports (${unreleased} unreleased) across ${api.sections.length} sections, ` +
-    `since-stamped from ${shipped.length} release(s) [${api.released.join(", ")}], ${guides.length} guides, ` +
+    `since-stamped from ${shipped.length} release(s) [${api.released.join(", ")}], ${guides.length} guides, ${bench}, ` +
     `${Math.round(performance.now() - started)}ms`,
 );

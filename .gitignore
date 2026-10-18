@@ -7,5 +7,7 @@ test-results/
 playwright-report/
 examples/*/dist/
 *.tgz
-site/public/data/
+site/public/data/*
+# A made-up benchmark run, so the page can be worked on before the harness runs (dev only).
+!site/public/data/benchmarks.sample.json
 .claude/worktrees/
