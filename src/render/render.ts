@@ -17,7 +17,7 @@ import { elementAttributes, renderAttributes } from "./attrs.js";
 import { escapeHtml, isRawHtml, raw, type RawHtml } from "./escape.js";
 import { formAction, isBoundAction } from "../actions/action.js";
 import { DYNAMIC_ID, Dynamic, type DynamicProps } from "./dynamic.js";
-import { Styles, classesIn, keyframesIn, stylesFor } from "./css.js";
+import { Styles, stylesFor } from "./css.js";
 import { Local, bindingSpec, isBinding, localState, stateName, type Binding, type LocalProps } from "./local.js";
 
 const VOID_ELEMENTS = new Set([
@@ -94,6 +94,8 @@ interface State {
   insideLocal: number;
   /** css`` classes whose rules this render already sent. */
   cssSent: Set<string>;
+  /** css`` classes (and keyframes) the element being opened uses; emptied after each. */
+  cssFound: Set<string>;
   /**
    * Where <Styles /> sits in the buffer, while the buffer still holds it: rules
    * go there, in <head>, instead of next to the elements (where an inline
@@ -268,7 +270,17 @@ function openElement(type: string, flags: number, props: Record<string, unknown>
     state.started = true;
     if (state.document && type.toLowerCase() === "html") write(state, "<!doctype html>");
   }
-  writeClassStyles(props, state);
+  const local = state.insideLocal > 0;
+  let attrs = elementAttributes(props, type, local, state.cssFound);
+  let hidden = "";
+  if (attrs === undefined) {
+    // An action, dropTo or a Cues prop: rewritten into what the runtime reads.
+    state.cssFound.clear();
+    const rewritten = rewriteProps(type, props);
+    attrs = renderAttributes(rewritten.attrs, type, true, local, state.cssFound);
+    hidden = rewritten.hidden;
+  }
+  if (state.cssFound.size) writeClassStyles(state);
   if (flags & HOLDS_CSS) {
     if (state.cssHeld) flags &= ~HOLDS_CSS;
     else state.cssHeld = new Set();
@@ -276,15 +288,6 @@ function openElement(type: string, flags: number, props: Record<string, unknown>
   if (flags & OWN_CSS) {
     (state.cssOuter ??= []).push(state.cssSent);
     state.cssSent = new Set(state.cssSent);
-  }
-  const local = state.insideLocal > 0;
-  let attrs = elementAttributes(props, type, local);
-  let hidden = "";
-  if (attrs === undefined) {
-    // An action, dropTo or a Cues prop: rewritten into what the runtime reads.
-    const rewritten = rewriteProps(type, props);
-    attrs = renderAttributes(rewritten.attrs, type, true, local);
-    hidden = rewritten.hidden;
   }
   // null is nothing, as for any attribute: a null key isn't written, and
   // data-key={null} doesn't stand in for the key.
@@ -304,15 +307,13 @@ function closeElement(type: string, open: number, state: State): void {
   }
 }
 
-/** css`` classes in class / className: their rules go just before the first element using them (or are held). */
-function writeClassStyles(props: Record<string, unknown>, state: State): void {
-  const classes = props.class !== undefined || props.className !== undefined ? classesIn([props.class, props.className]) : new Set<string>();
-  // `style={{ animation: `${pop} 1s` }}`: the keyframes go too.
-  if (props.style !== undefined) keyframesIn(props.style, classes);
-  if (!classes.size) return;
+/** css`` classes the element uses (cssFound): their rules go just before it (or are held). */
+function writeClassStyles(state: State): void {
+  const classes = state.cssFound;
   // In <head> there's nothing to hold for: <select>, <svg> and the rest don't matter there.
   if (state.cssHeld && state.cssAnchor === undefined) for (const name of classes) state.cssHeld.add(name);
   else writeStyles(state, stylesFor(classes, state.cssSent));
+  classes.clear();
 }
 
 /** Rules into <head> at <Styles /> while it's still in the buffer, else inline here. */
@@ -540,6 +541,7 @@ export async function* renderToStream(child: Child, options: RenderOptions = {})
     insideDynamic: 0,
     insideLocal: 0,
     cssSent: new Set(),
+    cssFound: new Set(),
     cssAnchor: undefined,
     cssHead: "",
     cssHeld: undefined,

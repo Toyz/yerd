@@ -1,4 +1,5 @@
 import { attributeVersion, customAttribute, sourceExpression, type AttributeDef } from "../attributes/attribute.js";
+import { cssClassesIn, keyframesIn } from "./css.js";
 import { escapeHtml, isJsonText, isRawHtml } from "./escape.js";
 import { bindingSpec, isBinding, type Binding } from "./local.js";
 
@@ -40,21 +41,55 @@ function nameInfo(name: string): NameInfo {
 
 export type ClassValue = string | null | undefined | false | ClassValue[] | Record<string, unknown>;
 
-/** Flatten a class value into a space-separated string, in one pass with no intermediate arrays. */
-export function classNames(value: ClassValue): string {
-  if (!value) return "";
-  if (typeof value === "string") return value;
-  return appendClasses("", value);
-}
+// What walkClasses() finds besides the class string: <Local> class bindings
+// and css`` classes. Module state rather than arguments or a closure: a walk
+// is synchronous and runs no user code, so two never overlap.
+let walkBinds: string[] | undefined;
+let walkCss: Set<string> | undefined;
 
-function appendClasses(out: string, value: ClassValue): string {
-  if (!value) return out;
-  if (typeof value === "string") return out ? `${out} ${value}` : value;
+/**
+ * One pass over a class value, appending its classes to `out`. On the way it
+ * collects class flags bound to <Local> state (`{ active: s.selected }`, also
+ * inside an array: each is its initial value plus a `class.<flag>` binding
+ * per class in the flag, as the browser's classList takes one at a time) and
+ * the css`` classes named (flag keys whether on or off: they may switch on
+ * later). A binding used as a class name (`["card", s.theme]`) is an
+ * expression: its initial value, not kept in step. raw() is its text.
+ */
+function walkClasses(out: string, value: unknown): string {
+  if (typeof value === "string") {
+    if (walkCss && value.includes("yx-")) cssClassesIn(value, walkCss);
+    return value === "" ? out : out ? `${out} ${value}` : value;
+  }
+  if (typeof value !== "object" || value === null) {
+    // A binding is a function proxy; anything else here holds no classes.
+    return typeof value === "function" && isBinding(value) ? walkClasses(out, (value as Binding).value) : out;
+  }
   if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i++) out = appendClasses(out, value[i]);
+    for (let i = 0; i < value.length; i++) out = walkClasses(out, value[i]);
     return out;
   }
-  for (const name in value) if (value[name]) out = out ? `${out} ${name}` : name;
+  if (isRawHtml(value)) return walkClasses(out, value.html);
+  const flags = value as Record<string, unknown>;
+  for (const flag in flags) {
+    const on = flags[flag];
+    if (walkCss && flag.includes("yx-")) cssClassesIn(flag, walkCss);
+    if (isBinding(on)) {
+      const spec = bindingSpec(on as Binding);
+      for (const word of flag.split(/\s+/)) if (word) (walkBinds ??= []).push(`class.${word}:${spec}`);
+      if (!(on as Binding).value) continue;
+    } else if (!on) continue;
+    out = out ? `${out} ${flag}` : flag;
+  }
+  return out;
+}
+
+/** The css`` classes in a class value, as rendering finds them. */
+export function classesIn(value: unknown, out: Set<string> = new Set()): Set<string> {
+  walkCss = out;
+  walkClasses("", value);
+  walkCss = undefined;
+  walkBinds = undefined;
   return out;
 }
 
@@ -62,7 +97,7 @@ const VALID_STYLE_PROPERTY = /^(--[\w-]+|-?[a-zA-Z][a-zA-Z0-9-]*)$/;
 // Anything that could end the declaration or the rule: a value is one value.
 const UNSAFE_STYLE_VALUE = /[;{}<]/;
 
-// Property name -> validated CSS name, capped like checkedNames.
+// Property name -> validated CSS name, remembered like attribute names (capped).
 const styleNames = new Map<string, string>();
 
 function cssName(property: string): string {
@@ -83,7 +118,7 @@ function cssName(property: string): string {
  * `width:10`, which CSS ignores: write "10px"). Values can't contain `;`,
  * `{`, `}` or `<`; a style string is passed through as given instead.
  */
-export function styleString(value: unknown): string {
+function styleString(value: unknown): string {
   if (typeof value === "string") return value;
   if (typeof value !== "object" || value === null) return "";
   let out = "";
@@ -113,7 +148,7 @@ function isUrlAttribute(name: string): boolean {
   return false;
 }
 
-export const BLOCKED_URL = "about:blank#blocked";
+const BLOCKED_URL = "about:blank#blocked";
 
 // Browsers drop leading C0 controls and spaces, and tabs/newlines anywhere,
 // before reading the scheme: "  java\tscript:" is javascript:.
@@ -123,7 +158,7 @@ const URL_IGNORED = /[\x00-\x20]/g;
  * javascript:, vbscript: and data: URLs become about:blank#blocked, except
  * data:image/ on src and poster. Wrap a value in raw() to write it as given.
  */
-export function safeUrl(name: string, url: string): string {
+function safeUrl(name: string, url: string): string {
   const c = url.charCodeAt(0);
   // "/path", "#hash", "?query", "./rel": no scheme. The common case.
   if (c === 47 || c === 35 || c === 63 || c === 46) return url;
@@ -181,9 +216,11 @@ function isEventHandlerName(name: string): boolean {
  * (render.ts writes the key as data-key). Custom attributes (see
  * attribute()) render through their own `render`; `custom` is false for that
  * output, so a custom attribute can write its own name as a plain attribute.
+ * The css`` classes in class and the keyframes in style go into `found`,
+ * classes first.
  */
-export function renderAttributes(props: Record<string, unknown>, tag = "", custom = true, local = false): string {
-  return attributes(props, tag, custom, local, false)!;
+export function renderAttributes(props: Record<string, unknown>, tag = "", custom = true, local = false, found?: Set<string>): string {
+  return attributes(props, tag, custom, local, false, found)!;
 }
 
 /**
@@ -191,13 +228,14 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
  * them is the renderer's to rewrite first (an action, `dropTo`, the Cues
  * props): it checks for those as it goes, so other elements pay nothing.
  */
-export function elementAttributes(props: Record<string, unknown>, tag: string, local: boolean): string | undefined {
-  return attributes(props, tag, true, local, true);
+export function elementAttributes(props: Record<string, unknown>, tag: string, local: boolean, found: Set<string>): string | undefined {
+  return attributes(props, tag, true, local, true, found);
 }
 
-function attributes(props: Record<string, unknown>, tag: string, custom: boolean, local: boolean, renderer: boolean): string | undefined {
+function attributes(props: Record<string, unknown>, tag: string, custom: boolean, local: boolean, renderer: boolean, found: Set<string> | undefined): string | undefined {
   let out = "";
   let classDone = false;
+  let styleText: string | undefined;
   // <Local> bindings on this element: "hidden:!open;class.active:sel".
   let binds: string[] | undefined;
   if (namesVersion !== attributeVersion()) {
@@ -225,7 +263,7 @@ function attributes(props: Record<string, unknown>, tag: string, custom: boolean
       const def = info.custom;
       if (def) {
         const rendered = def.render ? def.render(value, { tag, props }) : defaultCustom(name, value);
-        if (rendered) out += renderAttributes(rendered, tag, false);
+        if (rendered) out += renderAttributes(rendered, tag, false, false, found);
         continue;
       }
     }
@@ -250,41 +288,27 @@ function attributes(props: Record<string, unknown>, tag: string, custom: boolean
       // Both given: one attribute, in prop order.
       if (classDone) continue;
       classDone = true;
-      // Class flags bound to <Local> state: `{ active: s.selected }`, also inside an
-      // array (`["card", { active: s.selected }]`). A binding is a (truthy) proxy, so
-      // each one becomes its initial value plus a `class.<flag>` binding, one per
-      // class in the flag ("a b": the browser's classList takes one at a time).
-      // A binding used as a class name inside a list (`["card", s.theme]`) is an
-      // expression: its initial value, not kept in step. raw() is its text.
-      const unbind = (item: unknown): unknown => {
-        if (isBinding(item)) return (item as Binding).value;
-        if (Array.isArray(item)) return item.map(unbind);
-        if (!item || typeof item !== "object") return item;
-        if (isRawHtml(item)) return item.html;
-        const flags = item as Record<string, unknown>;
-        if (!Object.values(flags).some(isBinding)) return item;
-        const plain: Record<string, unknown> = {};
-        for (const flag of Object.keys(flags)) {
-          const v = flags[flag];
-          if (isBinding(v)) {
-            const b = v as Binding;
-            for (const word of flag.split(/\s+/)) if (word) (binds ??= []).push(`class.${word}:${bindingSpec(b)}`);
-            plain[flag] = b.value;
-          } else plain[flag] = v;
-        }
-        return plain;
-      };
-      value = unbind(value);
+      const other = name === "class" ? props.className : props.class;
+      // Both given, className first: css`` classes are still found class first.
+      if (found && name === "className" && other != null) classesIn(other, found);
+      walkBinds = binds;
+      walkCss = found;
       // Both given: the other one's flags are bound too.
-      const other = unbind(name === "class" ? props.className : props.class);
-      value = other ? appendClasses(classNames(value as ClassValue), other as ClassValue) : classNames(value as ClassValue);
-      if (value === "") continue;
-      out += ` class="${escapeHtml(value as string)}"`;
+      const text = walkClasses(walkClasses("", value), other);
+      binds = walkBinds;
+      walkBinds = undefined;
+      walkCss = undefined;
+      if (text === "") continue;
+      out += ` class="${escapeHtml(text)}"`;
       continue;
     }
-    if (name === "style" && !isRawHtml(value)) {
-      value = styleString(value);
-      if (value === "") continue;
+    if (name === "style") {
+      if (!isRawHtml(value)) {
+        value = styleString(value);
+        if (value === "") continue;
+      }
+      // `style={{ animation: `${pop} 1s` }}`: the keyframes go too, after the classes.
+      if (found) styleText = typeof value === "string" ? value : (value as { html: string }).html;
     }
 
     if (typeof value === "object") {
@@ -311,6 +335,7 @@ function attributes(props: Record<string, unknown>, tag: string, custom: boolean
       out += ` ${name}="${escapeHtml(String(value))}"`;
     }
   }
+  if (styleText !== undefined) keyframesIn(styleText, found!);
   if (binds) out += ` data-yx-bind="${escapeHtml(binds.join(";"))}"`;
   return out;
 }

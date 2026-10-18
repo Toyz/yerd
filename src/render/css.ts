@@ -32,8 +32,7 @@
  * `{ [active]: on }`). A class name buried in raw() HTML isn't seen.
  */
 
-import { escapeHtml, isRawHtml, raw, type RawHtml } from "./escape.js";
-import { isBinding, type Binding } from "./local.js";
+import { escapeHtml, raw, type RawHtml } from "./escape.js";
 
 /** A rule set registered by css`` or keyframes``. */
 interface Rule {
@@ -159,33 +158,17 @@ export function keyframes(strings: TemplateStringsArray, ...values: unknown[]): 
   return register(name, `@keyframes ${name}{${body}}`, []);
 }
 
-/**
- * Every class name in a class / className value: strings, arrays, flag
- * objects' keys (on or off), raw() text, and a <Local> binding's value now.
- */
-export function classesIn(value: unknown, out: Set<string> = new Set()): Set<string> {
-  if (typeof value === "string") {
-    for (const token of value.split(/\s+/)) if (token && rules.has(token)) out.add(token);
-  } else if (isBinding(value)) {
-    classesIn((value as Binding).value, out);
-  } else if (isRawHtml(value)) {
-    classesIn(value.html, out);
-  } else if (Array.isArray(value)) {
-    for (const item of value) classesIn(item, out);
-  } else if (value && typeof value === "object") {
-    // Flag objects: { [active]: s.on } may switch on in the browser later, so its rules go too.
-    for (const key of Object.keys(value)) classesIn(key, out);
-  }
-  return out;
+/** The css`` classes named in a class string (or a flag's key) go into `out`. */
+export function cssClassesIn(text: string, out: Set<string>): void {
+  for (const token of text.split(/\s+/)) if (token && rules.has(token)) out.add(token);
 }
 
 const KEYFRAMES_NAME = /yx-k-[a-z0-9]+/g;
 
-/** Keyframes names in a `style` value (a string, or an object's string values), for `animation: ${pop} 1s`. */
-export function keyframesIn(style: unknown, out: Set<string> = new Set()): Set<string> {
-  const texts = typeof style === "string" ? [style] : style && typeof style === "object" ? Object.values(style).filter((v): v is string => typeof v === "string") : [];
-  for (const text of texts) for (const name of text.match(KEYFRAMES_NAME) ?? []) if (rules.has(name)) out.add(name);
-  return out;
+/** Keyframes named in a style's text (`animation: ${pop} 1s`) go into `out`. */
+export function keyframesIn(text: string, out: Set<string>): void {
+  if (!text.includes("yx-k-")) return;
+  for (const name of text.match(KEYFRAMES_NAME) ?? []) if (rules.has(name)) out.add(name);
 }
 
 /** The `<style>` for classes not sent yet on this page (and what they need), or "". Updates `sent`. */

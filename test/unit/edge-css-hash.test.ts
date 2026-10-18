@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Styles, css, keyframes, raw } from "@toyz/yerd";
-import { classesIn, cssBundleClasses, cssBundleHash, cssBundleText, stylesFor } from "../../src/render/css.js";
+import { classesIn } from "../../src/render/attrs.js";
+import { cssBundleClasses, cssBundleHash, cssBundleText, stylesFor } from "../../src/render/css.js";
 
 /** A template call with hand-written strings (as if the text had been typed literally). */
 function literal(text: string): TemplateStringsArray {
