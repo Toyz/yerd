@@ -37,6 +37,8 @@ export function paramNames(pattern: string): string[] {
 }
 
 function safeDecode(value: string): string {
+  // Most segments have nothing escaped.
+  if (!value.includes("%")) return value;
   try {
     return decodeURIComponent(value);
   } catch {
@@ -44,8 +46,13 @@ function safeDecode(value: string): string {
   }
 }
 
+/** No params: shared by every static match, so it must never be written to. */
+const NO_PARAMS: Record<string, string> = Object.freeze({}) as Record<string, string>;
+
 export class Router<T> {
   #root: Node<T> = createNode();
+  /** Routes without params, by path: answered without walking the tree. */
+  readonly #exact = new Map<string, Match<T>>();
 
   add(pattern: string, verb: Verb, handler: T): void {
     const segments = segmentsOf(pattern);
@@ -84,9 +91,13 @@ export class Router<T> {
     }
     node.handlers.set(verb, handler);
     node.pattern ??= pattern;
+    if (names.length === 0) this.#exact.set(segments.length === 0 ? "/" : `/${segments.join("/")}`, { handlers: node.handlers, params: NO_PARAMS, pattern: node.pattern });
   }
 
   match(path: string): Match<T> | null {
+    // A static route wins over a param at the same place in the tree too, so the shortcut agrees with the walk.
+    const exact = this.#exact.get(path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path);
+    if (exact) return exact;
     const params: Record<string, string> = {};
     const found = this.#walk(this.#root, segmentsOf(path), 0, params);
     return found ? { handlers: found.handlers, params, pattern: found.pattern! } : null;

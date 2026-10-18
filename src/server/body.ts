@@ -126,21 +126,47 @@ async function readAll(req: IncomingMessage, limit: number): Promise<Buffer<Arra
   if (Number.isFinite(declared) && declared > limit) {
     throw new PayloadTooLarge(`Request body is larger than ${limit} bytes`);
   }
-  const chunks: Buffer[] = [];
-  let size = 0;
-  try {
-    for await (const chunk of req) {
-      const buffer = chunk as Buffer;
-      size += buffer.byteLength;
-      if (size > limit) throw new PayloadTooLarge(`Request body is larger than ${limit} bytes`);
-      chunks.push(buffer);
-    }
-  } catch (error) {
-    if (error instanceof YerdError) throw error;
+  if (req.readableEnded) return Buffer.alloc(0);
+  // data/end listeners rather than `for await`: an async iterator per request
+  // costs measurably more (its own listeners and a microtask per chunk).
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer<ArrayBuffer>[] = [];
+    let size = 0;
+    const stop = () => {
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("error", onError);
+      req.off("close", onClose);
+    };
+    const onData = (chunk: Buffer<ArrayBuffer>) => {
+      size += chunk.byteLength;
+      if (size > limit) {
+        stop();
+        // Let the rest drain unread, so the 413 still reaches the client.
+        req.resume();
+        reject(new PayloadTooLarge(`Request body is larger than ${limit} bytes`));
+        return;
+      }
+      chunks.push(chunk);
+    };
+    const onEnd = () => {
+      stop();
+      // Most bodies arrive in one chunk: no copy for those.
+      resolve(chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks, size));
+    };
     // The client hung up mid-upload: theirs to retry, not a crash to log as one.
-    throw new BadRequest("The request body was cut off", { cause: error });
-  }
-  return Buffer.concat(chunks, size);
+    const onError = (error: unknown) => {
+      stop();
+      reject(new BadRequest("The request body was cut off", { cause: error }));
+    };
+    const onClose = () => {
+      if (!req.readableEnded) onError(new Error("the connection closed before the body ended"));
+    };
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", onError);
+    req.on("close", onClose);
+  });
 }
 
 /**

@@ -162,23 +162,26 @@ export function createAccessor<T, A extends unknown[] = []>(
   options: AccessorOptions<A> = {},
 ): AccessorFactory<T, A> {
   const name = options.name ?? (resolve.name || "accessor");
-  // Per-request memo slot for this accessor: a fresh symbol, so two accessors with the same name never share it.
-  const memo = Symbol(`yerd:memo:${name}`);
+  // Resolvers with the same arguments share one, so the per-request memo can
+  // key on the resolver itself: one lookup, nothing allocated per accessor.
+  const byArgs = new Map<string, Resolver>();
 
   const resolverFor = (args: A): Resolver => {
     const memoKey = argsKey(args);
+    const known = byArgs.get(memoKey);
+    if (known) return known;
     const resolver: Resolver = {
       name,
       args,
       resolve(ctx) {
-        let perAccessor = ctx.memo.get(memo) as Map<string, unknown> | undefined;
-        if (!perAccessor) ctx.memo.set(memo, (perAccessor = new Map()));
-        if (perAccessor.has(memoKey)) return perAccessor.get(memoKey);
+        const memo = ctx.memo;
+        if (memo.has(resolver)) return memo.get(resolver);
         const value = resolve(ctx, ...args);
-        perAccessor.set(memoKey, value);
+        memo.set(resolver, value);
         return value;
       },
     };
+    byArgs.set(memoKey, resolver);
     if (options.validate) (resolver as { validate?: unknown }).validate = options.validate;
     return resolver;
   };
