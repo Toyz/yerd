@@ -81,6 +81,11 @@ function bindable(value: unknown, path: string): unknown {
       if (key === "valueOf") return () => value;
       if (key === "toJSON") return () => value;
       if (typeof key !== "string") return undefined;
+      // Every read is a callable proxy, so `then` would make a binding look
+      // like a promise that never settles: an async component returning one,
+      // or Promise.resolve(s.count), would hang the render. Only a field that
+      // really is called `then` is bound.
+      if (key === "then" && !(value !== null && typeof value === "object" && "then" in value)) return undefined;
       const inner = value !== null && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined;
       return bindable(inner, path ? `${path}.${key}` : key);
     },
