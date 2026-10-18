@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -57,5 +57,20 @@ describe("assetUrl in production", () => {
     expect(assetUrl("src/styles.css")).toBe("/assets/styles-abc.css");
     expect(assetUrl("favicon.svg")).toBe("/favicon.svg");
     expect(() => assetUrl("src/extra.css")).toThrow(/isn't in the Vite manifest \(add it to the yerd plugin's `client` option\) or the client build's public files/);
+  });
+
+  it("looks for a public file once per manifest, not on every call", () => {
+    const client = mkdtempSync(join(tmpdir(), "yerd-client-"));
+    mkdirSync(join(client, ".vite"));
+    writeFileSync(join(client, ".vite", "manifest.json"), "{}");
+    writeFileSync(join(client, "favicon.svg"), "<svg/>");
+    useManifest(join(client, ".vite", "manifest.json"));
+    expect(assetUrl("favicon.svg")).toBe("/favicon.svg");
+    rmSync(join(client, "favicon.svg"));
+    // The build doesn't change under a running app: still found.
+    expect(assetUrl("favicon.svg")).toBe("/favicon.svg");
+    // A new manifest (another build) looks again.
+    useManifest(join(client, ".vite", "manifest.json"));
+    expect(() => assetUrl("favicon.svg")).toThrow(/isn't in the Vite manifest/);
   });
 });

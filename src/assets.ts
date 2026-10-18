@@ -24,6 +24,8 @@ let manifest: Manifest | undefined;
 let base = "/";
 /** The client build directory (the manifest's), where files from public/ were copied. */
 let clientDir: string | undefined;
+/** Paths found among the client build's public files: a build doesn't change, so look once (a layout's favicon renders on every page). */
+const publicFiles = new Set<string>();
 
 /** What the Vite plugin tells a dev app about the project (see src/vite). */
 interface DevAssets {
@@ -85,6 +87,7 @@ export function useManifest(file: string | URL, publicBase = "/"): void {
   base = publicBase.endsWith("/") ? publicBase : `${publicBase}/`;
   // <client>/.vite/manifest.json
   clientDir = dirname(dirname(file instanceof URL ? fileURLToPath(file) : file));
+  publicFiles.clear();
 }
 
 /**
@@ -102,6 +105,7 @@ export function resetManifest(): void {
   manifest = undefined;
   base = "/";
   clientDir = undefined;
+  publicFiles.clear();
   checked.clear();
 }
 
@@ -128,7 +132,11 @@ export function assetUrl(path: string): string {
   const entry = manifest[key];
   if (entry) return base + entry.file;
   // Not built, but copied from public/ into the client build: served as is.
-  if (clientDir && existsSync(join(clientDir, key))) return base + key;
+  if (publicFiles.has(key)) return base + key;
+  if (clientDir && existsSync(join(clientDir, key))) {
+    publicFiles.add(key);
+    return base + key;
+  }
   throw new Error(`${key} isn't in the Vite manifest (add it to the yerd plugin's \`client\` option) or the client build's public files`);
 }
 
