@@ -174,7 +174,7 @@ export class Stats {
 There, `ctx.session` throws an error naming the route and the option, a `@session` field refuses to boot, auth middleware sees nobody signed in (so `auth.required` turns requests away), and action tokens for the route's actions aren't bound to a session. Layouts and error pages rendered for the route can't read the session either.
 
 > [!NOTE]
-> If a request ends in an unhandled crash (anything other than an `HttpError`), the session isn't saved. A half-finished login or update never sticks.
+> If a request ends in an unhandled crash (anything other than a `YerdError`), the session isn't saved. A half-finished login or update never sticks.
 
 ## Stores and options
 
@@ -356,7 +356,7 @@ export const app = yerd().sessions().use(auth);
 
 ```tsx
 // src/routes/login.tsx
-import { ActionForm, HttpError, action, get, inject, post, query, redirect, route } from "@toyz/yerd";
+import { ActionForm, Unauthorized, action, get, inject, post, query, redirect, route } from "@toyz/yerd";
 import { safeNext, verifyPassword } from "@toyz/yerd/auth";
 import { auth } from "../auth.js";
 import { Users, type User } from "../users.js";
@@ -382,7 +382,7 @@ export class Login {
   @action async submit(_: {}, form: ActionForm) {
     const user = this.users.byName(form.string("name"));
     if (!(await verifyPassword(form.string("password"), user?.passwordHash)) || !user) {
-      throw new HttpError(401, "Wrong name or password");
+      throw new Unauthorized("Wrong name or password");
     }
     await auth.login(user);
     return redirect(safeNext(this.next));
@@ -471,11 +471,11 @@ export function Greeting() {
 A guard is a gate in front of handlers. [createGuard](api:yerd.createGuard) makes one you can use as a decorator or in a `guards` list.
 
 ```tsx
-import { HttpError, createGuard, get, route } from "@toyz/yerd";
+import { Forbidden, createGuard, get, route } from "@toyz/yerd";
 
 export const businessHours = createGuard("businessHours", () => {
   const hour = new Date().getHours();
-  return (hour >= 9 && hour < 17) || new HttpError(403, "Come back during business hours");
+  return (hour >= 9 && hour < 17) || new Forbidden("Come back during business hours");
 });
 
 @route("/support")

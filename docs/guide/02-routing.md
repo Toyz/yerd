@@ -81,10 +81,10 @@ export class Files {
 A [`@group`](api:yerd.group) is a class that holds shared settings: a path prefix, layouts, guards and metadata. Routes join it with the `group` option.
 
 ```tsx
-import { HttpError, createGuard, get, group, route, type LayoutProps } from "@toyz/yerd";
+import { Forbidden, createGuard, get, group, route, type LayoutProps } from "@toyz/yerd";
 
 const AdminLayout = ({ children }: LayoutProps) => <div class="admin">{children}</div>;
-const staffOnly = createGuard("staffOnly", (ctx) => ctx.headers["x-staff"] === "yes" || new HttpError(403, "Staff only"));
+const staffOnly = createGuard("staffOnly", (ctx) => ctx.headers["x-staff"] === "yes" || new Forbidden("Staff only"));
 
 @group("/admin", { layout: AdminLayout, guards: [staffOnly], meta: { section: "admin" } })
 export class Admin {}
@@ -211,11 +211,11 @@ export class Order {
 A guard runs before a handler and decides whether it runs. Make one with [`createGuard`](api:yerd.createGuard); the function gets the request context.
 
 ```tsx
-import { HttpError, createGuard, get, guards, post, route } from "@toyz/yerd";
+import { Forbidden, createGuard, get, guards, post, route } from "@toyz/yerd";
 
 const businessHours = createGuard("businessHours", () => {
   const hour = new Date().getHours();
-  return (hour >= 9 && hour < 17) || new HttpError(403, "Come back during business hours");
+  return (hour >= 9 && hour < 17) || new Forbidden("Come back during business hours");
 });
 
 const signedIn = createGuard("signedIn", (ctx) =>
@@ -244,7 +244,7 @@ What a guard can return:
 | `true` or nothing | Continue to the next guard, then the handler. |
 | `false` | 403 Forbidden. |
 | A string | 303 redirect to that URL. |
-| An `Error` (returned or thrown) | Handled like a thrown error, e.g. an `HttpError`'s status. |
+| An `Error` (returned or thrown) | Handled like a thrown error, e.g. a `YerdError`'s status. |
 | Anything else | Used as the response, like a handler's return value. |
 
 A guard made with `createGuard` is itself a decorator (`@businessHours`) for a class or method. You can also list guards with [`@guards(a, b)`](api:yerd.guards), in a `guards: [...]` option on `@route` or `@group`, or for every route with `app.guard(...)`.
@@ -282,7 +282,7 @@ export const app = yerd().use(timing);
 - It runs for requests that matched a route. 404s, 405s, static files and refused cross-site posts never reach it.
 - The DI scope is ready and the session can be read, so `currentContext()`, `resolve()` and `ctx.session` work (the session opens the first time something reads it; on a `session: false` route there's none).
 - Errors thrown by the handler come out of `next()`, so a `try`/`catch` around it sees them. A throw from the middleware itself is handled like a handler's: `@catches`, then `app.onError`, then the error page.
-- To turn a request away, prefer a guard (it can redirect or return any response). Middleware can throw an [`HttpError`](api:yerd.HttpError).
+- To turn a request away, prefer a guard (it can redirect or return any response). Middleware can throw a [`YerdError`](api:yerd.YerdError).
 
 `app.use()` also takes anything with a `middleware` function, which is how [`createAuth`](09-sessions-and-auth.md#sign-in-with-createauth) plugs in: `app.use(auth)`.
 

@@ -138,7 +138,7 @@ unseal, no store read, no commit, so no rolling refresh and no flash
 consumed either. Nothing is written back unless it changed (set, or changed
 in place: the data is compared to what was loaded) (or `rolling` needs the
 expiry bumped). A page that never touches the session sends no
-`Set-Cookie`. A request whose handler crashed (anything but an `HttpError`)
+`Set-Cookie`. A request whose handler crashed (anything but a `YerdError`)
 skips the commit, so a half-done login or update doesn't stick.
 
 **Opting out.** `session: false` on a route or group (`@route(path, {
@@ -250,7 +250,7 @@ user, and `auth.required` on a prerendered route fails the build.
 - anything else (JSON / API): `401`
 
 Forbidden (`auth.role()` failing) is `403`, rendered through the error page
-like any other `HttpError`.
+like any other `YerdError`.
 
 **Passwords.** `hashPassword` uses argon2id via `crypto.argon2` (present in
 Node 26, confirmed in M0) with a random 16-byte salt, stored in the standard

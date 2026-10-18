@@ -31,7 +31,7 @@ from PLAN.md for anything the four don't cover (both planned).
 
 ```ts
 // src/decorators.ts
-import { createAccessor, createGuard, resolve, HttpError, type YerdContext } from "@toyz/yerd";
+import { createAccessor, createGuard, resolve, Forbidden, type YerdContext } from "@toyz/yerd";
 import { Users, type User } from "./users.js";
 
 // one lookup per request, shared by the accessor and the guards
@@ -56,7 +56,7 @@ export const authenticated = createGuard("authenticated", async (ctx) =>
 export const roles = (...names: string[]) =>
   createGuard(`roles(${names.join(", ")})`, async (ctx) => {
     const me = await currentUser(ctx);
-    return (me !== undefined && names.some((n) => me.roles.includes(n))) || new HttpError(403);
+    return (me !== undefined && names.some((n) => me.roles.includes(n))) || new Forbidden();
   });
 ```
 
@@ -143,7 +143,7 @@ createGuard(label: string, run: (ctx: YerdContext) => GuardResult | Promise<Guar
   returns one (`roles("admin")` above, `auth.role("admin")`).
 - Result `true` (or nothing) continues. A string redirects there (303), for
   loom parity; `false` is `403`; an `Error`, thrown or returned
-  (`ok || new HttpError(403)`), is thrown. Anything else goes through the
+  (`ok || new Forbidden()`), is thrown. Anything else goes through the
   normal coercion table as the response (`redirect()`, a number, JSX). Same
   rules for every guard, named or kit-made.
 - Order: app-wide guards (`app.guard()`), then the group chain outer to inner,

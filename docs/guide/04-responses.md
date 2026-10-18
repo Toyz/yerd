@@ -187,12 +187,12 @@ Cookie options are `maxAge` (seconds), `expires`, `path`, `domain`, `secure`, `h
 > [!TIP]
 > Cookies set through the context still go out when the handler later throws, so a "failed attempts" cookie survives the 401.
 
-## Errors with HttpError
+## Errors with YerdError
 
-Throw an [`HttpError`](api:yerd.HttpError) to answer with a status. Anywhere in the request works: a handler, a guard, a transform, a service.
+Throw a [`YerdError`](api:yerd.YerdError), or one of its subclasses, to answer with a status. It works anywhere in a request: a handler, a guard, a transform, a service.
 
 ```tsx
-import { HttpError, del, get, route } from "@toyz/yerd";
+import { Conflict, NotFound, del, get, route } from "@toyz/yerd";
 
 const orders = new Map<string, { id: string; total: number }>();
 
@@ -200,34 +200,86 @@ const orders = new Map<string, { id: string; total: number }>();
 export class OrderPage {
   @get show() {
     const order = orders.get("x");
-    if (!order) throw new HttpError(404, "No such order");
+    if (!order) throw new NotFound("No such order");
     return order;
   }
 
   @del remove() {
-    throw new HttpError(409, "Order already shipped", { details: { shippedAt: "2026-10-01" } });
+    throw new Conflict("Order already shipped", { details: { shippedAt: "2026-10-01" } });
+    // -> 409 {"error":"Order already shipped","code":"conflict","shippedAt":"2026-10-01"}
   }
 }
 ```
 
-| Argument | What it does |
+- Exposed errors (below 500) send `{ "error": message, "code": code, ...details }` as JSON. One with no code and no details sends its message as text.
+- 5xx errors aren't exposed: the body is the status text alone. Pass `expose: true` to send the rest.
+- The error's `headers` go out either way, on error pages too.
+- Any other thrown error is a 500 with the body `Internal Server Error`, and is logged.
+
+### The ready-made classes
+
+| Class | Status | Code | Its own option |
+| --- | --- | --- | --- |
+| `BadRequest` | 400 | `bad_request` | |
+| `Unauthorized` | 401 | `unauthorized` | `challenge`: the WWW-Authenticate header |
+| `Forbidden` | 403 | `forbidden` | |
+| `NotFound` | 404 | `not_found` | |
+| `MethodNotAllowed` | 405 | `method_not_allowed` | `allow`: the Allow header |
+| `NotAcceptable` | 406 | `not_acceptable` | |
+| `Conflict` | 409 | `conflict` | |
+| `Gone` | 410 | `gone` | |
+| `PayloadTooLarge` | 413 | `payload_too_large` | |
+| `UnsupportedMediaType` | 415 | `unsupported_media_type` | |
+| `ValidationFailed` | 400 | `validation_failed` | `issues`: sent in the body |
+| `TooManyRequests` | 429 | `too_many_requests` | `retryAfter`: seconds or a Date, the Retry-After header |
+| `ServiceUnavailable` | 503 | `service_unavailable` | `retryAfter`, as above |
+
+Each takes `(message?, options?)`. For any other status, `new YerdError(status, message?, options?)` has no code unless you give one.
+
+| Option | What it does |
 | --- | --- |
-| `status` | The response status. |
-| `message` | Sent to the client when exposed. |
-| `expose` | Default `true` below 500, `false` from 500 up, so server error messages stay private. |
-| `details` | Makes the response JSON: `{ "error": message, ...details }`. |
+| `code` | Replaces the class's code in the body. |
+| `expose` | Default `true` below 500. |
+| `details` | Extra fields in the JSON body. |
+| `headers` | Headers for the error response. |
 | `cause` | The underlying error, for your logs. |
 
-Any other thrown error is a 500 with the body `Internal Server Error`, and the error is logged. Its message never reaches the client.
+yerd's own failures are these classes too: an unknown path is a `NotFound`, a wrong method a `MethodNotAllowed`, a failed DTO a `ValidationFailed`. `@catches` and `instanceof` see them like yours.
+
+### Your own errors
+
+Extend the closest class:
+
+```ts
+import { Conflict, YerdError } from "@toyz/yerd";
+
+class OutOfStock extends Conflict {
+  constructor(readonly sku: string) {
+    super(`${sku} is out of stock`, { code: "out_of_stock", details: { sku } });
+  }
+}
+
+// A different body shape: override toJSON().
+class Problem extends YerdError {
+  override toJSON() {
+    return { type: `https://example.com/problems/${this.code}`, title: this.message, status: this.status };
+  }
+}
+
+throw new Problem(422, "Quantity must be positive", { code: "bad_qty", headers: { "content-type": "application/problem+json" } });
+```
+
+- `@catches(Conflict)` catches an `OutOfStock`, and `error.name` is `"OutOfStock"`.
+- An overridden `toJSON()` is used even without a code or details.
 
 ## Handling errors with @catches
 
 [`@catches`](api:yerd.catches) marks a route method as the handler for errors thrown by that route's handlers, guards and actions. It gets the error and returns anything a handler can.
 
 ```tsx
-import { catches, get, res, route } from "@toyz/yerd";
+import { NotFound, catches, get, res, route } from "@toyz/yerd";
 
-class NotFound extends Error {
+class PetNotFound extends NotFound {
   constructor(readonly what: string) {
     super(`${what} not found`);
   }
@@ -236,11 +288,11 @@ class NotFound extends Error {
 @route("/pets/:name")
 export class Pet {
   @get show(): never {
-    throw new NotFound("cat");
+    throw new PetNotFound("cat");
   }
 
-  @catches(NotFound)
-  missing(error: NotFound) {
+  @catches(PetNotFound)
+  missing(error: PetNotFound) {
     return res(<p>No {error.what} here.</p>, { status: 404 });
   }
 
@@ -254,7 +306,7 @@ export class Pet {
 
 - With error classes, it handles only those; with none, it handles everything. Methods are tried in the order written.
 - JSX renders inside the route's layouts.
-- The response keeps the error's status (an `HttpError`'s, else 500) unless you return `res(..., { status })` or a number.
+- The response keeps the error's status (a `YerdError`'s, else 500) unless you return `res(..., { status })` or a number.
 - Returning `undefined` passes the error on to the next `@catches`, then `app.onError`, then the error page.
 
 ## app.onError
@@ -262,14 +314,14 @@ export class Pet {
 `app.onError` is the app-wide version. It sees every error a route didn't handle, including 404s and 405s that never reached a route.
 
 ```tsx
-import { HttpError, res, yerd } from "@toyz/yerd";
+import { NotFound, res, yerd } from "@toyz/yerd";
 
 class DbDown extends Error {}
 const Maintenance = () => <h1>Back soon</h1>;
 
 export default yerd().onError((error, ctx) => {
   if (error instanceof DbDown) return res(<Maintenance />, { status: 503 });
-  if (error instanceof HttpError && error.status === 404 && ctx.path.startsWith("/api/")) return { error: "no such endpoint" };
+  if (error instanceof NotFound && ctx.path.startsWith("/api/")) return { error: "no such endpoint" };
   return undefined;
 });
 ```
@@ -296,7 +348,7 @@ function ErrorPage({ status, message }: ErrorPageProps) {
 export default yerd().layout(RootLayout).errorPage(ErrorPage);
 ```
 
-It applies only when the request's Accept header includes `text/html`, and not to actions posted by the client runtime, which get the plain error so the runtime can show its message in the form. API clients keep getting plain text, or JSON for errors with `details`. The `message` is an exposed `HttpError`'s message, otherwise the standard status text ("Not Found", "Internal Server Error").
+It applies only when the request's Accept header includes `text/html`, and not to actions posted by the client runtime, which get the plain error so the runtime can show its message in the form. API clients keep getting the plain error body. The `message` is an exposed `YerdError`'s message, otherwise the standard status text ("Not Found", "Internal Server Error").
 
 The full order for any error: the route's `@catches` methods, then `app.onError`, then the error page, then the plain response.
 

@@ -92,13 +92,13 @@ Built-in validators (return a message on failure):
 | [`length(min, max?)`](api:yerd.length) | Strings or arrays with a length in range; `max` defaults to unlimited. |
 | [`matches(regex, message?)`](api:yerd.matches) | Strings matching the pattern. |
 
-Writing your own is just writing a function. A transform returns the new value and throws an [`HttpError`](api:yerd.HttpError) to reject; a validator returns `true`, `false` (generic 400) or a string (400 with that message).
+Writing your own is just writing a function. A transform returns the new value and throws a [`YerdError`](api:yerd.YerdError) to reject; a validator returns `true`, `false` (generic 400) or a string (400 with that message).
 
 ```ts
-import { HttpError, type Transform } from "@toyz/yerd";
+import { ValidationFailed, type Transform } from "@toyz/yerd";
 
 export const slug: Transform<string, string> = (raw) => {
-  if (!/^[a-z0-9-]+$/.test(raw)) throw new HttpError(400, `Not a slug: ${raw}`);
+  if (!/^[a-z0-9-]+$/.test(raw)) throw new ValidationFailed(`Not a slug: ${raw}`);
   return raw;
 };
 ```
@@ -387,7 +387,7 @@ export class Visits {
 The built-in decorators are made with [createAccessor](api:yerd.createAccessor), and so are yours. Give it a function of the request context; you get a decorator that works on accessor fields and in `@args`.
 
 ```tsx
-import { HttpError, createAccessor, get, param, resolve, route, service } from "@toyz/yerd";
+import { NotFound, createAccessor, get, param, resolve, route, service } from "@toyz/yerd";
 
 /** The visitor's first choice from Accept-Language: "pt-PT,pt;q=0.9,en;q=0.8" -> "pt-PT". */
 export const language = createAccessor(
@@ -412,7 +412,7 @@ export const shop = createAccessor(
   async (ctx): Promise<Shop> => {
     const slug = ctx.url.hostname.split(".")[0] ?? "";
     const found = await resolve(Shops).bySlug(slug);
-    if (!found) throw new HttpError(404, "No such shop");
+    if (!found) throw new NotFound("No such shop");
     return found;
   },
   { name: "shop" },
@@ -422,7 +422,7 @@ export const shop = createAccessor(
 export const idParam = createAccessor(
   (ctx, name: string) => {
     const id = Number(ctx.params[name]);
-    if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(404, "Not found");
+    if (!Number.isSafeInteger(id) || id < 1) throw new NotFound();
     return id;
   },
   { name: "idParam", validate: (route, name) => (route.paramNames.includes(name) ? undefined : `${route.pattern} has no :${name}`) },
@@ -443,7 +443,7 @@ export class Product {
 
 - The function runs at most once per request for each decorator and argument list, the first time something reads it; every later read gets the same value (or the same promise).
 - Returning `undefined` uses the field's initializer, like `@query`.
-- Throwing (an `HttpError`, say) answers the request, the same as a guard.
+- Throwing (a `YerdError`, say) answers the request, the same as a guard.
 - Arguments after `ctx` become the decorator's arguments: `@idParam("id")`. `validate` runs at boot for every route class that uses it; return a message to stop the app from booting.
 - The field's type is checked against what the function returns: `@language accessor lang!: number` won't compile.
 - They work on services too, reading whatever request is running (see [request data in a service](08-services.md#request-data-in-a-service)), and in `@args(language, idParam("id"))`.
@@ -469,6 +469,7 @@ A failed DTO reports every problem at once, each with a path:
 ```json
 {
   "error": "Validation failed",
+  "code": "validation_failed",
   "issues": [
     { "path": "email", "message": "That is not an email" },
     { "path": "age", "message": "Must be from 13 to 120 (got 7)" },
@@ -478,4 +479,4 @@ A failed DTO reports every problem at once, each with a path:
 }
 ```
 
-Browsers get your error page instead when the app has one (see [responses](04-responses.md)). To turn issues into form messages, catch the [`HttpError`](api:yerd.HttpError) and read `error.details.issues`; the [interactivity guide](06-interactivity.md) shows the pattern for forms.
+Browsers get your error page instead when the app has one (see [responses](04-responses.md)). To turn issues into form messages, catch the [`ValidationFailed`](api:yerd.ValidationFailed) and read `error.issues`; the [interactivity guide](06-interactivity.md) shows the pattern for forms.

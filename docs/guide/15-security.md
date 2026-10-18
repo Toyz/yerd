@@ -109,7 +109,7 @@ When the secret changed, the server was redeployed, a token expired, or the page
 - **Cookie flags.** Always `HttpOnly`, `SameSite=Lax` and `Path=/`. Over HTTPS also `Secure`, with the `__Host-` name prefix, which stops a subdomain from planting the cookie. Behind a proxy, set `trustProxy` so yerd believes `X-Forwarded-Proto`; see [deploying](11-deploying.md#behind-a-proxy).
 - **Expiry.** `maxAge` idle time (14 days by default, refreshed by requests that use the session) and `absoluteMaxAge` from creation (30 days, never extended).
 - **Opened only when used.** A request that never reads the session (a JSON endpoint, an image) doesn't unseal its cookie or read the store. Routes that never need one can say so with `session: false`: see [sessions](09-sessions-and-auth.md#routes-without-a-session).
-- **Crashes don't save.** If a request ends in an unhandled crash (anything but an `HttpError`), its session changes are thrown away, so a half-finished login or update never sticks.
+- **Crashes don't save.** If a request ends in an unhandled crash (anything but a `YerdError`), its session changes are thrown away, so a half-finished login or update never sticks.
 - **Not cached.** HTML pages sent to someone with a session (their session cookie came in, whether or not the page read it) get `Cache-Control: private, no-cache` unless the handler set its own, so neither a shared cache nor the browser's Back button replays a signed-in page to the wrong person. Pages for visitors without one stay cacheable, action forms and all. If you mark a page with forms cacheable yourself, send `Vary: Cookie` too: a cached page's tokens are for whoever it was rendered for.
 
 ### Signing in and out
@@ -140,7 +140,7 @@ When the secret changed, the server was redeployed, a token expired, or the page
 - **URL attributes.** `href`, `src`, `action`, `formaction` and friends turn `javascript:`, `vbscript:` and `data:` URLs into `about:blank#blocked` (`data:image/...` is allowed on `src` and `poster`), including tricks like `" java\tscript:"`.
 - **Inline scripts.** `<script>` and `<style>` contents are raw text. Hand data to a script with [json()](api:yerd.json), which escapes `<`, `>` and `&`. Text that would end the element early (`</script`) throws at render time.
 - **Headers.** A header value with a line break, NUL or other control character is refused before it's written, so request data can't split a response.
-- **Errors.** A thrown error that isn't an `HttpError` is a 500 with the body `Internal Server Error`; its message and stack go to the log only. `HttpError` messages are shown below 500 and hidden from 500 up (`expose`). The error page gets the thrown error as `error`; show its stack in development only (see [error pages](05-pages-and-layouts.md#error-pages)).
+- **Errors.** A thrown error that isn't a `YerdError` is a 500 with the body `Internal Server Error`; its message and stack go to the log only. `YerdError` messages are shown below 500 and hidden from 500 up (`expose`). The error page gets the thrown error as `error`; show its stack in development only (see [error pages](05-pages-and-layouts.md#error-pages)).
 - **Logs.** Fields named like secrets (`password`, `token`, `authorization`, `cookie`, `session`...) are redacted before any sink sees them. See [logging](10-logging.md#redaction-and-limits).
 
 ## Input

@@ -122,7 +122,7 @@ setInterval(() => document.body.classList.toggle("stalled", Date.now() - lastBea
 
 ### Errors mid-stream
 
-Once a stream has started, its status is already sent, so a thrown error becomes the last line or event instead. An [HttpError](api:yerd.HttpError)'s message is shown as is; anything else is logged and sent as `Internal Server Error`, so internals don't leak.
+Once a stream has started, its status is already sent, so a thrown error becomes the last line or event instead. A [YerdError](api:yerd.YerdError)'s message is shown as is; anything else is logged and sent as `Internal Server Error`, so internals don't leak.
 
 ## Streamed request bodies
 

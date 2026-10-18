@@ -443,7 +443,7 @@ node:http request                    src/server/app.ts (handle)
        JSX? wrap in root > group > route layouts, stream render
   -> first chunk rendered              (an error here still becomes the error page)
   -> on throw: the route's @catches, then app.onError, then the error page
-  -> session commit                    (only a session something opened; skipped when the handler crashed with a non-HttpError;
+  -> session commit                    (only a session something opened; skipped when the handler crashed with a non-YerdError;
                                         a session's first save carries its CSRF nonce)
   -> ServerResponse; scope disposed
 ```
@@ -466,7 +466,7 @@ Applies to handler results, guard results and `@catches` results alike.
 | `Uint8Array` / `Buffer`        | `application/octet-stream`                       |
 | `AsyncIterable` / generator    | chunked stream, each chunk coerced as string/bytes |
 | `Promise<T>`                   | awaited, then coerced                            |
-| thrown `HttpError`             | its status, via `@catches` or the error layout   |
+| thrown `YerdError`             | its status, via `@catches` or the error layout   |
 | thrown anything else           | `500`, stack page in dev, generic page in prod   |
 | plain object / array / boolean | `application/json`                               |
 
@@ -559,7 +559,7 @@ class Billing {
 - Return `true` to continue, a **string to redirect** (303). That's a deliberate
   exception to the coercion table, for loom parity, and applies to every guard
   including kit-made ones. `false` is `403`. Anything
-  else (number, JSX, `res()`, `HttpError`) is coerced as the response.
+  else (number, JSX, `res()`, `YerdError`) is coerced as the response.
 
 **Changed from loom:**
 - **Method-level guards.** Loom routes are whole components; yerd routes have
@@ -716,7 +716,7 @@ yerd/
       trie.ts             segment trie, match(), paramNames()
     respond/
       coerce.ts           the coercion table
-      response.ts         res(), redirect(), bare(), YerdResponse, HttpError
+      response.ts         res(), redirect(), bare(), YerdResponse, YerdError
       negotiate.ts        @accepts / negotiate() Accept matching
       stream.ts           sse(), ndjson(), event(), heartbeats
     jsx/
@@ -791,7 +791,7 @@ Each one ends with something runnable.
 `createAccessor` with field-type checking, `@param` / `@query` / `@header` /
 `@params`, `@body` / `@field` (promise-valued, lazy), DTO classes with `is.*` field decorators, and `@args`, all with `{ transform, validate, required }` options, typed transform pipelines and validators, segment-trie router, coercion table, streaming
 renderer with escaping, root + route layouts, `bare()`, `res()`, `redirect()`,
-`HttpError`, startup validation (`BootError`), `handle()` / `listen()`,
+`YerdError`, startup validation (`BootError`), `handle()` / `listen()`,
 `discover()` (directory or `import.meta.glob`), minimal Vite plugin (esbuild
 decorator transform, dev middleware, server hot reload). `examples/hello` runs
 under both `vite` and plain `node`. 65 vitest tests + compile-time type tests.
@@ -947,7 +947,7 @@ page. Auth landed as `createAuth` (`@auth.user`, `auth.required`,
   session id rotation on login, secret rotation ([AUTH.md](AUTH.md)).
 - Auth: `UserResolver`, `@user`, `@authenticated`, `@roles`, `@can`, `Auth.login`
   / `logout`, `hashPassword`, `safeNext`, bearer tokens, API keys.
-- `@catches`, `HttpError`, dev stack page.
+- `@catches`, `YerdError`, dev stack page.
 - Static files with ETag/304.
 - `discover()`.
 

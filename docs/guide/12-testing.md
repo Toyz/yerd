@@ -257,27 +257,27 @@ A guard made with `createGuard` keeps its function as `.run`. Call it with a sta
 
 ```ts
 import { expect, it } from "vitest";
-import { HttpError, createGuard, type YerdContext } from "@toyz/yerd";
+import { Forbidden, createGuard, type YerdContext } from "@toyz/yerd";
 
 const weekdays = createGuard("weekdays", (ctx) => {
   const day = new Date(ctx.headers.date ?? Date.now()).getDay();
-  return (day !== 0 && day !== 6) || new HttpError(403, "Closed on weekends");
+  return (day !== 0 && day !== 6) || new Forbidden("Closed on weekends");
 });
 
 it("closes on weekends", async () => {
   const saturday = { headers: { date: "Sat, 17 Oct 2026 12:00:00 GMT" } } as unknown as YerdContext;
   const result = await weekdays.run(saturday);
-  expect((result as HttpError).status).toBe(403);
+  expect(result).toBeInstanceOf(Forbidden);
 });
 ```
 
 A named `@guard` method is just a method on a service: `app.scope(() => resolve(Flags).beta(ctx))`.
 
-DTO classes are checked with [parse](api:yerd.parse), the same function `form.parse()` and `@body` use. It returns the typed object or throws a 400 `HttpError` with the issues in `details`.
+DTO classes are checked with [parse](api:yerd.parse), the same function `form.parse()` and `@body` use. It returns the typed object or throws a `ValidationFailed` (a 400) with the `issues`.
 
 ```ts
 import { expect, it } from "vitest";
-import { HttpError, parse } from "@toyz/yerd";
+import { ValidationFailed, parse } from "@toyz/yerd";
 
 it("validates signups", () => {
   expect(parse(SignupForm, { name: "ada", password: "correct horse" })).toEqual({ name: "ada", password: "correct horse" });
@@ -286,8 +286,8 @@ it("validates signups", () => {
     parse(SignupForm, { name: "a", password: "x" });
     expect.unreachable();
   } catch (error) {
-    expect(error).toBeInstanceOf(HttpError);
-    expect((error as HttpError).details).toMatchObject({ issues: [{ path: "name" }, { path: "password" }] });
+    expect(error).toBeInstanceOf(ValidationFailed);
+    expect((error as ValidationFailed).issues).toMatchObject([{ path: "name" }, { path: "password" }]);
   }
 });
 ```

@@ -226,10 +226,10 @@ export class DocsToc {
 
 ## Error pages
 
-Give the app an error page and 404s, thrown [HttpError](api:yerd.HttpError)s and crashes render as HTML inside your root layouts. It gets [ErrorPageProps](api:yerd.ErrorPageProps): the `status`, a `message` safe to show, and the `error` that was thrown.
+Give the app an error page and 404s, thrown [YerdError](api:yerd.YerdError)s and crashes render as HTML inside your root layouts. It gets [ErrorPageProps](api:yerd.ErrorPageProps): the `status`, a `message` safe to show, and the `error` that was thrown.
 
 ```tsx
-import { HttpError, yerd, type ErrorPageProps } from "@toyz/yerd";
+import { YerdError, yerd, type ErrorPageProps } from "@toyz/yerd";
 
 function ErrorPage({ status, message, error }: ErrorPageProps) {
   return (
@@ -237,7 +237,7 @@ function ErrorPage({ status, message, error }: ErrorPageProps) {
       <h1>{status === 404 ? "Nothing here" : "Something went wrong"}</h1>
       <p>{message}</p>
       {/* The real error, for you: only outside production. */}
-      {process.env.NODE_ENV !== "production" && error instanceof Error && !(error instanceof HttpError) ? <pre>{error.stack}</pre> : null}
+      {process.env.NODE_ENV !== "production" && error instanceof Error && !(error instanceof YerdError) ? <pre>{error.stack}</pre> : null}
       <a href="/">Home</a>
     </main>
   );
@@ -247,8 +247,8 @@ const app = yerd().layout(RootLayout).errorPage(ErrorPage);
 ```
 
 - Only requests that accept HTML get the page; API clients still get text or JSON.
-- `message` is the HttpError's message below 500, and the plain status text (`Internal Server Error`) otherwise. Internal error messages never reach the page unless you render `error` yourself.
-- `error` is what was thrown: an `HttpError` for a 404 or anything you threw on purpose, or whatever crashed. Use it to tell cases apart (`error instanceof NotSignedIn`) or to show the stack in development. Don't print its message or stack in production: it can hold secrets, SQL or file paths.
+- `message` is the YerdError's message below 500, and the plain status text (`Internal Server Error`) otherwise. Internal error messages never reach the page unless you render `error` yourself.
+- `error` is what was thrown: a `YerdError` (a `NotFound` for an unknown path) or anything you threw on purpose, or whatever crashed. Use it to tell cases apart (`error instanceof NotSignedIn`) or to show the stack in development. Don't print its message or stack in production: it can hold secrets, SQL or file paths.
 - `meta.title` is the message, unless the route already set a title.
 
 ## Assets

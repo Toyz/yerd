@@ -322,13 +322,13 @@ The default session store keeps everything in a sealed cookie, so there's still 
 
 ## 6. Errors next to the form
 
-`form.parse()` throws an [HttpError](api:yerd.HttpError) (a 400) carrying every issue. Catch it, flash the first message and what the user typed, and let the action return as usual: the redirect brings them back to a page that shows both.
+`form.parse()` throws a [ValidationFailed](api:yerd.ValidationFailed) (a 400) carrying every issue. Catch it, flash the first message and what the user typed, and let the action return as usual: the redirect brings them back to a page that shows both.
 
-Add a helper and a type at the top of `src/routes/home.tsx`, and add `HttpError` and `type Issue` to the import:
+Add a helper and a type at the top of `src/routes/home.tsx`, and add `YerdError` and `ValidationFailed` to the import:
 
 ```tsx
 // src/routes/home.tsx (new, above the class)
-import { ActionForm, HttpError, action, get, inject, route, session, type Issue, type Session } from "@toyz/yerd";
+import { ActionForm, ValidationFailed, YerdError, action, get, inject, route, session, type Session } from "@toyz/yerd";
 
 interface Draft {
   title?: string;
@@ -337,9 +337,9 @@ interface Draft {
 
 /** The first validation message, or the error's own. Anything else is a real bug: let it crash. */
 function messageOf(error: unknown): string {
-  if (!(error instanceof HttpError)) throw error;
-  const issues = (error.details as { issues?: Issue[] } | undefined)?.issues;
-  return issues?.[0]?.message ?? error.message;
+  if (!(error instanceof YerdError)) throw error;
+  const issues = error instanceof ValidationFailed ? error.issues : [];
+  return issues[0]?.message ?? error.message;
 }
 ```
 
@@ -398,7 +398,7 @@ Here's the whole file:
 
 ```tsx
 // src/routes/home.tsx
-import { ActionForm, HttpError, Region, action, get, inject, route, session, type Issue, type Session } from "@toyz/yerd";
+import { ActionForm, Region, ValidationFailed, YerdError, action, get, inject, route, session, type Session } from "@toyz/yerd";
 import { Links, NewLink } from "../links.js";
 
 interface Draft {
@@ -408,9 +408,9 @@ interface Draft {
 
 /** The first validation message, or the error's own. Anything else is a real bug: let it crash. */
 function messageOf(error: unknown): string {
-  if (!(error instanceof HttpError)) throw error;
-  const issues = (error.details as { issues?: Issue[] } | undefined)?.issues;
-  return issues?.[0]?.message ?? error.message;
+  if (!(error instanceof YerdError)) throw error;
+  const issues = error instanceof ValidationFailed ? error.issues : [];
+  return issues[0]?.message ?? error.message;
 }
 
 @route("/", { meta: { title: "Links" } })

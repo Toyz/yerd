@@ -40,7 +40,7 @@ The checkout emits; three services react.
 
 ```tsx
 // src/routes/checkout.tsx
-import { Events, HttpError, action, get, inject, redirect, route, session, type Session } from "@toyz/yerd";
+import { Events, Unauthorized, action, get, inject, redirect, route, session, type Session } from "@toyz/yerd";
 import { OrderPlaced } from "../events.js";
 import { Orders, Payments } from "../orders.js";
 
@@ -61,7 +61,7 @@ export class Checkout {
 
   @action async place() {
     const userId = this.session.userId;
-    if (!userId) throw new HttpError(401, "Sign in first");
+    if (!userId) throw new Unauthorized("Sign in first");
     const order = this.orders.place(userId);
     this.events.emit(new OrderPlaced(order.id, userId, order.totalCents));
     // If the card is declined, this throws: the request fails and the event is dropped.
@@ -198,7 +198,7 @@ The cart asks for a shipping price without knowing who works it out.
 
 ```ts
 // src/shipping.ts
-import { Call, HttpError, handles, named, service } from "@toyz/yerd";
+import { Call, YerdError, handles, named, service } from "@toyz/yerd";
 
 @named("shipping.quote")
 export class QuoteShipping extends Call<number> {
@@ -216,7 +216,7 @@ const BASE: Record<string, number> = { US: 499, PT: 899, JP: 1199 };
 export class Shipping {
   @handles(QuoteShipping) quote(q: QuoteShipping): number {
     const base = BASE[q.country];
-    if (base === undefined) throw new HttpError(422, `We don't ship to ${q.country} yet`);
+    if (base === undefined) throw new YerdError(422, `We don't ship to ${q.country} yet`);
     return base + Math.ceil(q.grams / 1000) * 150;
   }
 }
@@ -224,7 +224,7 @@ export class Shipping {
 
 ```tsx
 // src/routes/cart.tsx
-import { ActionForm, Events, HttpError, Region, action, get, inject, route } from "@toyz/yerd";
+import { ActionForm, Events, YerdError, Region, action, get, inject, route } from "@toyz/yerd";
 import { QuoteShipping } from "../shipping.js";
 
 @route("/cart")
@@ -257,9 +257,9 @@ export class CartPage {
     try {
       return await this.estimate(country);
     } catch (error) {
-      if (!(error instanceof HttpError)) throw error;
-      // The handler's 422 arrives as an HttpError; as an issue for "country" it lands in that field's box.
-      throw new HttpError(error.status, error.message, { details: { issues: [{ path: "country", message: error.message }] } });
+      if (!(error instanceof YerdError)) throw error;
+      // The handler's 422 arrives as a YerdError; as an issue for "country" it lands in that field's box.
+      throw new YerdError(error.status, error.message, { details: { issues: [{ path: "country", message: error.message }] } });
     }
   }
 }
@@ -267,7 +267,7 @@ export class CartPage {
 
 What to know about calls:
 
-- **Errors cross over.** An `HttpError` thrown by the handler reaches the caller as an `HttpError` with the same status and message, so a 422 from `Shipping` can be a 422 from your route. Any other failure arrives as a plain `Error` with the handler's message (and is logged on the handler's side).
+- **Errors cross over.** A `YerdError` thrown by the handler reaches the caller as yerd's class for its status (a `Conflict` for a 409) with the same message, code and details, so a 422 from `Shipping` can be a 422 from your route. Any other failure arrives as a plain `Error` with the handler's message (and is logged on the handler's side).
 - **One answer.** Two `@handles` for the same call class is a boot error. `@handles` belongs on a singleton service, like `@on`.
 - **Nobody home.** In memory, a call nothing answers fails at once: `Nothing answers shipping.quote`. Over a transport that can't count its listeners, it waits for `timeout` (default `"10s"`) and then fails.
 - **Not deferred.** Unlike `emit()`, a call goes out immediately, even inside a request: you're waiting for it. If the request fails later, the call already happened.

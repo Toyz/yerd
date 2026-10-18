@@ -340,7 +340,7 @@ Drag and drop needs the client runtime, so give important moves another way in t
 A `drop:files` target posts the files straight to its action as soon as they land. They arrive as multipart, under `files`:
 
 ```tsx
-import { ActionForm, HttpError, Region, action, get, route } from "@toyz/yerd";
+import { ActionForm, Region, UnsupportedMediaType, action, get, route } from "@toyz/yerd";
 
 const uploads: { name: string; bytes: number }[] = [];
 
@@ -364,7 +364,7 @@ export class Inbox {
   @action async upload(_: {}, form: ActionForm) {
     for (const file of form.files("files")) {
       // `accept` filters in the browser; the server still decides.
-      if (!file.type.startsWith("image/") && file.type !== "application/pdf") throw new HttpError(415, `${file.name} isn't a photo or a PDF`);
+      if (!file.type.startsWith("image/") && file.type !== "application/pdf") throw new UnsupportedMediaType(`${file.name} isn't a photo or a PDF`);
       uploads.push({ name: file.name, bytes: (await file.arrayBuffer()).byteLength });
     }
     return this.list();
@@ -483,7 +483,7 @@ Give file forms `enctype="multipart/form-data"`: the runtime switches to multipa
 
 ### Errors
 
-Throw an [HttpError](api:yerd.HttpError) (or let `parse()` throw one) and, with JavaScript, its message is written into the form's `[data-yx-error]` element.
+Throw a [YerdError](api:yerd.YerdError) (or let `parse()` throw one) and, with JavaScript, its message is written into the form's `[data-yx-error]` element.
 
 Validation failures go by field. Each invalid field gets `aria-invalid="true"` (style it with `[aria-invalid="true"]`), the first one is focused, and its message goes:
 

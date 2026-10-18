@@ -182,7 +182,7 @@ With the client runtime this takes no code: throw (or let `form.parse()` throw) 
 
 ```tsx
 // src/routes/signup.tsx
-import { ActionForm, HttpError, action, between, currentContext, get, is, length, redirect, route, session, trim, type Issue, type Session } from "@toyz/yerd";
+import { ActionForm, ValidationFailed, YerdError, action, between, currentContext, get, is, length, redirect, route, session, trim, type Session } from "@toyz/yerd";
 
 class Signup {
   @is.string({ transform: trim, validate: length(2, 40) }) name!: string;
@@ -196,8 +196,8 @@ interface FormState {
 }
 
 /** One message per field; "tags[1]" belongs to "tags", "(root)" to the form. */
-function byField(error: HttpError): Record<string, string> {
-  const issues = (error.details as { issues?: Issue[] } | undefined)?.issues ?? [{ path: "", message: error.message }];
+function byField(error: YerdError): Record<string, string> {
+  const issues = error instanceof ValidationFailed ? error.issues : [{ path: "", message: error.message }];
   const errors: Record<string, string> = {};
   for (const { path, message } of issues) {
     const field = path === "(root)" ? "" : path.replace(/(\[\d+\])+$/, "");
@@ -241,7 +241,7 @@ export class SignupPage {
     } catch (error) {
       // From the runtime (it sends a `yx` header): rethrow, and the issues land by field.
       const fromScript = currentContext().headers.yx !== undefined;
-      if (!(error instanceof HttpError) || error.status >= 500 || fromScript) throw error;
+      if (!(error instanceof YerdError) || error.status >= 500 || fromScript) throw error;
       // A plain form post: keep the messages and the input for the page we go back to.
       const draft = { name: form.get("name"), email: form.get("email"), age: form.get("age") };
       this.session.flash("signup", { errors: byField(error), draft } satisfies FormState);
@@ -256,7 +256,7 @@ export class SignupPage {
 - **One markup for both.** The boxes the server fills are the same `[data-yx-error="name"]` elements the runtime writes into, so the page looks the same either way. The runtime clears them all on the next submit.
 - **Labels.** A message with no box of its own goes into the form's `[data-yx-error]` box, prefixed with the field's `<label>` ("Age: Must be from 13 to 120 (got 7)").
 - **Lists.** An issue for `photos[2]` goes to the `photos` box unless the form has a `photos[2]` box.
-- **Your own errors.** To put a message under a field from your own check (the email is taken), throw an `HttpError` with `details: { issues: [{ path: "email", message: "That email is taken" }] }`.
+- **Your own errors.** To put a message under a field from your own check (the email is taken), throw `new ValidationFailed("That email is taken", { issues: [{ path: "email", message: "That email is taken" }] })`.
 - **Never redisplay secrets.** Leave passwords and card numbers out of the flashed draft.
 
 ## Upload photos with a form
@@ -504,7 +504,7 @@ An export runs in the background; its page shows progress and swaps in a downloa
 
 ```tsx
 // src/routes/export.tsx
-import { HttpError, Region, action, every, get, inject, param, route, service } from "@toyz/yerd";
+import { NotFound, Region, action, every, get, inject, param, route, service } from "@toyz/yerd";
 
 interface Job {
   id: string;
@@ -541,7 +541,7 @@ export class ExportPage {
 
   status() {
     const job = this.exports.get(this.id);
-    if (!job) throw new HttpError(404, "No such export");
+    if (!job) throw new NotFound("No such export");
     if (job.progress >= 100) {
       // No trigger on this one, so the polling stops.
       return <Region id="status"><a href={`/exports/${job.id}.csv`} download>Download</a></Region>;
