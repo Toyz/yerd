@@ -1,8 +1,6 @@
 # Recipes
 
-This page is a set of complete solutions to common tasks, each built from several of yerd's pieces. Every recipe says what it uses and links to the guide that explains each part.
-
-More recipes live next to the feature they're about:
+Complete solutions to common tasks, each linking to the guides for the pieces it uses. More recipes live next to their feature:
 
 | Task | Where |
 | --- | --- |
@@ -19,13 +17,13 @@ More recipes live next to the feature they're about:
 | PATCH that only changes what was sent | [Partial updates](03-request-data.md#partial-updates-patch) |
 | Timing every request | [Middleware](02-routing.md#middleware) |
 
-The examples keep data in memory so they stay short. Swap the services for your database.
+The examples keep data in memory; swap the services for your database.
 
 ## Show a saved cart after sign-in
 
-A guest fills a cart, signs in, and finds their cart merged with what they left in it last week, on another device. Uses a [session shape class](09-sessions-and-auth.md#a-class-for-methods-and-defaults), [createAuth hooks](09-sessions-and-auth.md#keeping-a-guests-cart-across-sign-in) and a [service](08-services.md).
+A guest fills a cart, signs in, and finds it merged with the one they left last week on another device. Uses a [session shape class](09-sessions-and-auth.md#a-class-for-methods-and-defaults), [createAuth hooks](09-sessions-and-auth.md#keeping-a-guests-cart-across-sign-in) and a [service](08-services.md).
 
-The cart is a session shape: its methods work on the session, and only `lines` is stored.
+The cart is a session shape; only `lines` is stored.
 
 ```ts
 // src/cart.ts
@@ -91,7 +89,7 @@ export function mergeCarts(saved: Line[], guest: Line[]): Line[] {
 }
 ```
 
-The hooks do the merging. `onLogin` runs after `login()` has rotated the session; `onLogout` runs before `logout()` destroys it. They get the plain session, and `session.as(Cart)` gives them the same cart view the route has.
+The auth hooks merge on sign-in and save on sign-out, using `session.as(Cart)` for the cart view:
 
 ```ts
 // src/auth.ts
@@ -116,7 +114,7 @@ export const auth = createAuth<User>({
 });
 ```
 
-The cart page reads the cart through the shape, says "welcome back" once, and saves a signed-in user's cart on every change: someone who never signs out never runs `onLogout`.
+The cart page says "welcome back" once, and saves a signed-in user's cart on every change, since someone who never signs out never runs `onLogout`:
 
 ```tsx
 // src/routes/cart.tsx
@@ -167,18 +165,16 @@ export class CartPage {
 }
 ```
 
-Gotchas:
-
-- **A different user on the same browser.** If someone else was still signed in, `login()` starts a fresh session, so their cart doesn't join the new user's. Only a guest's cart is merged.
-- **Logout empties the cart on screen.** The session is destroyed; the saved copy comes back at the next sign-in.
-- **Cookie size.** With the default `CookieStore` the whole session, cart included, has to fit in about 4 KB. Big carts need [a store](09-sessions-and-auth.md#which-store).
-- **Prices change.** Store ids and quantities, and look prices up when you show the cart, not when it was filled.
+- **Only a guest's cart is merged.** If someone else was still signed in, `login()` starts a fresh session.
+- **Logout empties the cart on screen.** The saved copy comes back at the next sign-in.
+- **Cookie size.** With the default `CookieStore` the whole session must fit in about 4 KB; big carts need [a store](09-sessions-and-auth.md#which-store).
+- **Prices change.** Store ids and quantities; look prices up when showing the cart.
 
 ## Per-field form errors
 
 Each message under its own field, with and without JavaScript. Uses [DTO validation](03-request-data.md#bodies-and-dto-classes), [field error boxes](06-interactivity.md#errors) and [flash](09-sessions-and-auth.md#the-session-api).
 
-With the client runtime this takes no code: throw (or let `form.parse()` throw) and each message lands in the form's `[data-yx-error="<field>"]` box, the field gets `aria-invalid="true"`, and the first one is focused. Without JavaScript the browser would get the error page instead, so the action catches the failure, flashes the messages and what was typed, and redirects back to a page that renders them in the same boxes.
+With the client runtime, a thrown validation error already lands in each field's `[data-yx-error="<field>"]` box. Without JavaScript the browser would get the error page, so the action catches the failure, flashes the messages and input, and redirects back to a page that renders them in the same boxes.
 
 ```tsx
 // src/routes/signup.tsx
@@ -253,15 +249,14 @@ export class SignupPage {
 }
 ```
 
-- **One markup for both.** The boxes the server fills are the same `[data-yx-error="name"]` elements the runtime writes into, so the page looks the same either way. The runtime clears them all on the next submit.
-- **Labels.** A message with no box of its own goes into the form's `[data-yx-error]` box, prefixed with the field's `<label>` ("Age: Must be from 13 to 120 (got 7)").
-- **Lists.** An issue for `photos[2]` goes to the `photos` box unless the form has a `photos[2]` box.
-- **Your own errors.** To put a message under a field from your own check (the email is taken), throw `new ValidationFailed("That email is taken", { issues: [{ path: "email", message: "That email is taken" }] })`.
+- **One markup for both.** The server fills the same boxes the runtime writes into (and clears on the next submit).
+- **Your own errors.** For a check of your own (the email is taken), throw an `YerdError` with `details: { issues: [{ path: "email", message: "That email is taken" }] }`.
 - **Never redisplay secrets.** Leave passwords and card numbers out of the flashed draft.
+- How unmatched and list-item messages are placed is in [field error boxes](06-interactivity.md#errors).
 
 ## Upload photos with a form
 
-A post with a title and up to ten photos, picked with the file input or dropped on a zone, sent when the form submits. Uses [is.files](03-request-data.md#uploads), [dropTo](06-interactivity.md#dropping-files) and the app's `bodyLimit`.
+A post with a title and up to ten photos, picked or dropped, sent on submit. Uses [is.files](03-request-data.md#uploads), [dropTo](06-interactivity.md#dropping-files) and the app's `bodyLimit`.
 
 ```tsx
 // src/routes/new-post.tsx
@@ -326,15 +321,14 @@ export default yerd({ bodyLimit: 55 * 1024 * 1024 });
 .dropzone[data-yx-over] { outline: 2px dashed currentColor; }
 ```
 
-- **Two limits.** `maxSize` limits each file (a bigger one is an issue for `photos[n]`). `bodyLimit` (1 MiB by default) caps the whole request, and a request over it is a 413 before your action runs. Raise it to cover all the files together, plus the other fields.
-- **Types are what the browser says.** `types` checks each file's declared mime type, and `accept` only filters the picker and the drop zone. Check the bytes too if it matters (an image library will refuse a renamed `.exe`).
-- **Staging.** Drops add to the input (drop five, then five more: ten), filtered by its `accept`. The zone gets `data-yx-files` with the count, for the CSS above. Without JavaScript the zone does nothing and the input still works.
-- **Nothing picked.** An empty file input counts as no file, so `optional: true` works and `post.photos` is `undefined`.
-- **Memory.** The body is read into memory before the action runs. For uploads in the hundreds of megabytes, send them straight to object storage from the browser (a presigned URL) and post only the result.
+- **Two limits.** `maxSize` is per file (an issue for `photos[n]`); `bodyLimit` caps the whole request (413 before the action). Raise it to fit all files plus fields.
+- **Types are what the browser says.** `types` checks the declared mime type and `accept` only filters the picker and drops. Check the bytes if it matters.
+- **Staging.** Drops add to the input, filtered by `accept`; the zone gets `data-yx-files` with the count. Without JavaScript the input still works.
+- **Memory.** The body is read into memory first. For huge uploads, send them from the browser straight to object storage (a presigned URL) and post the result.
 
 ## Kanban drag and drop
 
-A board with three columns: drag cards between them, drop a card on another to put it above, drop on the bin to delete, and every open board updates. Uses [drop triggers](06-interactivity.md#drag-and-drop), [Regions](06-interactivity.md#regions), [validation of browser values](15-security.md#values-the-browser-fills-in) and [live refresh](06-interactivity.md#live-refresh).
+Drag cards between three columns, drop on a card to go above it, drop on the bin to delete; every open board updates. Uses [drop triggers](06-interactivity.md#drag-and-drop), [Regions](06-interactivity.md#regions), [validation of browser values](15-security.md#values-the-browser-fills-in) and [live refresh](06-interactivity.md#live-refresh).
 
 ```ts
 // src/board.ts
@@ -491,16 +485,16 @@ export class BoardPage {
 .column[data-yx-over], .card[data-yx-over], .bin[data-yx-over] { outline: 2px dashed currentColor; }
 ```
 
-- **Where values come from.** `to: status` and `before: card.id` are written by the server and signed. `drag.data("id")` is read in the browser when the card lands, so it's input: `parse(Move, args)` checks it before the board sees it.
-- **The innermost target wins.** Dropping on a card triggers the card's action (put it above), not the column's. Dropping a card on itself goes to the column around it.
-- **`drop:.card`** keeps the bin from taking anything else that's draggable on the page.
-- **Confirm works anywhere.** `data-yx-confirm` asks before any action fires, not only forms.
-- **Every board updates.** Each change publishes to `boardChannel`; open boards get an SSE message and refresh their Regions. The board that made the change already has the new columns from the action's response.
-- **Check permissions.** On a real board, check in `move` and `remove` that the user may change that card.
+- **Where values come from.** `to` and `before` are server-written and signed; `drag.data("id")` is read in the browser, so `parse(Move, args)` validates it.
+- **The innermost target wins.** Dropping on a card runs the card's action, not the column's; dropping a card on itself goes to its column.
+- **`drop:.card`** keeps the bin from taking anything else draggable.
+- **`data-yx-confirm`** works on any action, not only forms.
+- **Every board updates** through `boardChannel` and live refresh.
+- **Check permissions** in `move` and `remove` on a real board.
 
 ## Poll a long job until it's done
 
-An export runs in the background; its page shows progress and swaps in a download link when it's ready. Uses the [`every` trigger](06-interactivity.md#triggers) and [`@every`](08-services.md#lifecycle-boot-timers-shutdown).
+A background export's page shows progress, then a download link. Uses the [`every` trigger](06-interactivity.md#triggers) and [`@every`](08-services.md#lifecycle-boot-timers-shutdown).
 
 ```tsx
 // src/routes/export.tsx
@@ -559,14 +553,14 @@ export class ExportPage {
 }
 ```
 
-- **It stops by itself.** The runtime follows trigger changes: once a response replaces the Region with one that has no trigger, the timer ends.
-- **Only while someone's looking.** `every` runs while the element is on the page and the tab is visible, and never faster than every 250 ms.
-- **No JavaScript, no polling.** The page still shows the progress at load time; add `<meta http-equiv="refresh" content="5">` inside a `<noscript>` if that matters.
-- **Many watchers?** Polling costs a request per viewer per tick. When many people watch the same thing, push instead: publish to a channel when the job moves and use [live refresh](06-interactivity.md#live-refresh).
+- **It stops by itself** once a response replaces the Region with one that has no trigger.
+- **Only while someone's looking:** `every` runs while the element is on the page and the tab is visible, at most every 250 ms.
+- **No JavaScript, no polling.** Add `<meta http-equiv="refresh" content="5">` in a `<noscript>` if that matters.
+- **Many watchers?** Push instead: publish to a channel when the job moves and use [live refresh](06-interactivity.md#live-refresh).
 
 ## Load a slow panel after the page
 
-A dashboard whose stats take seconds to compute: show the page at once and fill the panel in when it's ready. Uses the [`load` trigger](06-interactivity.md#triggers).
+Show a dashboard at once and fill in its slow stats panel when ready. Uses the [`load` trigger](06-interactivity.md#triggers).
 
 ```tsx
 // src/routes/dashboard.tsx
@@ -602,7 +596,7 @@ export class Dashboard {
 }
 ```
 
-`load` fires once per render: the Region that comes back has no trigger, so it doesn't loop. Compare the alternatives:
+`load` fires once per render; the returned Region has no trigger, so it doesn't loop. The alternatives:
 
 | | The page arrives | Without JavaScript |
 | --- | --- | --- |
