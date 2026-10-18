@@ -16,7 +16,7 @@
  * Types only; nothing here exists at runtime.
  */
 
-import type { Action, BoundAction } from "../actions/action.js";
+import type { ActionLambda, BoundAction } from "../actions/action.js";
 import type { ClassValue } from "../render/attrs.js";
 import type { Child } from "./jsx-runtime.js";
 import type { PrefetchValue } from "../attributes/attribute.js";
@@ -47,8 +47,35 @@ export interface CSSProperties {
  */
 export type EventHandler = { bivarianceHack(event: Event): unknown }["bivarianceHack"] | string;
 
-/** Things yerd can turn into a form submission target. */
-export type FormActionValue = string | Action<any> | BoundAction<any>;
+/**
+ * A yerd action: a lambda calling one @action method (`() => this.remove({ id })`),
+ * an action that takes no arguments (`this.add`), or bind(...) of one.
+ */
+export type ActionValue = ActionLambda | BoundAction<any>;
+
+/** Things yerd can turn into a form submission target: a URL or an action. */
+export type FormActionValue = string | ActionValue;
+
+type TriggerEvent =
+  | "click" | "dblclick" | "input" | "change" | "submit"
+  | "keydown" | "keyup" | "keypress" | "focus" | "blur" | "focusin" | "focusout"
+  | "mouseenter" | "mouseleave" | "pointerdown" | "pointerup" | "toggle";
+
+/**
+ * When an element's action fires. Any DOM event (`"click"`, `"keyup"`, or a
+ * custom one), optionally debounced (`"input 250ms"`) or filtered by key
+ * (`"keydown:Enter"`); `"visible"` when it scrolls into view (once per
+ * render: infinite scroll); `"load"` as soon as the page has it; `"every 5s"`
+ * on a timer while it's on the page and the tab is visible.
+ */
+export type ActionTrigger =
+  | TriggerEvent
+  | `${TriggerEvent} ${number}ms`
+  | `${"keydown" | "keyup"}:${string}`
+  | "visible"
+  | "load"
+  | `every ${number}${"s" | "ms"}`
+  | (string & {});
 
 export type HTMLAttributeReferrerPolicy =
   | ""
@@ -138,6 +165,15 @@ export interface CustomAttributes {
 /** Attributes every HTML element accepts. */
 export interface GlobalAttributes extends CustomAttributes {
   children?: Child;
+  /**
+   * A yerd action this element runs when `trigger` fires (default: click),
+   * with the client runtime: `<button action={() => this.remove({ id })}>`,
+   * `<input action={({ el }) => this.search({ q: el.value })} trigger="input 250ms">`.
+   * Use a form when it must work without JavaScript.
+   */
+  action?: ActionValue;
+  /** When `action` fires. See ActionTrigger. */
+  trigger?: ActionTrigger;
   /** Not an attribute: the JSX key. On an element it renders as `data-key`. */
   key?: string | number;
 
@@ -324,7 +360,7 @@ export interface FieldsetAttributes extends GlobalAttributes {
 }
 
 /** Attributes for `<form>`. */
-export interface FormAttributes extends GlobalAttributes {
+export interface FormAttributes extends Omit<GlobalAttributes, "action"> {
   /**
    * A URL, or a yerd action. An action renders as a POST to the owning route
    * with a signed token, so `method` is set for you.

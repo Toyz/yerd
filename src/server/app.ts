@@ -21,7 +21,7 @@ import { coerce, type Outgoing } from "../respond/coerce.js";
 import { HttpError } from "../respond/response.js";
 import { LONG_LIVED } from "../respond/stream.js";
 import { Channels } from "../live/channels.js";
-import { ACTIONS, ActionForm, CSRF_FIELD, checkActionToken, resolveSecrets, safeBack, verifyAction } from "../actions/action.js";
+import { ACTIONS, ActionForm, CSRF_FIELD, checkActionToken, fillHoles, resolveSecrets, safeBack, verifyAction } from "../actions/action.js";
 import { CLASS_GUARDS, METHOD_GUARDS, guardRegistry, isGuardRef, resetGuardRegistry, type GuardSpec } from "../decorators/guards.js";
 import { SessionManager, checkSessionOptions, type LoadedSession } from "../session/manager.js";
 import type { SessionOptions } from "../session/session.js";
@@ -1193,7 +1193,8 @@ export class YerdApp {
     (context as RequestContext).declared = METHOD_RESPONSE.from(owner.def.metadata)?.get(payload.a);
     const instance = this.#routeInstance(owner, scope);
     const fn = instance[payload.a] as (args: unknown, form: ActionForm) => unknown;
-    const result = await fn.call(instance, payload.p, new ActionForm(parsed.value, parsed.files));
+    const args = fillHoles(payload.p, payload.h, parsed.value);
+    const result = await fn.call(instance, args, new ActionForm(parsed.value, parsed.files));
 
     const fromScript = context.headers["yx"] !== undefined;
     if (fromScript) {

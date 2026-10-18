@@ -54,7 +54,7 @@ export interface YerdContext {
   /** Page metadata for layouts: group and route meta, plus whatever setMeta() added. */
   readonly meta: PageMeta;
   /** Sign an action token with the app secret (used when rendering action forms). */
-  signAction(payload: { c: string; a: string; p: unknown }): string;
+  signAction(payload: { c: string; a: string; p: unknown; h?: string[][] }): string;
   /** Per-request memo for accessor values. */
   readonly memo: Map<unknown, unknown>;
   /**

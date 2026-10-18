@@ -33,11 +33,11 @@ export {
   type ServiceOptions, type HostedService, type EveryOptions,
 } from "./di/decorators.js";
 export { renderToString, renderToStream, type RenderOptions } from "./render/render.js";
-export { action, bind, ActionForm, type Action, type BoundAction } from "./actions/action.js";
+export { action, bind, ActionForm, type Action, type ActionElement, type ActionLambda, type ActionScope, type BoundAction } from "./actions/action.js";
 export { assetUrl, useManifest, resetManifest, Stylesheet } from "./assets.js";
 export { mimeType, type StaticOptions } from "./server/static.js";
 export type { FormFiles } from "./server/body.js";
-export { Form, Region, Scripts, RUNTIME_PATH, type FormProps, type RegionProps } from "./actions/components.js";
+export { Region, Scripts, RUNTIME_PATH, type RegionProps } from "./actions/components.js";
 export { raw, escapeHtml, json, type RawHtml } from "./render/escape.js";
 export { Dynamic, type DynamicProps } from "./render/dynamic.js";
 export { Local, not, type LocalProps } from "./render/local.js";
@@ -55,7 +55,7 @@ export {
   type YerdClient, type PrefetchValue, type PrefetchMode,
 } from "./attributes/attribute.js";
 export type {
-  CustomAttributes, GlobalAttributes, VoidAttributes, CSSProperties, EventHandler, FormActionValue, InputType, Nullable,
+  CustomAttributes, GlobalAttributes, VoidAttributes, CSSProperties, EventHandler, ActionTrigger, ActionValue, FormActionValue, InputType, Nullable,
   HTMLElements, SVGElements, SVGAttributes, CustomElementAttributes, IntrinsicElements,
   AnchorAttributes, ButtonAttributes, FormAttributes, ImgAttributes, InputAttributes, LabelAttributes,
   LinkAttributes, MetaAttributes, OptionAttributes, ScriptAttributes, SelectAttributes, TextareaAttributes,

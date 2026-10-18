@@ -160,14 +160,26 @@ function renderNode(node: YerdNode, state: State): Step {
   let attrs = props;
   let hidden = "";
   if (type === "form") {
-    // <form action={this.add}>: a POST to the owning route, carrying a signed token.
-    if (isAction(props.action) || isBoundAction(props.action)) {
+    // <form action={this.add}> / action={() => this.remove({ id })}: a POST to the owning route, carrying a signed token.
+    if (isActionValue(props.action)) {
       const target = formAction(props.action as Parameters<typeof formAction>[0]);
-      attrs = { ...props, action: target.url, method: "post", "data-yx": true };
+      const { trigger, ...rest } = props;
+      attrs = { ...rest, action: target.url, method: "post", "data-yx": true, "data-yx-trigger": trigger, "data-yx-holes": holesAttr(target.holes) };
       hidden = `<input type="hidden" name="_yx" value="${escapeHtml(target.token)}">`;
     }
   } else if ((type === "button" || type === "input") && (props.formaction !== undefined || props.formAction !== undefined)) {
     attrs = submitterAttributes(type, props, state);
+  } else if (isActionValue(props.action)) {
+    // An action on any other element: the runtime posts it when `trigger` fires (default: click).
+    const target = formAction(props.action as Parameters<typeof formAction>[0]);
+    const { action: _, trigger, ...rest } = props;
+    attrs = {
+      ...rest,
+      "data-yx-action": target.url,
+      "data-yx-token": target.token,
+      "data-yx-trigger": trigger ?? "click",
+      "data-yx-holes": holesAttr(target.holes),
+    };
   }
 
   const key = node.key === undefined || props["data-key"] !== undefined ? "" : ` data-key="${escapeHtml(String(node.key))}"`;
@@ -183,6 +195,16 @@ function renderNode(node: YerdNode, state: State): Step {
   if (step) return step.then(() => write(state, close));
   write(state, close);
   return undefined;
+}
+
+/** An @action, a lambda calling one, or bind(...) of one. */
+function isActionValue(value: unknown): boolean {
+  return typeof value === "function" || isBoundAction(value);
+}
+
+/** What the browser fills in when the action fires, for the runtime: JSON, or no attribute. */
+function holesAttr(holes: string[][] | undefined): string | undefined {
+  return holes?.length ? JSON.stringify(holes) : undefined;
 }
 
 /** Children a void element may be given: nothing, in any spelling. */
@@ -204,14 +226,14 @@ function submitterAttributes(type: string, props: Record<string, unknown>, state
   const prop = props.formaction !== undefined ? "formaction" : "formAction";
   const value = props[prop];
   // Strings are plain URLs; anything else that isn't an action is renderAttributes' to reject.
-  if (!isAction(value) && !isBoundAction(value)) return props;
+  if (!isActionValue(value)) return props;
   const submits = type === "button" ? props.type === undefined || props.type === "submit" : props.type === "submit";
   if (!submits) throw new TypeError(`${prop}={action} needs a submit button: <button> or <input type="submit">`);
   if (props.name !== undefined || props.value !== undefined) {
     throw new TypeError(`<${type} ${prop}={action}> can't have its own name or value: it submits the action token as name="_yx"`);
   }
   const target = formAction(value as Parameters<typeof formAction>[0]);
-  return { ...props, [prop]: target.url, formmethod: "post", name: "_yx", value: target.token };
+  return { ...props, [prop]: target.url, formmethod: "post", name: "_yx", value: target.token, "data-yx-holes": holesAttr(target.holes) };
 }
 
 // What would end a raw text element early, or (in a script) put the parser

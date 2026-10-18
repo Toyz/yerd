@@ -18,7 +18,7 @@ import { createKey } from "../decorators/keys.js";
 import { resolveRoute, routeRegistry } from "../decorators/route.js";
 import { HttpError } from "../respond/response.js";
 import { Logger } from "../log/logger.js";
-import { currentContext } from "../server/context.js";
+import { currentContext, type YerdContext } from "../server/context.js";
 import { withFiles, type FormFields, type FormFiles } from "../server/body.js";
 import { parse, type DtoClass } from "../decorators/dto.js";
 
@@ -74,8 +74,63 @@ export class ActionForm {
   }
 }
 
-/** The shape of an action method: bound args first, then the form. */
-export type Action<A = {}> = (args: A, form: ActionForm) => unknown;
+/**
+ * The shape of an action method: bound args first, then the form. The form
+ * is optional here so a component can call one in an action lambda
+ * (`() => bump({ id })`) without inventing one.
+ */
+// Method syntax, so an action declared with a required form still fits.
+export type Action<A = {}> = { bivarianceHack(args: A, form?: ActionForm): unknown }["bivarianceHack"];
+
+/**
+ * An element's live state, read in an action lambda: `el.value` is whatever
+ * the input holds when the action fires. Values are filled in by the browser,
+ * so pass them straight into the action's arguments (`{ q: el.value }`);
+ * computing with them while the page renders (`el.value.trim()`) throws.
+ */
+export interface ActionElement {
+  /** An input's, select's or textarea's value. */
+  readonly value: string;
+  /** `value` as a number (NaN when empty): number, range and date inputs. */
+  readonly valueAsNumber: number;
+  /** A checkbox or radio's state. */
+  readonly checked: boolean;
+  /** A select's selected option index (-1 when none). */
+  readonly selectedIndex: number;
+  /** A `<details>` or `<dialog>` is open. */
+  readonly open: boolean;
+  readonly disabled: boolean;
+  readonly textContent: string;
+  readonly id: string;
+  readonly name: string;
+  /** How far the element is scrolled. */
+  readonly scrollTop: number;
+  readonly scrollLeft: number;
+  /** `data-*` attributes ("" when missing). */
+  readonly dataset: Readonly<Record<string, string>>;
+}
+
+/** What an action lambda gets. Use what you need: `({ el }) => ...`, `({ ctx }) => ...`. */
+export interface ActionScope {
+  /** The element the action is on (the form, for a form's action), as it is when the action fires. */
+  readonly el: ActionElement;
+  /** Another element on the page, by CSS selector, as it is when the action fires: `ref("#sort").value`. */
+  ref(selector: string): ActionElement;
+  /** The request rendering this page (params, query, session...). Read now, not when the action fires. */
+  readonly ctx: YerdContext;
+  /** A stand-in form for actions that take one: `({ form }) => this.rename({ id }, form)`. */
+  readonly form: ActionForm;
+}
+
+/**
+ * What `action={...}` takes: a lambda that calls one @action method with its
+ * arguments, `() => this.remove({ id })`. It runs while the page renders, but
+ * the action doesn't: yerd records which action was called with what and
+ * signs that into the element, with `el` / `ref()` values left for the
+ * browser to fill in when it fires. An action that takes no arguments can be
+ * passed as is: `action={this.add}`.
+ */
+export type ActionLambda = (scope: ActionScope, form: ActionForm) => unknown;
 
 interface ActionInfo {
   name: string;
@@ -95,25 +150,168 @@ export interface BoundAction<A = unknown> {
   readonly fn: Action<A>;
   /** The arguments signed into the form's token and passed as the action's first parameter. */
   readonly args: A;
+  /** Values the browser fills in when the action fires (from an action lambda's `el` / `ref()`). */
+  readonly holes?: HoleSource[];
 }
 
+/** Set while an action lambda runs at render time: action calls are recorded, not run. */
+let capturing: { fn?: Function; args?: unknown; calls: number } | undefined;
+
 /**
- * Mark a route method as an action. Its first parameter is the bound
- * arguments (see `bind`), the second the submitted form.
+ * Mark a route method as an action. Its first parameter is the arguments the
+ * page passed (`action={() => this.remove({ id })}`), the second the
+ * submitted form.
  *
  * ```ts
  * @action add(_: {}, form: ActionForm) { ... }
  * @action remove({ id }: { id: string }) { ... }
  * ```
  */
-export function action<A>(method: Action<A>, context: ClassMethodDecoratorContext): void {
+export function action<M extends Action<any>>(method: M, context: ClassMethodDecoratorContext): M {
   if (context.static || context.private || typeof context.name !== "string") {
     throw new TypeError(`@action must decorate a public, string-named instance method (got ${String(context.name)})`);
   }
   const set = ACTIONS.hasOwn(context.metadata) ? ACTIONS.from(context.metadata)! : new Set(ACTIONS.from(context.metadata));
   set.add(context.name);
   ACTIONS.set(context.metadata, set);
-  actionFunctions.set(method, { name: context.name, metadata: context.metadata });
+  const info = { name: context.name, metadata: context.metadata };
+  // Called inside an action lambda while the page renders, the action only
+  // says who it is and what it was given; otherwise it runs.
+  const wrapped = function (this: unknown, args: unknown, form?: ActionForm): unknown {
+    if (capturing) {
+      capturing.calls++;
+      capturing.fn = wrapped;
+      capturing.args = args;
+      return undefined;
+    }
+    return method.call(this, args, form);
+  };
+  Object.defineProperty(wrapped, "name", { value: method.name });
+  actionFunctions.set(method, info);
+  actionFunctions.set(wrapped, info);
+  return wrapped as unknown as M;
+}
+
+/** Stand-in form for action lambdas; the action never sees it. */
+const STAND_IN = new ActionForm(Object.create(null) as FormFields);
+
+/** Where a hole's value comes from: ["el", ...path] or ["ref", selector, ...path]. */
+export type HoleSource = string[];
+
+const HOLE: unique symbol = Symbol("yerd.hole");
+/** How a hole travels in signed args: `{ "__yxHole": n }`, filled from the posted `_yxh<n>` field. */
+const HOLE_KEY = "__yxHole";
+
+const ELEMENT_FIELDS = new Set(["value", "valueAsNumber", "checked", "selectedIndex", "open", "disabled", "textContent", "id", "name", "scrollTop", "scrollLeft"]);
+const BOOLEAN_FIELDS = new Set(["checked", "open", "disabled"]);
+const NUMBER_FIELDS = new Set(["valueAsNumber", "selectedIndex", "scrollTop", "scrollLeft"]);
+
+/** A live element at render time: every field read is a hole for the browser to fill. */
+function liveElement(base: HoleSource, holes: HoleSource[]): ActionElement {
+  const hole = (path: string[]) => {
+    const key = JSON.stringify(path);
+    let index = holes.findIndex((h) => JSON.stringify(h) === key);
+    if (index < 0) index = holes.push(path) - 1;
+    const label = `${path[0] === "ref" ? `ref(${JSON.stringify(path[1])})` : "el"}.${path.slice(path[0] === "ref" ? 2 : 1).join(".")}`;
+    const fail = () => {
+      throw new TypeError(`${label} is filled in by the browser when the action fires; pass it straight into the action's arguments ({ q: ${label} }), don't compute with it`);
+    };
+    // Anything but being placed in the args (el.value.trim(), `${el.value}`, el.value + 1) explains itself.
+    return new Proxy(Object.create(null) as object, {
+      get(_h, key) {
+        if (key === HOLE) return index;
+        if (key === "then" || key === "toJSON") return undefined;
+        if (key === Symbol.toPrimitive) return fail;
+        return fail();
+      },
+      has: (_h, key) => key === HOLE,
+    });
+  };
+  const name = base[0] === "ref" ? `ref(${JSON.stringify(base[1])})` : "el";
+  return new Proxy({} as ActionElement, {
+    get(_t, key) {
+      if (typeof key === "symbol") return undefined;
+      if (key === "dataset") {
+        return new Proxy({}, { get: (_d, attr) => (typeof attr === "string" ? hole([...base, "dataset", attr]) : undefined) });
+      }
+      if (ELEMENT_FIELDS.has(key)) return hole([...base, key]);
+      throw new TypeError(`${name}.${key} can't be read in an action lambda; use one of: ${[...ELEMENT_FIELDS, "dataset"].join(", ")}`);
+    },
+  });
+}
+
+function isHole(value: unknown): value is { [HOLE]: number } {
+  return typeof value === "object" && value !== null && HOLE in value;
+}
+
+/** Holes become `{ __yxHole: n }` so they survive JSON signing. */
+function encodeHoles(value: unknown): unknown {
+  if (isHole(value)) return { [HOLE_KEY]: value[HOLE] };
+  if (Array.isArray(value)) return value.map(encodeHoles);
+  if (value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, encodeHoles(v)]));
+  }
+  return value;
+}
+
+/**
+ * Fill a verified token's holes from the posted `_yxh<n>` fields, typed by
+ * what was read (`checked` is a boolean, `valueAsNumber` a number, the rest
+ * strings). The holes' places are signed; only their values come from the
+ * browser, like any form field. A missing one is a 400 (the action needs
+ * the client runtime: a plain form post can't fill it).
+ */
+export function fillHoles(args: unknown, holes: HoleSource[] | undefined, fields: FormFields): unknown {
+  if (!holes?.length) return args;
+  const fill = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(fill);
+    if (value === null || typeof value !== "object") return value;
+    const record = value as Record<string, unknown>;
+    if (typeof record[HOLE_KEY] === "number" && Object.keys(record).length === 1) {
+      const index = record[HOLE_KEY] as number;
+      const source = holes[index];
+      const raw = fields[`_yxh${index}`];
+      const text = Array.isArray(raw) ? raw[0] : raw;
+      if (!source || text === undefined) throw new HttpError(400, "This action reads the page when it fires, which needs JavaScript");
+      const field = source[source.length - 1]!;
+      if (source.at(-2) !== "dataset" && BOOLEAN_FIELDS.has(field)) return text === "true";
+      if (source.at(-2) !== "dataset" && NUMBER_FIELDS.has(field)) return Number(text);
+      return text;
+    }
+    return Object.fromEntries(Object.entries(record).map(([k, v]) => [k, fill(v)]));
+  };
+  return fill(args);
+}
+
+/**
+ * Run an action lambda to find out which action it calls and with what.
+ * Nothing runs for real: the action records the call and returns. `el` and
+ * `ref()` reads become holes the browser fills when the action fires.
+ */
+export function captureAction(lambda: Function, holes: HoleSource[] = []): BoundAction {
+  if (capturing) throw new TypeError("An action lambda can't render another action lambda");
+  const box: { fn?: Function; args?: unknown; calls: number } = { calls: 0 };
+  const scope: ActionScope = {
+    el: liveElement(["el"], holes),
+    ref: (selector: string) => liveElement(["ref", selector], holes),
+    ctx: currentContext(),
+    form: STAND_IN,
+  };
+  capturing = box;
+  let result: unknown;
+  try {
+    result = lambda(scope, STAND_IN);
+  } finally {
+    capturing = undefined;
+  }
+  // An async lambda: the call before its first await was recorded; don't leave a rejection hanging.
+  if (result instanceof Promise) result.catch(() => {});
+  if (!box.fn) {
+    throw new TypeError("An action lambda must call an @action method, like action={() => this.remove({ id })}");
+  }
+  if (box.calls > 1) throw new TypeError(`An action lambda calls one @action method, not ${box.calls}`);
+  const bound = bind(box.fn as Action<unknown>, encodeHoles(box.args ?? {}));
+  return holes.length ? { ...bound, holes } : bound;
 }
 
 /** Attach arguments to an action for one form. They're signed, so the client can't change them. */
@@ -160,6 +358,8 @@ export interface TokenPayload {
   a: string;
   /** bound args */
   p: unknown;
+  /** where the args' holes are filled from (action lambdas' el / ref()) */
+  h?: HoleSource[];
   /** expiry, unix seconds; absent on prerendered pages */
   e?: number;
   /** tag of the session's CSRF nonce; ties the token to one visitor's session */
@@ -230,6 +430,8 @@ export interface FormAction {
   url: string;
   /** Signed token for the hidden _yx field. */
   token: string;
+  /** Values for the browser to send with it (`_yxh<n>`), from an action lambda's `el` / `ref()`. */
+  holes?: HoleSource[];
 }
 
 /**
@@ -237,11 +439,12 @@ export interface FormAction {
  * the owning route's path, filled with the current request's params (plus the
  * query string, when that's the page being rendered).
  */
-export function formAction(value: Action<unknown> | BoundAction): FormAction {
-  const fn = isBoundAction(value) ? value.fn : value;
+export function formAction(value: ActionLambda | Action<unknown> | BoundAction): FormAction {
+  if (typeof value === "function" && !actionFunctions.has(value)) value = captureAction(value);
+  const fn = isBoundAction(value) ? value.fn : (value as Action<unknown>);
   const args = isBoundAction(value) ? value.args : {};
   const info = actionFunctions.get(fn);
-  if (!info) throw new TypeError("A form's action must be an @action method (or bind(...) of one)");
+  if (!info) throw new TypeError("An action must be an @action method, a lambda calling one, or bind(...) of one");
   const def = routeRegistry.find((d) => d.metadata === info.metadata);
   if (!def) throw new TypeError(`@action ${info.name} belongs to a class that isn't a @route`);
   const ctx = currentContext();
@@ -256,7 +459,9 @@ export function formAction(value: Action<unknown> | BoundAction): FormAction {
   // Keep the page's query string when posting to the page's own route, so the
   // action sees the same @query values (filters, sort) as the page did.
   const samePage = url === ctx.path;
-  return { url: samePage ? url + ctx.url.search : url, token: ctx.signAction({ c: def.className, a: info.name, p: args }) };
+  const holes = isBoundAction(value) ? value.holes : undefined;
+  const token = ctx.signAction(holes?.length ? { c: def.className, a: info.name, p: args, h: holes } : { c: def.className, a: info.name, p: args });
+  return { url: samePage ? url + ctx.url.search : url, token, ...(holes?.length ? { holes } : {}) };
 }
 
 /**

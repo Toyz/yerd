@@ -17,6 +17,14 @@
  * - [data-yx-live=url]  EventSource; every message refreshes the page's Regions
  * - [data-yx-error]     inside a form: where error messages from the server go
  * - [data-yx-new]       set on elements a morph inserted (style entrance animations with it)
+ * - [data-yx-action]    an action on any element: posted (with its data-yx-token)
+ *                       when its data-yx-trigger fires: an event ("click",
+ *                       "input 250ms", "keydown:Enter"), "visible", "load", "every 5s"
+ * - [data-yx-trigger]   on an action form: submits it on that trigger
+ * - [data-yx-holes]     values the server left for the browser: read from the
+ *                       element (or ref(selector)) when the action fires, sent as _yxh<n>
+ * - [data-yx-append]    on a Region in a response: children are appended, not replaced
+ *                       (data-yx-prepend: put first)
  * - [data-yx-defer]     a prerendered <Dynamic> skeleton: filled from the server after load
  * - [data-yx-disabled]  set on the buttons a pending submit disabled (and will re-enable)
  * - [data-yx-prefetch]  warm a page or JSON response before it's needed (the `prefetch` prop)
@@ -154,6 +162,30 @@ export function yerdRuntime(): void {
     for (const leftover of keyed.values()) leftover.parentNode?.removeChild(leftover);
   }
 
+  /**
+   * An appending (or prepending) Region: its children join the target's.
+   * One the target already has (same id or key) is morphed in place instead.
+   */
+  function insertChildren(target: Element, incoming: Element): void {
+    const prepend = incoming.hasAttribute("data-yx-prepend");
+    const anchor = prepend ? target.firstChild : null;
+    const existing = new Map<string, Node>();
+    for (const child of Array.from(target.childNodes)) {
+      const key = keyOf(child);
+      if (key) existing.set(key, child);
+    }
+    for (const child of Array.from(incoming.childNodes)) {
+      const key = keyOf(child);
+      const match = key ? existing.get(key) : undefined;
+      if (match) {
+        morph(match, child);
+        continue;
+      }
+      if (child.nodeType === 1) (child as Element).setAttribute("data-yx-new", "");
+      target.insertBefore(child, anchor);
+    }
+  }
+
   /** Morph every Region in `html` into the matching element on the page. Returns how many matched. */
   function apply(html: string): number {
     const doc = new DOMParser().parseFromString(html, "text/html");
@@ -161,7 +193,9 @@ export function yerdRuntime(): void {
     for (const region of Array.from(doc.querySelectorAll("[data-yx-region]"))) {
       const target = region.id ? document.getElementById(region.id) : null;
       if (!target) continue;
-      morph(target, document.importNode(region, true));
+      const incoming = document.importNode(region, true);
+      if (incoming.hasAttribute("data-yx-append") || incoming.hasAttribute("data-yx-prepend")) insertChildren(target, incoming);
+      else morph(target, incoming);
       applied++;
     }
     if (doc.title && doc.querySelector("head title")) document.title = doc.title;
@@ -362,6 +396,9 @@ export function yerdRuntime(): void {
     const url = new URL(formAttr(form, submitter, "action") || location.href, form.baseURI);
     const method = (formAttr(form, submitter, "method") || "get").toLowerCase();
     const data = new FormData(form, submitter as HTMLButtonElement | null);
+    const holes = holeValues(submitter?.getAttribute("data-yx-holes") != null ? submitter : form);
+    if (!holes) return;
+    for (const [name, value] of holes) data.append(name, value);
     const entries = Array.from(data);
     if (method === "get") {
       // Like the browser: the fields become the query, and a file becomes its name.
@@ -847,6 +884,173 @@ export function yerdRuntime(): void {
       }
     }
   }
+
+  // ── actions on any element, and triggers ──
+
+  /**
+   * The values an action left for the browser (data-yx-holes): fields of the
+   * element itself or of ref(selector), read now. Undefined (and logged) when
+   * a ref is missing: the action isn't sent.
+   */
+  function holeValues(el: Element): Array<[string, string]> | undefined {
+    const spec = el.getAttribute("data-yx-holes");
+    if (!spec) return [];
+    let holes: string[][];
+    try {
+      holes = JSON.parse(spec) as string[][];
+    } catch {
+      return [];
+    }
+    const out: Array<[string, string]> = [];
+    for (let i = 0; i < holes.length; i++) {
+      const path = holes[i]!;
+      let source: Element | null = el;
+      let rest = path.slice(1);
+      if (path[0] === "ref") {
+        source = document.querySelector(path[1]!);
+        rest = path.slice(2);
+        if (!source) {
+          console.error(`[yerd] action: ref(${JSON.stringify(path[1])}) matches nothing on the page`);
+          return undefined;
+        }
+      }
+      let value: unknown = source;
+      for (const key of rest) value = value == null ? undefined : (value as Record<string, unknown>)[key];
+      out.push([`_yxh${i}`, value == null ? "" : String(value)]);
+    }
+    return out;
+  }
+
+  const actionRuns = new WeakMap<Element, AbortController>();
+
+  /** Post an element's action (a newer run cancels an older one: typeahead), then apply the result like a form's. */
+  async function runAction(el: HTMLElement): Promise<void> {
+    // A debounce or timer can outlive its element (morphed or navigated away).
+    if (!el.isConnected) return;
+    if (el instanceof HTMLFormElement) {
+      el.requestSubmit();
+      return;
+    }
+    const url = el.getAttribute("data-yx-action");
+    const token = el.getAttribute("data-yx-token");
+    if (!url || !token) return;
+    const question = el.getAttribute("data-yx-confirm");
+    if (question && !confirm(question)) return;
+    const holes = holeValues(el);
+    if (!holes) return;
+    actionRuns.get(el)?.abort();
+    const run = new AbortController();
+    actionRuns.set(el, run);
+    const body = new URLSearchParams([["_yx", token], ...holes]);
+    // A named field sends itself too, like it would in a form.
+    const field = el as HTMLInputElement;
+    if (field.name && "value" in field && (!/^(checkbox|radio)$/.test(field.type) || field.checked)) body.append(field.name, field.value);
+    el.setAttribute("aria-busy", "true");
+    try {
+      const response = await fetch(new URL(url, el.baseURI).href, {
+        method: "POST",
+        body,
+        headers: { yx: "1", accept: "text/html", "content-type": "application/x-www-form-urlencoded" },
+        signal: run.signal,
+      });
+      if (run.signal.aborted) return;
+      const location_ = response.headers.get("yx-location");
+      if (location_) {
+        await load(location_, true);
+        return;
+      }
+      if (!response.ok) {
+        console.error("[yerd]", response.status, (await response.text()) || response.statusText);
+        return;
+      }
+      prefetched.clear();
+      if (response.status === 204) await refresh();
+      else {
+        const text = await response.text();
+        if (run.signal.aborted) return;
+        if (apply(text) === 0) await refresh();
+      }
+    } catch (error) {
+      if ((error as Error).name !== "AbortError") console.error("[yerd]", error);
+    } finally {
+      if (actionRuns.get(el) === run) {
+        actionRuns.delete(el);
+        el.removeAttribute("aria-busy");
+      }
+    }
+  }
+
+  /** "250ms" / "5s" in ms, or the fallback. */
+  function duration(text: string | undefined, fallback: number): number {
+    const match = /^(\d+(?:\.\d+)?)(ms|s)$/.exec(text ?? "");
+    return match ? Number(match[1]) * (match[2] === "s" ? 1000 : 1) : fallback;
+  }
+
+  /** The token an element's action carries now (a morph may have swapped it). */
+  function tokenOf(el: Element): string {
+    return el.getAttribute("data-yx-token") ?? el.querySelector<HTMLInputElement>("input[name=_yx]")?.value ?? "";
+  }
+
+  const wiredTriggers = new WeakSet<Element>();
+  // visible / load fire once per token: a new render (new token) arms them again.
+  const firedWith = new WeakMap<Element, string>();
+  let visibility: IntersectionObserver | undefined;
+
+  function initTriggers(): void {
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-yx-trigger]"))) {
+      const [kind = "click", option] = el.getAttribute("data-yx-trigger")!.trim().split(/\s+/);
+      if (kind === "visible" || kind === "load") {
+        if (firedWith.get(el) === tokenOf(el)) continue;
+        if (kind === "load") {
+          firedWith.set(el, tokenOf(el));
+          void runAction(el);
+          continue;
+        }
+        visibility ??= new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (!entry.isIntersecting) continue;
+              const target = entry.target as HTMLElement;
+              visibility!.unobserve(target);
+              if (firedWith.get(target) === tokenOf(target)) continue;
+              firedWith.set(target, tokenOf(target));
+              void runAction(target);
+            }
+          },
+          { rootMargin: "200px" },
+        );
+        visibility.observe(el);
+        continue;
+      }
+      if (wiredTriggers.has(el)) continue;
+      wiredTriggers.add(el);
+      if (kind === "every") {
+        const period = Math.max(duration(option, 0), 250);
+        const timer = setInterval(() => {
+          if (!el.isConnected) clearInterval(timer);
+          else if (document.visibilityState === "visible" && el.hasAttribute("data-yx-trigger")) void runAction(el);
+        }, period);
+        continue;
+      }
+      // An event, maybe "keydown:Enter" (key filter) or "input 250ms" (debounce).
+      const [event, key] = kind.split(":") as [string, string | undefined];
+      const wait = duration(option, 0);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      el.addEventListener(event, (e) => {
+        // The trigger may have been morphed away or changed since.
+        if (el.getAttribute("data-yx-trigger")?.trim().split(/\s+/)[0] !== kind) return;
+        if (key && (e as KeyboardEvent).key !== key) return;
+        // A click on a link or a submit button would navigate or submit too.
+        if (event === "click" || event === "submit" || key) e.preventDefault();
+        clearTimeout(timer);
+        if (wait) timer = setTimeout(() => void runAction(el), wait);
+        else void runAction(el);
+      });
+    }
+  }
+  document.addEventListener("yx:applied", initTriggers);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initTriggers);
+  else initTriggers();
 
   function initLocals(): void {
     for (const el of Array.from(document.querySelectorAll("yerd-local[data-yx-local]"))) {

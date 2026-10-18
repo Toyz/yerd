@@ -229,7 +229,7 @@ export class RequestContext implements YerdContext {
     return nonce;
   }
 
-  signAction(payload: { c: string; a: string; p: unknown }): string {
+  signAction(payload: { c: string; a: string; p: unknown; h?: string[][] }): string {
     const token: TokenPayload = { ...payload };
     // Prerendered pages are built for no one in particular, so their tokens
     // can't carry a session or a meaningful expiry.
