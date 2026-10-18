@@ -887,6 +887,15 @@ renderer (client) both consume the same trees.
 (Planned: island modules served from `/_yerd/client/*` with long cache
 headers and a content hash in the query string.)
 
+### Server clock
+
+`sync` and cues are timed on the server's clock. The core asks
+`/_yerd/clock` for the time a few times, keeps the quickest answer, and works
+out its offset from the server. It measures once per page, when the first
+`sync` or `cue` element shows up, then again every few minutes and whenever
+the tab comes back into view; `sync` re-aligns its animations after a
+re-measure. On a normal connection pages agree to within a few milliseconds.
+
 ## Milestone (slots in as M6 in PLAN.md)
 
 1. Isomorphic jsx-runtime split; DOM renderer; browser test harness; morph port

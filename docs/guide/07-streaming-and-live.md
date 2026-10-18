@@ -1,10 +1,10 @@
 # Streaming and live
 
-This page covers responses that keep going: streamed bodies, NDJSON and Server-Sent Events, streamed uploads, channels for live updates, and what happens when clients leave or the server stops.
+Responses that keep going: streamed bodies, NDJSON and Server-Sent Events, streamed uploads, channels, synced animation, disconnects and shutdown.
 
 ## Return an async iterable
 
-A handler can return any async iterable, usually an async generator, and yerd streams each chunk as it's produced. Strings and bytes go out as they are; anything else is turned into a string.
+Return any async iterable (usually an async generator) and yerd streams each chunk as it's produced.
 
 ```ts
 import { get, route } from "@toyz/yerd";
@@ -18,13 +18,14 @@ export class Export {
 }
 ```
 
-This is sent as `text/plain`, and headers go out with the first chunk. Use `res(stream, { headers: { "content-type": "text/csv" } })` to set your own type (see [responses](04-responses.md)). For a feed that may sit quiet for a while, use `@ndjson` or `@sse` below: they send headers right away.
-
-HTML pages stream too: an async component is awaited in place while everything above it is already on its way (see [pages and layouts](05-pages-and-layouts.md#components)).
+- Strings and bytes go out as they are; anything else is stringified.
+- It's sent as `text/plain`, headers with the first chunk. Set your own type with `res(stream, { headers: { "content-type": "text/csv" } })` (see [responses](04-responses.md)).
+- For a feed that may sit quiet, use `@ndjson` or `@sse`: they send headers right away.
+- HTML pages stream too (see [pages and layouts](05-pages-and-layouts.md#components)).
 
 ## NDJSON
 
-Newline-delimited JSON is one JSON value per line. Put [@ndjson](api:yerd.ndjson) on a generator method and yield objects.
+[@ndjson](api:yerd.ndjson) on a generator method sends one JSON value per line.
 
 ```ts
 import { get, ndjson, route } from "@toyz/yerd";
@@ -44,7 +45,7 @@ $ curl -N localhost:3000/rows.ndjson
 {"id":3}
 ```
 
-Pass options to the decorator, `@ndjson({ heartbeat: 15_000 })`, or call `ndjson(source, options)` to return a stream from an ordinary method:
+Pass options as `@ndjson({ heartbeat: 15_000 })`, or return `ndjson(source, options)` from an ordinary method:
 
 | Option | Default | Does |
 |---|---|---|
@@ -53,7 +54,7 @@ Pass options to the decorator, `@ndjson({ heartbeat: 15_000 })`, or call `ndjson
 
 ## Server-Sent Events
 
-[@sse](api:yerd.sse) works the same way and speaks `text/event-stream`, which browsers read with `EventSource`. Plain values become `data:` (non-strings as JSON); [event](api:yerd.event) sends a named event with an id.
+[@sse](api:yerd.sse) works the same way over `text/event-stream`, which browsers read with `EventSource`.
 
 ```ts
 import { event, get, route, sse } from "@toyz/yerd";
@@ -81,13 +82,12 @@ source.addEventListener("user", (e) => console.log(e.data));   // event: user
 | `retry` | none | sends a reconnect delay hint (ms) once at the start |
 | `errorEvent` | `true` | if the source throws, sends `event: error` with the message before closing |
 
-`event()` also takes `retry` and `comment`. To refresh a page's Regions on every message, point `data-yx-live` at an SSE route (see [interactivity](06-interactivity.md#live-refresh)).
+- Plain values become `data:` (non-strings as JSON); [event](api:yerd.event) sends a named event, and also takes `id`, `retry` and `comment`.
+- To refresh a page's Regions on every message, point `data-yx-live` at an SSE route (see [interactivity](06-interactivity.md#live-refresh)).
 
 ### Custom heartbeats
 
-A heartbeat keeps a quiet connection from being dropped by proxies and load balancers. The plain beat (a blank NDJSON line, an SSE comment) is invisible to clients. When the client should see it (to show "live", to detect a stalled connection, to carry a server time), give the heartbeat a body: `{ every, send }`.
-
-`send` is written like any item of the stream. For SSE, `event()` makes a named event the client can listen for, and a plain value is a message. For NDJSON it's a JSON line.
+Give the heartbeat a body with `{ every, send }` when clients should see it (to show "live", detect a stall, or carry a server time); the plain beat is invisible.
 
 ```tsx
 import { event, get, ndjson, route, sse } from "@toyz/yerd";
@@ -97,8 +97,7 @@ export class Live {
   // The same body every time.
   @get @sse({ heartbeat: { every: 20_000, send: event({ event: "ping" }) } }) feed() { ... }
 
-  // A function makes each beat: it's told which beat it is, how long the stream
-  // has been quiet, and how long it's been open.
+  // A function makes each beat from its count, idle time and open time.
   @get stats() {
     return ndjson(this.updates(), {
       heartbeat: { every: 10_000, send: ({ count, idleMs }) => ({ type: "keepalive", count, idleMs }) },
@@ -115,18 +114,19 @@ source.addEventListener("ping", () => (lastBeat = Date.now()));
 setInterval(() => document.body.classList.toggle("stalled", Date.now() - lastBeat > 45_000), 5_000);
 ```
 
-- The function may return `undefined` for the plain beat that time.
-- `idleMs` restarts with every item, so it's the time since the last real update; `openMs` is since the stream started.
-- A heartbeat only goes out while the source is quiet: a busy stream doesn't need one, so it gets none.
-- A bad interval (negative, `NaN`) is refused when the stream is created, not after its headers have gone out.
+- `send` is written like any stream item: for SSE an `event()` or a plain message, for NDJSON a JSON line.
+- The function may return `undefined` for a plain beat.
+- `idleMs` is the time since the last real item; `openMs` since the stream started.
+- Beats only go out while the source is quiet.
+- A bad interval (negative, `NaN`) is refused when the stream is created.
 
 ### Errors mid-stream
 
-Once a stream has started, its status is already sent, so a thrown error becomes the last line or event instead. A [YerdError](api:yerd.YerdError)'s message is shown as is; anything else is logged and sent as `Internal Server Error`, so internals don't leak.
+Once a stream has started its status is sent, so a thrown error becomes the last line or event. An [YerdError](api:yerd.YerdError)'s message is shown as is; anything else is logged and sent as `Internal Server Error`.
 
 ## Streamed request bodies
 
-[ndjsonBody](api:yerd.ndjsonBody) reads an NDJSON upload line by line as it arrives, optionally validating each line with a DTO. Only each line is size-limited, not the whole upload.
+[ndjsonBody](api:yerd.ndjsonBody) reads an NDJSON upload line by line as it arrives, optionally validating each line with a DTO.
 
 ```ts
 import { args, is, ndjsonBody, post, route } from "@toyz/yerd";
@@ -148,11 +148,14 @@ export class Import {
 }
 ```
 
-A bad line ends the request with a 400 that names it: `Line 2 is not valid JSON`, or `Line 2 failed validation` plus the issues as JSON. Without a DTO, you get the parsed values as `unknown`. The same stream is available as `currentContext().lines()`; a body can be read whole or streamed, not both.
+- Only each line is size-limited, not the whole upload.
+- A bad line ends the request with a 400 naming it (`Line 2 is not valid JSON`, or `Line 2 failed validation` plus the issues).
+- Without a DTO, lines are `unknown`. The same stream is `currentContext().lines()`.
+- A body can be read whole or streamed, not both.
 
 ## Channels
 
-[Channels](api:yerd.Channels) is a built-in pub/sub hub: publish to a name from anywhere, subscribe from a stream route. Name channels with [channel](api:yerd.channel)`<T>()`, so messages are type-checked.
+[Channels](api:yerd.Channels) is a built-in pub/sub hub: publish to a name from anywhere, subscribe from a stream route. Name channels with [channel](api:yerd.channel)`<T>()` to type-check messages.
 
 ```ts
 import { Channels, channel, get, inject, route, service, signal, sse } from "@toyz/yerd";
@@ -182,18 +185,17 @@ export class LobbyEvents {
 }
 ```
 
-- `subscribe(targets, signal, { buffer })` takes one channel or an array, and ends when `signal` aborts.
-- It subscribes immediately, so nothing published between the call and the first read is lost.
-- Each subscriber has its own queue. A slow one keeps up to `buffer` messages (1000 by default); past that the oldest are dropped, with a warning.
+- `subscribe(targets, signal, { buffer })` takes one channel or an array and ends when `signal` aborts. Nothing published after the call is missed.
+- Each subscriber has its own queue; a slow one keeps up to `buffer` messages (1000), then drops the oldest with a warning.
 - Plain strings work as names too: `publish("todos", msg)`.
-- Channels push to open browser tabs. For work that should happen once per change on the server (send a mail, update a cache), use [events](14-events.md); an `@on` handler can publish to a channel when it's done.
+- Channels push to open tabs. For work that should run once per change on the server, use [events](14-events.md).
 
 > [!NOTE]
-> The default backend is in-memory, so messages reach subscribers in the same process only, synchronously and by reference: every subscriber gets the very object you published (events, by contrast, are copied per handler), so don't mutate a message after publishing it. For several instances, either register an [EventTransport](14-events.md#several-instances-and-other-apps), and channels [ride on it](14-events.md#channels-ride-along) with no second adapter, or implement [ChannelBackend](api:yerd.ChannelBackend) (Redis, NATS, Postgres `LISTEN`) and register it: `app.services((s) => s.value(ChannelBackend, myBackend))`. A registered `ChannelBackend` wins over the transport. See [services](08-services.md).
+> The default backend is in-memory: same process only, and every subscriber gets the very object you published, so don't mutate it afterwards. For several instances, register an [EventTransport](14-events.md#several-instances-and-other-apps) (channels [ride on it](14-events.md#channels-ride-along)) or a [ChannelBackend](api:yerd.ChannelBackend) (Redis, NATS, Postgres `LISTEN`) with `app.services((s) => s.value(ChannelBackend, myBackend))`. A `ChannelBackend` wins over the transport.
 
 ## Per-user live feeds
 
-Give each user their own channel, publish after every write, and subscribe with the signed-in user's id. Nobody hears anyone else's changes.
+Give each user their own channel, publish after every write, and subscribe with the signed-in user's id.
 
 ```tsx
 import { Channels, channel, get, inject, route, signal, sse } from "@toyz/yerd";
@@ -220,17 +222,15 @@ export class TodoEvents {
 const liveHook = <div data-yx-live="/todos/events" hidden></div>;
 ```
 
-You can transform messages on the way out with a generator: `for await (const change of this.channels.subscribe(...)) yield { ...change, at: Date.now() };`.
+To transform messages on the way out, loop in a generator: `for await (const change of this.channels.subscribe(...)) yield { ...change, at: Date.now() };`.
 
 ## Server-synced animation
 
-Two pieces make every open page animate together: `sync` keeps looping CSS animations on the same beat everywhere, and [Cues](api:yerd.Cues) plays one-off moments (an airhorn, a countdown, confetti) on every page at the same instant.
-
-Both run on the server's clock. The client runtime asks `/_yerd/clock` for the time a few times, keeps the quickest answer, and works out how far its own clock is from the server's. It measures once per page, when the first `sync` or `cue` element shows up, then again every few minutes and whenever the tab comes back into view. On a normal connection pages agree to within a few milliseconds.
+`sync` keeps looping CSS animations on the same beat on every open page; [Cues](api:yerd.Cues) plays one-off moments (an airhorn, confetti) everywhere at the same instant. Both run on the server's clock, and pages agree to within a few milliseconds.
 
 ### sync: one beat everywhere
 
-Put `sync` on an element and its infinite CSS animations, and those of everything inside it, are lined up as if they all started at the same moment. Two windows side by side show the same frame.
+Put `sync` on an element to line up its infinite CSS animations, and those inside it, as if they all started together.
 
 ```tsx
 import { css, keyframes } from "@toyz/yerd";
@@ -246,13 +246,13 @@ const dancer = css`
 </div>
 ```
 
-- `animation-delay` still works, as an offset from the shared beat, so a row can be staggered.
-- Only infinite animations are moved. One-off animations play as they would without `sync`; for those, use a cue.
-- Elements added later, a class change that starts a new animation, and a re-measured clock are all handled.
+- `animation-delay` still works, as an offset from the shared beat.
+- Only infinite animations move; use a cue for one-off ones.
+- Elements added later and class changes that start new animations are handled.
 
 ### Cues: one moment, every screen
 
-Inject `Cues` and `play()` a cue by name. Elements with `cue="name"` play it.
+Inject `Cues` and `play()` a cue by name; elements with `cue="name"` play it.
 
 ```tsx
 import { Cues, action, css, get, inject, keyframes, route } from "@toyz/yerd";
@@ -282,20 +282,20 @@ export class Rave {
 
 When a cue plays, each element that names it:
 
-1. Gets `data-yx-cued="<name>"`. The attribute is taken off and put back, so a CSS animation keyed off it starts over each time.
-2. Plays, if it's an `<audio>` or `<video>`, from where everyone else is.
-3. Dispatches a `yx:cue` event that bubbles, with `{ name, room, data, at, late }`. Call `preventDefault()` on it to play the cue your own way, and steps 1 and 2 are skipped.
+1. Gets `data-yx-cued="<name>"`, removed and re-added so a CSS animation keyed off it restarts.
+2. Plays from the shared position, if it's `<audio>` or `<video>`.
+3. Dispatches a bubbling `yx:cue` event with `{ name, room, data, at, late }`. `preventDefault()` skips steps 1 and 2.
 
 `cue` takes several names, space-separated or as an array: `cue={["airhorn", "drop"]}`.
 
 | `play()` option | What it does |
 | --- | --- |
-| `room` | Which pages hear it. Pages listen to the rooms their `cueRoom` props name (`"main"` when there's none), or to what their `cueFrom` route serves. See [public and private rooms](#public-and-private-rooms). Default `"main"`. |
-| `in` | How far ahead to schedule it, in ms or as a duration (`"3s"`). The lead gives the message time to reach every page, so they start together. Default 250. |
-| `lasts` | How long it runs, in ms or as a duration (`"2s"`). A page that connects while it's running starts it partway. `data-yx-cued` comes off when it ends. |
-| `cooldown` | Ignore plays of the same cue for this long, in ms or as a duration (`"1.5s"`). A button the whole room mashes plays once per window. `play()` returns undefined for an ignored play. |
-| `key` | What `cooldown` counts by, instead of the name. For example `` `airhorn:${user.id}` `` gives each person their own cooldown. |
-| `data` | Anything JSON can carry. Listeners get it as `detail.data`. |
+| `room` | Which pages hear it: those whose `cueRoom` names it (`"main"` when none), or whose `cueFrom` route serves it. See [public and private rooms](#public-and-private-rooms). Default `"main"`. |
+| `in` | How far ahead to schedule it, in ms or a duration (`"3s"`), so every page gets the message in time. Default 250. |
+| `lasts` | How long it runs (ms or duration). A page connecting meanwhile starts it partway; `data-yx-cued` comes off at the end. |
+| `cooldown` | Ignore plays of the same cue for this long (ms or duration); `play()` returns undefined for an ignored play. |
+| `key` | What `cooldown` counts by instead of the name, e.g. `` `airhorn:${user.id}` `` for a per-person cooldown. |
+| `data` | Anything JSON can carry, as `detail.data`. |
 
 Sequences are several cues on one timeline:
 
@@ -308,16 +308,16 @@ Sequences are several cues on one timeline:
 
 ### Late, slow and hidden pages
 
-A cue says when it plays on the server's clock, so it doesn't matter when the message arrives:
+A cue carries its start time on the server's clock, so arrival time doesn't matter:
 
 - **Early:** the page waits for the moment.
-- **Late:** a slow link, a tab that was in the background, or a page opened while a cue with `lasts` was running. The page plays the cue at once, `late` ms in. CSS animations are moved forward by that much, and audio and video seek to it.
-- **Past the end of `lasts`:** the cue is skipped.
-- **Seen twice:** a reconnect replays the cues that are still running, and each cue plays only once.
+- **Late** (slow link, background tab, opened mid-`lasts`): it plays at once, `late` ms in; CSS animations and media seek forward.
+- **Past the end of `lasts`:** skipped.
+- **Seen twice** (a reconnect replays running cues): plays once.
 
 ### Sound
 
-Browsers block audio until the visitor has interacted with the page. An `<audio cue>` on a page nobody has clicked stays quiet; the animation still plays. For sound made in code (Web Audio), listen for `yx:cue` and start your `AudioContext` on the first click. The kitchen sink's `horn` attribute does this.
+Browsers block audio until the visitor interacts, so an `<audio cue>` on an untouched page stays quiet (the animation still plays). For Web Audio, start your `AudioContext` on the first click and play on `yx:cue`, as the kitchen sink's `horn` attribute does:
 
 ```ts
 export const horn = attribute<boolean>("horn", {
@@ -343,11 +343,11 @@ export const horn = attribute<boolean>("horn", {
 });
 ```
 
-The same clock is available to your own client code: `yerd.clock.now()` is the server's time, and `yerd.clock.sync()` measures it and resolves with `{ now, offset, rtt }`.
+Your own client code can read the same clock: `yerd.clock.now()` is the server's time, and `yerd.clock.sync()` re-measures and resolves with `{ now, offset, rtt }`.
 
 ### Public and private rooms
 
-Rooms work like [channels](#channels). The built-in stream that `cue` elements listen on, `/_yerd/cues`, only serves the rooms you make public, and it refuses the rest with a 403. Out of the box only `"main"` is public:
+The built-in stream `cue` elements listen on, `/_yerd/cues`, serves only public rooms and refuses the rest with a 403. By default only `"main"` is public:
 
 ```ts
 yerd({ cues: { public: ["main", "rave"] } });                 // these rooms
@@ -356,7 +356,7 @@ yerd({ cues: { public: true } });                            // every room
 yerd({ cues: { public: false } });                           // no built-in stream at all
 ```
 
-Any other room is private: serve it from a stream route of your own, behind whatever guards it needs, and point the elements at that route with `cueFrom`. `cues.listen(rooms, signal)` is the stream; return it from an `@sse` method.
+Serve a private room from your own guarded stream route, returning `cues.listen(rooms, signal)` from an `@sse` method, and point elements at it with `cueFrom`:
 
 ```tsx
 @route("/teams/:id/cues", { guards: [auth.required, onTeam] })
@@ -377,24 +377,20 @@ export class TeamCues {
 await this.cues.play("goal", { room: `team:${team.id}` });
 ```
 
-- Every cue a `cueFrom` route sends is for its elements. If the route serves several rooms, `cueRoom` on an element narrows it to one.
-- A page can mix both: elements without `cueFrom` share one public stream, and each `cueFrom` URL gets its own.
-- If a page asks `/_yerd/cues` for a private room, the server logs a warning naming the room, once.
-- A room name is 1 to 128 characters with no control characters.
-
-The kitchen sink has both: the rave's room is public, and the back office's order bell is a private `"staff"` room streamed from `/admin/cues`, behind the staff guard.
+- Every cue a `cueFrom` route sends is for its elements; `cueRoom` narrows a multi-room route to one.
+- A page can mix public elements and any number of `cueFrom` URLs.
+- Asking `/_yerd/cues` for a private room logs a warning naming it, once.
+- A room name is 1 to 128 characters, no control characters.
 
 ### Instances and counts
 
-- **Instances:** cues go out through [Channels](api:yerd.Channels). With a shared [ChannelBackend](api:yerd.ChannelBackend), or an [EventTransport](14-events.md#channels-ride-along) that channels ride on, pages on every instance hear every cue. `cooldown` is counted per process.
-- **Counts:** `cues.watching(room)` is how many pages are listening through this process right now. The kitchen sink shows it as "tabs raving".
-- **Testing:** `cues.listen(rooms, signal)` is the same feed the runtime reads, so a test can play a cue and check that it arrived.
+- **Instances:** cues go out through [Channels](api:yerd.Channels), so a shared [ChannelBackend](api:yerd.ChannelBackend) or [EventTransport](14-events.md#channels-ride-along) reaches every instance. `cooldown` is per process.
+- **Counts:** `cues.watching(room)` is how many pages listen through this process.
+- **Testing:** `cues.listen(rooms, signal)` is the runtime's feed, so a test can play a cue and check it arrived.
 
 ## Disconnects and the "pass the signal" rule
 
-When a client goes away, the request's signal aborts (inject it with [@signal](api:yerd.signal)) and yerd calls `return()` on your generator, so its `finally` blocks run. Graceful shutdown ends streams the same way.
-
-There's one JavaScript catch: a generator parked at an `await` only stops once that await settles. If it's waiting on something slow, the cleanup waits too. So pass the signal to whatever you wait on:
+When a client leaves (or the server shuts down), the request's [@signal](api:yerd.signal) aborts and yerd calls `return()` on your generator, so its `finally` blocks run. A generator parked at an `await` only stops once that await settles, so pass the signal to whatever you wait on:
 
 ```ts
 import { setInterval } from "node:timers/promises";
@@ -419,17 +415,17 @@ export class Clock {
 }
 ```
 
-- `Channels.subscribe(name, signal)` already does this: it ends cleanly the moment the signal aborts.
-- Pass the signal to `fetch(url, { signal })`, `node:timers/promises` timers, database cursors and queues.
-- Signal-aware APIs throw an `AbortError` when cancelled. Catch it as above, or yerd logs it as a failed stream.
+- `Channels.subscribe(name, signal)` already ends the moment the signal aborts.
+- Pass it to `fetch`, `node:timers/promises` timers, database cursors and queues.
+- Signal-aware APIs throw an `AbortError` when cancelled; catch it as above, or it's logged as a failed stream.
 
 ## Graceful shutdown
 
-On `SIGINT` or `SIGTERM`, or when you call `close()` on the [RunningServer](api:yerd.RunningServer) that `app.listen()` returned, yerd shuts down in order:
+On `SIGINT`, `SIGTERM`, or `close()` on the [RunningServer](api:yerd.RunningServer) from `app.listen()`, yerd:
 
 1. Stops accepting connections.
-2. Aborts every `@sse` and `@ndjson` stream, and the runtime's cue streams, so their generators finish.
-3. Waits for in-flight requests, up to `shutdownTimeout` (10 seconds by default), then cuts what's left.
+2. Aborts every `@sse` and `@ndjson` stream, and cue streams.
+3. Waits for in-flight requests up to `shutdownTimeout` (10 s), then cuts the rest.
 4. Stops background work and disposes services (see [services](08-services.md)).
 
 ```ts
@@ -442,6 +438,6 @@ await server.close();
 ```
 
 > [!WARNING]
-> Only `@sse` and `@ndjson` streams count as long-lived. A plain async iterable that never ends keeps shutdown waiting until the timeout. Use `ndjson()`/`sse()` for endless feeds, or end your loop when the signal aborts.
+> Only `@sse` and `@ndjson` streams count as long-lived. A plain async iterable that never ends holds shutdown until the timeout; use `ndjson()`/`sse()` for endless feeds, or end your loop when the signal aborts.
 
-Pass `handleSignals: false` to `yerd()` or `listen()` when you want to handle signals yourself. Deployment details are in [deploying](11-deploying.md).
+Pass `handleSignals: false` to `yerd()` or `listen()` to handle signals yourself. See [deploying](11-deploying.md).
