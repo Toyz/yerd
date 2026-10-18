@@ -64,7 +64,7 @@ examples/shop/dist/server/assets/main-BkytboDM.js   503.13 kB │ gzip: 133.53 k
 | `dist/server/server.js` | the entry to run: serves `dist/client`, listens on `PORT` (3000) and `HOST` (all interfaces) |
 | `dist/server/prerender.js` | the app without listening, used during the build |
 
-- The shop's bundle is 500 kB because it aliases yerd's source in. A real app leaves `@toyz/yerd` an import: deploy `dist/` with `package.json` and `npm ci --omit=dev` (yerd has no dependencies).
+- The shop's server bundle is 500 kB because it aliases yerd's source in. A real app leaves `@toyz/yerd` an import: deploy `dist/` with `package.json` and `npm ci --omit=dev` (yerd has no dependencies).
 - `server.js` sets `NODE_ENV=production` unless you did: JSON logs, no stack traces, the missing-secret warning.
 - `<Stylesheet>` and `assetUrl()` go through the manifest; see [assets](05-pages-and-layouts.md#assets). `@prerender` routes become HTML files ([prerendering](05-pages-and-layouts.md#prerendering)).
 - Vite's `base` carries through: `/app/` moves client files under `/app/`; a full URL (a CDN) points links there while the server still serves the files. Routes keep their paths.
@@ -81,12 +81,12 @@ See [YerdViteOptions](api:vite.YerdViteOptions). The plugin also lowers TC39 dec
 > [!TAKE]
 > The build is a Node server, not a bundle for a platform: `node dist/server/server.js` behind any proxy is the whole deploy. You give up serverless targets out of the box; [app.fetch()](api:yerd.YerdApp/fetch) is the handler if you want to wire one.
 
-### In development
+## In development
 
 `npm run shop` (`vite`) is one server on one port: Vite serves its assets and yerd gets everything else.
 
 - Changing a module the app imports (`?url` and `?raw` imports count) or adding one restarts the app on the next request, with a full shutdown and fresh boot.
-- Stylesheets, `public/` files, and files the app reads or writes with `node:fs` don't restart it. Boot errors show in Vite's overlay.
+- Stylesheets linked with `assetUrl()`, `public/` files, and files the app reads or writes with `node:fs` don't restart it. Boot errors show in Vite's overlay.
 
 ## YERD_SECRET
 
