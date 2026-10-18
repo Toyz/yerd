@@ -7,7 +7,7 @@ import { brotliCompressSync, gzipSync } from "node:zlib";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, extname, join } from "node:path";
 import { ACCESSORS, ARGS, type Resolver } from "../decorators/kit.js";
-import { ACCEPTS, METHOD_LAYOUTS, NO_LAYOUT, PRERENDER, applyLayouts, joinLayouts, resetRouteRegistry, type When, VERBS, resolveRoute, routeRegistry, type LayoutProps, type PageMeta, type RouteDef, type Verb } from "../decorators/route.js";
+import { ACCEPTS, METHOD_LAYOUTS, NO_LAYOUT, PRERENDER, applyLayouts, joinLayouts, resetRouteRegistry, type When, VERBS, resolveRoute, routeRegistry, type LayoutProps, type PageMeta, type ResolvedRoute, type RouteDef, type Verb } from "../decorators/route.js";
 import { choose, expandType } from "../respond/negotiate.js";
 import { Container, Scope, ServiceCollection, currentServices, keyName, runWithServices, type Lifetime, type Registration } from "../di/container.js";
 import {
@@ -17,7 +17,8 @@ import {
 import { jsx, type Component } from "../jsx/jsx-runtime.js";
 import { coerce, type Outgoing } from "../respond/coerce.js";
 import { BadRequest, Forbidden, jsonBody, MethodNotAllowed, NotAcceptable, NotFound, YerdError } from "../respond/errors.js";
-import { LONG_LIVED, sse } from "../respond/stream.js";
+import { LONG_LIVED, STREAMING, sse } from "../respond/stream.js";
+import { SITEMAP, Sitemap, type SitemapEntry, type SitemapOptions, type SitemapRoute } from "../seo/sitemap.js";
 import { Channels } from "../live/channels.js";
 import { CLOCK_PATH, CUES_PATH, Cues, DEFAULT_ROOM, isPublicRoom, validRoom, type CuesOptions } from "../live/cues.js";
 import { TestClient, answer } from "./in-process.js";
@@ -188,6 +189,14 @@ interface ActionCall extends Call {
   owner: Handler;
   method: string;
   runs: GuardRun[];
+}
+
+/** A route kept at boot for the sitemap, with what its def alone doesn't say. */
+interface MappedRoute {
+  def: RouteDef;
+  pattern: string;
+  lifetime: Lifetime;
+  sitemap: ResolvedRoute["sitemap"];
 }
 
 /** A handler's or action's result, or the answer of a guard that turned the request away first. */
@@ -557,6 +566,7 @@ export class YerdApp {
   /** Shared by every request's context; built at boot. */
   #env: RequestEnv | undefined;
   #loggingOptions: LoggingOptions = {};
+  #sitemap: Sitemap | undefined;
   #onError: ((error: unknown, ctx: YerdContext) => unknown) | undefined;
   /** This app's sink and filter; set at boot. */
   #log: LogBinding | undefined;
@@ -617,6 +627,41 @@ export class YerdApp {
     checkSessionOptions(options);
     this.#sessionOptions = options;
     return this;
+  }
+
+  /**
+   * Serve a sitemap at /sitemap.xml (and, with `robots`, a /robots.txt
+   * pointing at it), built from the routes: every public GET page without
+   * params, plus the URLs @sitemap methods list. It's cached for `maxAge`,
+   * and a build writes it into the client output when `origin` is set.
+   * Bad options throw here.
+   *
+   * ```ts
+   * yerd().sitemap({ origin: "https://shop.example", exclude: ["/api/**"], robots: true });
+   * ```
+   */
+  sitemap(options: SitemapOptions = {}): this {
+    if (this.#router) throw new Error("sitemap() must be called before the app starts");
+    this.#sitemap = new Sitemap(options);
+    return this;
+  }
+
+  /**
+   * The sitemap's entries, with absolute URLs, as /sitemap.xml lists them:
+   * for tests, or to write the file yourself. URLs start with `origin`, else
+   * the one given to app.sitemap(). Boots the app.
+   *
+   * ```ts
+   * const entries = await app.sitemapEntries();
+   * expect(entries.map((e) => e.loc)).toContain("https://shop.example/about");
+   * ```
+   */
+  async sitemapEntries(origin?: string): Promise<SitemapEntry[]> {
+    if (!this.#sitemap) throw new Error("sitemapEntries() needs app.sitemap() first");
+    const base = origin === undefined ? this.#sitemap.origin : new URL(origin).origin;
+    if (!base) throw new Error("sitemapEntries() needs an origin: pass one, or set app.sitemap({ origin })");
+    await this.boot();
+    return this.#sitemap.entries(base);
   }
 
   /**
@@ -722,8 +767,9 @@ export class YerdApp {
   }
 
   /**
-   * Render every @prerender route to `outDir` (the client build directory).
-   * The yerd Vite plugin calls this after `vite build`. Returns the paths written.
+   * Render every @prerender route to `outDir` (the client build directory),
+   * plus the sitemap and robots.txt when app.sitemap() has an origin. The
+   * yerd Vite plugin calls this after `vite build`. Returns the paths written.
    *
    * ```ts
    * const written = await app.prerender("dist/client"); // ["/about", "/docs/intro", ...]
@@ -735,7 +781,7 @@ export class YerdApp {
     this.#writeCssBundle(outDir, base);
     const allowed = this.#options.routes ? new Set(this.#options.routes) : undefined;
     const defs = routeRegistry.filter((d) => PRERENDER.from(d.metadata) && (!allowed || allowed.has(d.ctor)));
-    if (defs.length === 0) return [];
+    if (defs.length === 0) return (await this.#sitemap?.write(outDir)) ?? [];
     const manifest = join(outDir, ".vite", "manifest.json");
     if (existsSync(manifest)) useManifest(manifest, base);
 
@@ -790,7 +836,7 @@ export class YerdApp {
       this.#prerenderToken = undefined;
       await server.close();
     }
-    return Object.keys(written);
+    return [...Object.keys(written), ...((await this.#sitemap?.write(outDir)) ?? [])];
   }
 
   /**
@@ -999,6 +1045,7 @@ export class YerdApp {
     const router = new Router<RouteGroup>();
     const groups = new Map<string, Map<Verb, Handler[]>>();
     const referencedGuards: Array<[where: string, name: string]> = [];
+    const mapped: MappedRoute[] = [];
 
     for (const def of defs) {
       let resolved;
@@ -1010,6 +1057,7 @@ export class YerdApp {
       }
       const info: RouteInfo = { pattern: resolved.pattern, paramNames: paramNames(resolved.pattern), className: def.className, session: resolved.session };
       const lifetime = lifetimeOf({ lifetime: def.options.lifetime, metadata: def.metadata }, "scoped");
+      if (this.#sitemap) mapped.push({ def, pattern: info.pattern, lifetime, sitemap: resolved.sitemap });
       const verbs = VERBS.from(def.metadata) ?? [];
       if (verbs.length === 0) problems.push(`${def.className} (${info.pattern}) has no verb methods (@get, @post, ...)`);
 
@@ -1188,6 +1236,7 @@ export class YerdApp {
     };
     this.#container = container;
     this.#router = router;
+    this.#sitemap?.attach(mapped.map((m) => this.#sitemapRoute(m, groups.get(m.pattern)?.get("GET") ?? [])), (fn) => this.scope(fn));
     this.#events = container.get(Events);
     this.#events.wireWith(() => this.#wireEvents(container));
   }
@@ -1342,7 +1391,42 @@ export class YerdApp {
     }
   }
 
-  #routeInstance(handler: Handler, scope: Scope): Record<string | symbol, unknown> {
+  /**
+   * A route as the sitemap sees it. Its page is the GET handler that can
+   * answer HTML (not an @sse / @ndjson stream, not @accepts without HTML),
+   * preferring plain handlers over `@get(when)` variants; it counts as
+   * guarded when that handler has guards beyond the app's own, which sit in
+   * front of every route and say nothing about whether a page is public.
+   */
+  #sitemapRoute({ def, pattern, lifetime, sitemap }: MappedRoute, gets: readonly Handler[]): SitemapRoute {
+    const streaming = STREAMING.from(def.metadata);
+    const html = gets.filter(
+      (h) => h.def === def && !streaming?.has(h.method) && (!h.accepts || h.accepts.some((t) => t === "text/html" || t === "text/*" || t === "*/*")),
+    );
+    const plain = html.filter((h) => !h.when);
+    const page = plain.length > 0 ? plain : html;
+    const method = SITEMAP.from(def.metadata);
+    return {
+      className: def.className,
+      pattern,
+      settings: sitemap,
+      optedIn: typeof def.options.sitemap === "object",
+      page: page.length > 0,
+      guarded: !page.some((h) => h.guards.length === this.#appGuards.length),
+      items:
+        method === undefined
+          ? undefined
+          : () => {
+              const instance = this.#routeInstance({ def, lifetime }, currentServices()!.scope!);
+              const fn = instance[method];
+              if (typeof fn !== "function") throw new Error(`${def.className}.${String(method)} (@sitemap) is not a method`);
+              return (fn as () => unknown).call(instance);
+            },
+      paths: PRERENDER.from(def.metadata)?.paths,
+    };
+  }
+
+  #routeInstance(handler: Pick<Handler, "def" | "lifetime">, scope: Scope): Record<string | symbol, unknown> {
     const container = this.#container!;
     const ctor = handler.def.ctor;
     if (handler.lifetime === "singleton") {
@@ -1467,6 +1551,11 @@ export class YerdApp {
       return send(res, { status: 200, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }, body }, method === "HEAD", undefined);
     }
     if (path === CUES_PATH && method === "GET") return this.#serveCues(res, target.search);
+    // The sitemap and robots.txt, when app.sitemap() turned them on.
+    if (reading && this.#sitemap?.handles(path)) {
+      const out = await this.#sitemap.serve(req, path, this.#options.trustProxy ?? false);
+      if (out) return send(res, out, method === "HEAD", undefined);
+    }
 
     // Prerendered at build time: the file, not the handler. The runtime's own
     // requests go to the handler: `yx-dynamic` fills <Dynamic> parts, and a

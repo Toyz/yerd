@@ -44,6 +44,7 @@ export {
   service, singleton, scoped, transient, inject, maybe, onBoot, onShutdown, every, hosted, parseDuration, resetServiceRegistry,
   type ServiceOptions, type HostedService, type EveryOptions,
 } from "./di/decorators.js";
+export { sitemap, type SitemapOptions, type SitemapEntry, type SitemapItem, type SitemapFields, type Changefreq, type RobotsOptions } from "./seo/sitemap.js";
 export { renderToString, renderToStream, type RenderOptions } from "./render/render.js";
 export { action, bind, ActionForm, type Action, type ActionElement, type ActionLambda, type ActionScope, type BoundAction } from "./actions/action.js";
 export { assetUrl, useManifest, resetManifest, Stylesheet } from "./assets.js";

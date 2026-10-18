@@ -18,8 +18,12 @@ import { YerdResponse } from "./response.js";
 import { Logger } from "../log/logger.js";
 import { maybeContext } from "../server/context.js";
 import { isAsyncIterable, isDecoratorContext } from "../decorators/util.js";
+import { createKey } from "../decorators/keys.js";
 
 const streamLog = new Logger("yerd::stream");
+
+/** Handler methods decorated with @sse or @ndjson: the sitemap leaves their routes out without calling them. */
+export const STREAMING = createKey<Set<string | symbol>>("streaming");
 
 /** Marks a response as long-lived: headers are sent at once, and shutdown ends it instead of waiting. */
 export const LONG_LIVED = "x-yerd-long-lived";
@@ -379,6 +383,10 @@ function sseResponse(source: AsyncIterable<unknown>, options: SseOptions = {}): 
 type StreamMethod = (this: any, ...args: any[]) => AsyncIterable<unknown>;
 type StreamDecorator = <M extends StreamMethod>(method: M, context: ClassMethodDecoratorContext) => M;
 
+function markStreaming(context: ClassMethodDecoratorContext): void {
+  STREAMING.ownSet<string | symbol>(context.metadata).add(context.name);
+}
+
 
 /**
  * The options form's argument must be options. A function here is nearly
@@ -418,9 +426,15 @@ export function ndjson<M extends StreamMethod>(method: M, context: ClassMethodDe
 export function ndjson(options?: NdjsonOptions): StreamDecorator;
 export function ndjson(a?: unknown, b?: unknown): unknown {
   if (isAsyncIterable(a)) return ndjsonResponse(a, b as NdjsonOptions | undefined);
-  if (typeof a === "function" && isDecoratorContext(b, "method")) return wrapMethod(a as StreamMethod, (s) => ndjsonResponse(s));
+  if (typeof a === "function" && isDecoratorContext(b, "method")) {
+    markStreaming(b);
+    return wrapMethod(a as StreamMethod, (s) => ndjsonResponse(s));
+  }
   const options = streamOptions<NdjsonOptions>("ndjson", a);
-  return (method: StreamMethod) => wrapMethod(method, (s) => ndjsonResponse(s, options));
+  return (method: StreamMethod, context: ClassMethodDecoratorContext) => {
+    markStreaming(context);
+    return wrapMethod(method, (s) => ndjsonResponse(s, options));
+  };
 }
 
 /**
@@ -448,7 +462,13 @@ export function sse<M extends StreamMethod>(method: M, context: ClassMethodDecor
 export function sse(options?: SseOptions): StreamDecorator;
 export function sse(a?: unknown, b?: unknown): unknown {
   if (isAsyncIterable(a)) return sseResponse(a, b as SseOptions | undefined);
-  if (typeof a === "function" && isDecoratorContext(b, "method")) return wrapMethod(a as StreamMethod, (s) => sseResponse(s));
+  if (typeof a === "function" && isDecoratorContext(b, "method")) {
+    markStreaming(b);
+    return wrapMethod(a as StreamMethod, (s) => sseResponse(s));
+  }
   const options = streamOptions<SseOptions>("sse", a);
-  return (method: StreamMethod) => wrapMethod(method, (s) => sseResponse(s, options));
+  return (method: StreamMethod, context: ClassMethodDecoratorContext) => {
+    markStreaming(context);
+    return wrapMethod(method, (s) => sseResponse(s, options));
+  };
 }

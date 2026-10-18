@@ -4,6 +4,7 @@ import type { YerdContext } from "../server/context.js";
 import { isMediaType, type MediaType } from "../respond/negotiate.js";
 import { createKey, metadataOf } from "./keys.js";
 import { assertPublicInstance, isDecoratorContext } from "./util.js";
+import { checkSitemapFields, type SitemapFields } from "../seo/sitemap.js";
 
 /**
  * An HTTP method a handler can answer. "ALL" answers any method the route has
@@ -197,6 +198,19 @@ export interface RouteOptions {
    * ```
    */
   session?: boolean;
+  /**
+   * The route's place in the sitemap (see app.sitemap()): false leaves it
+   * out; an object sets its changefreq and priority, and lists it even
+   * behind guards. Default: the group's setting, else the default rules.
+   *
+   * ```ts
+   * @route("/checkout", { sitemap: false })
+   * class Checkout {
+   *   @get page() { return <CheckoutForm />; }
+   * }
+   * ```
+   */
+  sitemap?: false | SitemapFields;
 }
 
 /**
@@ -236,6 +250,17 @@ export interface GroupOptions {
    * ```
    */
   session?: boolean;
+  /**
+   * Sitemap settings for member routes (see RouteOptions.sitemap): false
+   * leaves them out, unless a route sets its own object. The deepest
+   * setting wins.
+   *
+   * ```ts
+   * @group("/account", { sitemap: false })
+   * class Account {}
+   * ```
+   */
+  sitemap?: false | SitemapFields;
 }
 
 
@@ -400,6 +425,7 @@ export function route(pattern: string, options: RouteOptions = {}) {
   if (!pattern.startsWith("/")) {
     throw new TypeError(`@route pattern must start with "/": ${JSON.stringify(pattern)}`);
   }
+  if (options.sitemap) checkSitemapFields(options.sitemap, `@route ${pattern} { sitemap }`);
   return (value: Function, context: ClassDecoratorContext): void => {
     routeRegistry.push({
       ctor: value as new () => object,
@@ -695,6 +721,7 @@ export function noLayout(_method: Function, context: ClassMethodDecoratorContext
  */
 export function group(prefix: string, options: GroupOptions = {}) {
   if (!prefix.startsWith("/")) throw new TypeError(`@group prefix must start with "/": ${JSON.stringify(prefix)}`);
+  if (options.sitemap) checkSitemapFields(options.sitemap, `@group ${prefix} { sitemap }`);
   return (_value: Function, context: ClassDecoratorContext): void => {
     GROUP.set(context.metadata, { className: String(context.name ?? "anonymous"), prefix, options });
   };
@@ -717,9 +744,11 @@ export interface ResolvedRoute {
   guards: GuardSpec[];
   /** Whether the route has a session: its `session` option, else the nearest group's, else true. */
   session: boolean;
+  /** The `sitemap` option through the groups: false, the merged fields (deeper wins), or undefined when nothing set it. */
+  sitemap: false | SitemapFields | undefined;
 }
 
-/** Walk a route's group chain: prefixes concatenate, layouts nest, meta merges and `session` is inherited (deeper wins). */
+/** Walk a route's group chain: prefixes concatenate, layouts nest, meta merges, `session` and `sitemap` are inherited (deeper wins). */
 export function resolveRoute(def: RouteDef): ResolvedRoute {
   const chain: GroupDef[] = [];
   const seen = new Set<Function>();
@@ -761,5 +790,11 @@ export function resolveRoute(def: RouteDef): ResolvedRoute {
   let session = true;
   for (const g of chain) session = g.options.session ?? session;
   session = def.options.session ?? session;
-  return { pattern: joinPaths(prefix, def.pattern), layouts, isolated, meta: { ...meta, ...def.options.meta }, guards, session };
+  // false drops what outer groups set; an object adds to it, field by field.
+  let sitemap: false | SitemapFields | undefined;
+  for (const setting of [...chain.map((g) => g.options.sitemap), def.options.sitemap]) {
+    if (setting === false) sitemap = false;
+    else if (setting) sitemap = { ...(sitemap || {}), ...setting };
+  }
+  return { pattern: joinPaths(prefix, def.pattern), layouts, isolated, meta: { ...meta, ...def.options.meta }, guards, session, sitemap };
 }

@@ -43,6 +43,20 @@ export function requestIsHttps(req: IncomingMessage, trustProxy: boolean): boole
   return trustProxy && forwarded(req.headers["x-forwarded-proto"])?.toLowerCase() === "https";
 }
 
+/**
+ * The origin a request was sent to ("https://shop.example"), by the same
+ * rules as ctx.url: https per requestIsHttps, the host from X-Forwarded-Host
+ * under `trustProxy`, else Host. Undefined for a malformed host.
+ */
+export function requestOrigin(req: IncomingMessage, trustProxy: boolean): string | undefined {
+  const host = (trustProxy ? forwarded(req.headers["x-forwarded-host"]) : undefined) ?? req.headers.host ?? "localhost";
+  try {
+    return new URL(`${requestIsHttps(req, trustProxy) ? "https" : "http"}://${host}`).origin;
+  } catch {
+    return undefined;
+  }
+}
+
 const REQUEST_ID = /^[\w.:@-]{1,128}$/;
 
 /** A well-formed `x-request-id` the client sent, else undefined (the caller makes one up). */
