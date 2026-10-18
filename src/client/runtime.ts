@@ -20,6 +20,8 @@
  * - [data-yx-defer]     a prerendered <Dynamic> skeleton: filled from the server after load
  * - [data-yx-disabled]  set on the buttons a pending submit disabled (and will re-enable)
  * - [data-yx-prefetch]  warm a page or JSON response before it's needed (the `prefetch` prop)
+ * - <yerd-local>        client-side state from <Local>: data-yx-on-* handlers
+ *                       run against it, data-yx-text / data-yx-bind follow it
  *
  * Auto mode (<Scripts auto />, i.e. script[data-yx-auto]) drops the
  * attributes: every same-origin link boosts, every form submits with fetch
@@ -708,6 +710,107 @@ export function yerdRuntime(): void {
       { passive: true },
     );
   }
+
+  // ── <Local> state ──
+  // A <yerd-local> scope carries its initial state as JSON and the name its
+  // handlers use for it. Handlers (data-yx-on-<event>) are compiled with the
+  // state bound to that name; after each one, the scope's bindings
+  // (data-yx-text, data-yx-bind) are re-applied from the state.
+  type Scope = { el: Element; state: Record<string, unknown>; name: string };
+  const scopes = new WeakMap<Element, Scope>();
+  const wired = new WeakSet<Element>();
+
+  function read(state: unknown, path: string): unknown {
+    const negate = path.startsWith("!");
+    let value: unknown = state;
+    for (const key of (negate ? path.slice(1) : path).split(".")) {
+      if (key === "") continue;
+      value = value !== null && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined;
+    }
+    return negate ? !value : value;
+  }
+
+  /** Elements that belong to this scope, not to a <Local> nested inside it. */
+  function owned(scope: Scope, selector: string): Element[] {
+    return Array.from(scope.el.querySelectorAll(selector)).filter((el) => el.closest("yerd-local") === scope.el);
+  }
+
+  function applyBindings(scope: Scope): void {
+    for (const el of owned(scope, "[data-yx-text]")) {
+      const value = read(scope.state, el.getAttribute("data-yx-text")!);
+      const text = value === null || value === undefined ? "" : String(value);
+      if (el.textContent !== text) el.textContent = text;
+    }
+    for (const el of owned(scope, "[data-yx-bind]")) {
+      for (const entry of el.getAttribute("data-yx-bind")!.split(";")) {
+        const at = entry.indexOf(":");
+        if (at < 0) continue;
+        const name = entry.slice(0, at);
+        const value = read(scope.state, entry.slice(at + 1));
+        if (name.startsWith("class.")) el.classList.toggle(name.slice(6), Boolean(value));
+        else if (name === "value") (el as HTMLInputElement).value = value === null || value === undefined ? "" : String(value);
+        else if (name === "checked") (el as HTMLInputElement).checked = Boolean(value);
+        // Like the server renders them: aria-* and the enumerated attributes
+        // take the words ("true" / "false", translate "yes" / "no"), not presence.
+        else if (typeof value === "boolean" && (name.startsWith("aria-") || name === "draggable" || name === "spellcheck" || name === "contenteditable")) el.setAttribute(name, String(value));
+        else if (typeof value === "boolean" && name === "translate") el.setAttribute(name, value ? "yes" : "no");
+        else if (value === false || value === null || value === undefined) el.removeAttribute(name);
+        else el.setAttribute(name, value === true ? "" : String(value));
+      }
+    }
+  }
+
+  function wire(scope: Scope): void {
+    for (const el of [scope.el, ...owned(scope, "*")]) {
+      if (wired.has(el)) continue;
+      const handlers = Array.from(el.attributes).filter((a) => a.name.startsWith("data-yx-on-"));
+      if (handlers.length === 0) continue;
+      wired.add(el);
+      for (const attr of handlers) {
+        let fn: (event: Event) => unknown;
+        try {
+          fn = new Function(scope.name, `"use strict"; return (${attr.value});`)(scope.state) as (event: Event) => unknown;
+        } catch (error) {
+          console.error("[yerd] a <Local> handler didn't compile:", attr.value, error);
+          continue;
+        }
+        el.addEventListener(attr.name.slice("data-yx-on-".length), (event) => {
+          let result: unknown;
+          try {
+            result = fn(event);
+          } finally {
+            applyBindings(scope);
+          }
+          if (result && typeof (result as Promise<unknown>).then === "function") {
+            void (result as Promise<unknown>).then(() => applyBindings(scope), () => applyBindings(scope));
+          }
+        });
+      }
+    }
+  }
+
+  function initLocals(): void {
+    for (const el of Array.from(document.querySelectorAll("yerd-local[data-yx-local]"))) {
+      let scope = scopes.get(el);
+      if (!scope) {
+        let state: Record<string, unknown>;
+        try {
+          state = JSON.parse(el.getAttribute("data-yx-local")!) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        scope = { el, state, name: el.getAttribute("data-yx-as") || "s" };
+        scopes.set(el, scope);
+      }
+      // Wire handlers on new elements (a morph may have added some) and
+      // re-apply: a morph puts the server's initial values back.
+      wire(scope);
+      applyBindings(scope);
+    }
+  }
+  document.addEventListener("yx:applied", initLocals);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initLocals);
+  else initLocals();
 
   // Before any attribute connects: client halves receive it.
   const api = { morph, apply, refresh, load, prefetch, fetch: cachedFetch, attribute, auto };

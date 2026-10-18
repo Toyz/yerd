@@ -17,6 +17,7 @@ import { renderAttributes } from "./attrs.js";
 import { escapeHtml, isRawHtml } from "./escape.js";
 import { formAction, isAction, isBoundAction } from "../actions/action.js";
 import { DYNAMIC_ID, Dynamic, type DynamicProps } from "./dynamic.js";
+import { Local, isBinding, localState, stateName, type Binding, type LocalProps } from "./local.js";
 
 const VOID_ELEMENTS = new Set([
   "area", "base", "br", "col", "embed", "hr", "img", "input",
@@ -53,6 +54,8 @@ interface State {
   dynamic: RenderOptions["dynamic"];
   /** How many <Dynamic> boundaries we're inside; in "only" mode, output outside them is dropped. */
   insideDynamic: number;
+  /** How many <Local> scopes we're inside; event handlers are shipped to the browser only there. */
+  insideLocal: number;
   /** Flushed chunks waiting for the stream's consumer. */
   chunks: string[];
   /** Wakes the stream's consumer when a chunk is flushed. */
@@ -92,6 +95,12 @@ function renderChild(child: unknown, state: State): Step {
     write(state, String(child));
     return undefined;
   }
+  // A field read from <Local> state: the value now, kept live in the browser.
+  if (isBinding(child)) {
+    const b = child as Binding;
+    write(state, `<span data-yx-text="${b.negate ? "!" : ""}${escapeHtml(b.path)}">${escapeHtml(String(b.value ?? ""))}</span>`);
+    return undefined;
+  }
   if (typeof child !== "object") throw new TypeError(`Cannot render ${typeof child} as a child`);
   if (isYerdNode(child)) return renderNode(child, state);
   if (Array.isArray(child)) return renderList(child, 0, state);
@@ -124,6 +133,7 @@ function renderNode(node: YerdNode, state: State): Step {
   if (typeof type === "function") {
     if (type === Fragment) return renderChild(props.children, state);
     if (type === Dynamic) return renderDynamic(props as unknown as DynamicProps, state);
+    if (type === Local) return renderLocal(props as unknown as LocalProps<object>, state);
     // In "only" mode components outside a <Dynamic> still run (a Dynamic may
     // be anywhere inside them); only their output is dropped.
     return renderChild(type(props), state);
@@ -161,7 +171,7 @@ function renderNode(node: YerdNode, state: State): Step {
   }
 
   const key = node.key === undefined || props["data-key"] !== undefined ? "" : ` data-key="${escapeHtml(String(node.key))}"`;
-  write(state, `<${type}${renderAttributes(attrs, type)}${key}>${hidden}`);
+  write(state, `<${type}${renderAttributes(attrs, type, true, state.insideLocal > 0)}${key}>${hidden}`);
   if (isVoid) return undefined;
   if (type === "script" || type === "style") {
     writeRawText(type, props.children, state);
@@ -235,6 +245,41 @@ function rawText(type: string, children: unknown, out: string): string {
   throw new TypeError(`<${type}> children must be text (strings, numbers, raw() or json())`);
 }
 
+/**
+ * A <Local> scope: a display:contents wrapper carrying the initial state as
+ * JSON and the name handlers use for it, then the render prop's output.
+ */
+function renderLocal(props: LocalProps<object>, state: State): Step {
+  const { state: initial, children } = props;
+  if (typeof children !== "function") throw new TypeError("<Local> takes a render prop: {(s) => ...}");
+  let json: string;
+  try {
+    json = JSON.stringify(initial);
+  } catch (error) {
+    throw new TypeError(`<Local> state must be JSON (plain objects, arrays, strings, numbers, booleans): ${(error as Error).message}`);
+  }
+  const name = stateName(children);
+  write(state, `<yerd-local data-yx-local="${escapeHtml(json)}" data-yx-as="${name}" style="display:contents">`);
+  state.insideLocal++;
+  const done = () => {
+    state.insideLocal--;
+    write(state, "</yerd-local>");
+  };
+  let step: Step;
+  try {
+    step = renderChild(children(localState(initial)), state);
+  } catch (error) {
+    state.insideLocal--;
+    throw error;
+  }
+  if (step) return step.then(done, (error: unknown) => {
+    state.insideLocal--;
+    throw error;
+  });
+  done();
+  return undefined;
+}
+
 function renderDynamic(props: DynamicProps, state: State): Step {
   const { id, fallback, noscript, children, as = "div", ...rest } = props;
   checkTag(as);
@@ -295,6 +340,7 @@ export async function* renderToStream(child: Child, options: RenderOptions = {})
     started: false,
     dynamic: options.dynamic,
     insideDynamic: 0,
+    insideLocal: 0,
     chunks: [],
     notify: undefined,
   };

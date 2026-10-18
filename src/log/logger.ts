@@ -22,6 +22,7 @@
 
 import type { Level } from "./ilogger.js";
 import { activeBinding, currentSpan, emit, enabledHere, withSpan } from "./span.js";
+import { className } from "./instrument.js";
 
 /**
  * A logger for one target (category). Get one with @logger, inject the
@@ -112,7 +113,7 @@ function loggerAccessor(explicit: string | undefined) {
     return {
       get(this: This): Logger {
         const self = this as This & { [CACHED]?: Logger };
-        return (self[CACHED] ??= new Logger(explicit ?? (this.constructor as { name: string }).name));
+        return (self[CACHED] ??= new Logger(explicit ?? className(this)));
       },
       set() {
         throw new TypeError("@logger fields are read-only");

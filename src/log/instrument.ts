@@ -55,6 +55,8 @@ export type SkipPath<E extends string, Args extends readonly unknown[]> = E exte
   ? E
   : E extends `${number}`
     ? `skip "${E}": there's no argument at that position`
+    : E extends `${infer Index extends number}.${infer Rest}`
+      ? `skip "${E}": argument ${Index} has no field "${Rest}"`
     : E extends `${string}.${infer Rest}`
       ? E extends `${infer _Root}.${Rest}`
         ? Rest extends DeepPath<NonNullable<Args[number]>>
@@ -76,7 +78,9 @@ export interface InstrumentOptions<This = any, Args extends unknown[] = any[], S
    * (`"opts.headers.authorization"`, `"1.items.0.token"`). Checked by the
    * compiler as far as types allow, and the names when the class loads.
    */
-  skip?: S & { readonly [K in keyof S]: SkipPath<S[K] & string, Args> };
+  // A mapped type alone (no intersection with S) so a wrong entry's error is
+  // the message SkipPath built, at that entry.
+  skip?: { readonly [K in keyof S]: SkipPath<S[K] & string, Args> };
   /** Record no arguments. */
   skipAll?: boolean;
   /** Extra or derived fields. */
@@ -182,6 +186,16 @@ function without(value: unknown, paths: string[][]): unknown {
   return copy;
 }
 
+/**
+ * The class name for a default target. Bundlers rename a class whose name
+ * clashes with another in the bundle (`TodoList` becomes `TodoList$1`); the
+ * suffix is dropped so targets and YERD_LOG filters match what you wrote.
+ */
+export function className(self: unknown): string {
+  const name = (self as { constructor?: { name?: string } } | undefined)?.constructor?.name;
+  return name ? name.replace(/\$\d+$/, "") : "anonymous";
+}
+
 export function instrument<This, Args extends unknown[], R, const S extends readonly string[] = []>(
   options: InstrumentOptions<This, Args, S> = {},
 ) {
@@ -190,7 +204,7 @@ export function instrument<This, Args extends unknown[], R, const S extends read
     const methodName = String(context.name);
     const skip = compileSkip((options.skip ?? []) as readonly string[], names, methodName);
     return function (this: This, ...args: Args): R {
-      const target = options.target ?? ((this as { constructor?: { name?: string } })?.constructor?.name || "anonymous");
+      const target = options.target ?? className(this);
       const self = this;
       return withSpan(
         {

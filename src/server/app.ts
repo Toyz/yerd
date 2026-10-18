@@ -693,6 +693,7 @@ export class YerdApp {
       sessions: this.#sessions,
       container,
       actionTtl: this.#options.actionTtl ?? 86_400,
+      trustProxy: this.#options.trustProxy ?? false,
     };
     this.#container = container;
     this.#router = router;
@@ -1109,11 +1110,13 @@ export class YerdApp {
         const instance = this.#routeInstance(handler!, scope);
         const result = await (instance[entry.method] as (error: unknown) => unknown).call(instance, error);
         if (result === undefined) continue;
-        return await this.#recovered(error, result, handler!.layouts, context, dynamic, `${handler!.def.className}.${String(entry.method)}`);
+        // A @catches naming the error's class handles it on purpose (debug);
+        // a catch-all might be hiding a bug (warn).
+        return await this.#recovered(error, result, handler!.layouts, context, dynamic, `${handler!.def.className}.${String(entry.method)}`, entry.types.length > 0 ? "debug" : "warn");
       }
       if (this.#onError) {
         const result = await this.#onError(error, context);
-        if (result !== undefined) return await this.#recovered(error, result, this.#layouts, context, dynamic, "app.onError");
+        if (result !== undefined) return await this.#recovered(error, result, this.#layouts, context, dynamic, "app.onError", "warn");
       }
     } catch (handlerError) {
       // The error handler failed too: the error page reports that one.
@@ -1130,8 +1133,9 @@ export class YerdApp {
     context: RequestContext,
     dynamic: "fallback" | "only" | undefined,
     by: string,
+    level: "debug" | "warn",
   ): Promise<Outgoing> {
-    if (!(error instanceof HttpError)) requestLog.error(error instanceof Error ? error.message : "request failed", { error, handledBy: by });
+    if (!(error instanceof HttpError)) requestLog.log(level, error instanceof Error ? error.message : "request failed", { handledBy: by }, error);
     // A returned res(..., { status }) or number says the status; otherwise it's the error's.
     let out = await coerce(result, { layouts, meta: context.meta, dynamic });
     if (!out.explicitStatus) out.status = error instanceof HttpError ? error.status : 500;

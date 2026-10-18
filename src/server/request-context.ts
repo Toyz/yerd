@@ -26,6 +26,8 @@ export interface RequestEnv {
   container: Container;
   /** How long action tokens stay valid, in seconds. */
   actionTtl: number;
+  /** Believe X-Forwarded-Proto / X-Forwarded-Host (behind a reverse proxy). */
+  trustProxy: boolean;
 }
 
 /** Split a request target into path and search without building a URL object. */
@@ -78,8 +80,24 @@ export class RequestContext implements YerdContext {
     }
   }
 
+  /**
+   * The full request URL. https when the connection is TLS, or (with
+   * `trustProxy`) when X-Forwarded-Proto says so; the host comes from
+   * X-Forwarded-Host under the same rule, else Host.
+   */
   get url(): URL {
-    return (this.#url ??= new URL(this.path + this.#search, `http://${this.req.headers.host ?? "localhost"}`));
+    if (!this.#url) {
+      const headers = this.req.headers;
+      const forwarded = (name: string) => {
+        const value = headers[name];
+        return (Array.isArray(value) ? value[0] : value)?.split(",")[0]!.trim() || undefined;
+      };
+      const tls = (this.req.socket as { encrypted?: boolean }).encrypted === true;
+      const proto = (this.env.trustProxy ? forwarded("x-forwarded-proto") : undefined) ?? (tls ? "https" : "http");
+      const host = (this.env.trustProxy ? forwarded("x-forwarded-host") : undefined) ?? headers.host ?? "localhost";
+      this.#url = new URL(this.path + this.#search, `${proto === "https" ? "https" : "http"}://${host}`);
+    }
+    return this.#url;
   }
 
   get query(): URLSearchParams {

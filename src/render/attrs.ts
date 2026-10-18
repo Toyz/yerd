@@ -1,5 +1,6 @@
 import { attributeVersion, customAttribute, type AttributeDef } from "../attributes/attribute.js";
 import { escapeHtml, isRawHtml } from "./escape.js";
+import { isBinding, type Binding } from "./local.js";
 
 // Anything that could end the attribute name or the tag. Attribute names come
 // from prop keys, which can come from spread objects, so they're validated
@@ -165,9 +166,11 @@ function isEventHandlerName(name: string): boolean {
  * attribute()) render through their own `render`; `custom` is false for that
  * output, so a custom attribute can write its own name as a plain attribute.
  */
-export function renderAttributes(props: Record<string, unknown>, tag = "", custom = true): string {
+export function renderAttributes(props: Record<string, unknown>, tag = "", custom = true, local = false): string {
   let out = "";
   let classDone = false;
+  // <Local> bindings on this element: "hidden:!open;class.active:sel".
+  let binds: string[] | undefined;
   if (namesVersion !== attributeVersion()) {
     names.clear();
     namesVersion = attributeVersion();
@@ -176,6 +179,12 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
     if (name === "children" || name === "key") continue;
     let value = props[name];
     if (value === null || value === undefined) continue;
+    if (isBinding(value)) {
+      const b = value as Binding;
+      (binds ??= []).push(`${name}:${b.negate ? "!" : ""}${b.path}`);
+      value = b.value;
+      if (value === null || value === undefined) continue;
+    }
     const info = nameInfo(name);
     if (custom) {
       const def = info.custom;
@@ -186,9 +195,12 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
       }
     }
     if (typeof value === "function") {
-      // Event handlers on server-rendered elements become sprinkles in M6.
-      // Until then they produce no output.
-      if (isEventHandlerName(name)) continue;
+      if (isEventHandlerName(name)) {
+        // Inside <Local> a handler runs in the browser: its source goes along.
+        // Elsewhere there's nothing to run it, so it's dropped.
+        if (local) out += ` data-yx-on-${name.slice(2).toLowerCase()}="${escapeHtml(handlerSource(name, value))}"`;
+        continue;
+      }
       throw new TypeError(`Attribute ${name} got a function; only on* event handlers (dropped on the server) and formaction={action} on a submit button accept one`);
     }
     if (value === false && enumerated(name, false) === undefined) continue;
@@ -199,6 +211,22 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
       // Both given: one attribute, in prop order.
       if (classDone) continue;
       classDone = true;
+      // Class flags bound to <Local> state: `{ active: s.selected }`.
+      if (value && typeof value === "object" && !Array.isArray(value) && !isRawHtml(value)) {
+        const flags = value as Record<string, unknown>;
+        if (Object.values(flags).some(isBinding)) {
+          const plain: Record<string, unknown> = {};
+          for (const flag of Object.keys(flags)) {
+            const v = flags[flag];
+            if (isBinding(v)) {
+              const b = v as Binding;
+              (binds ??= []).push(`class.${flag}:${b.negate ? "!" : ""}${b.path}`);
+              plain[flag] = b.value;
+            } else plain[flag] = v;
+          }
+          value = plain;
+        }
+      }
       const other = name === "class" ? props.className : props.class;
       value = other ? appendClasses(classNames(value as ClassValue), other as ClassValue) : classNames(value as ClassValue);
       if (value === "") continue;
@@ -233,5 +261,15 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
       out += ` ${name}="${escapeHtml(String(value))}"`;
     }
   }
+  if (binds) out += ` data-yx-bind="${escapeHtml(binds.join(";"))}"`;
   return out;
+}
+
+/** A <Local> handler's source, refusing compiler output that leans on helpers the browser won't have. */
+function handlerSource(name: string, fn: Function): string {
+  const source = fn.toString();
+  if (/\b__(async|awaiter|generator|name)\b/.test(source)) {
+    throw new TypeError(`${name} in <Local> was compiled with a helper (async lowered below ES2017, or keepNames); handlers are sent as source and must be self-contained`);
+  }
+  return source;
 }

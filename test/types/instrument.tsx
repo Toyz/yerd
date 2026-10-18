@@ -16,7 +16,7 @@ export class Accounts {
     return input.email + request.headers.host;
   }
 
-  @instrument({ skip: ["password", "0", "1.0.token"] })
+  @instrument({ skip: ["password", "0", "2.0.token"] })
   login(password: string, extra: string, tokens: Array<{ token: string }>) {
     return password + extra + tokens.length;
   }
