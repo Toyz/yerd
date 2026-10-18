@@ -9,15 +9,13 @@ Sessions are off until you call `app.sessions()`. Then any route can read and wr
 ```tsx
 import { post, get, redirect, route, session, yerd, type Session } from "@toyz/yerd";
 
-declare module "@toyz/yerd" {
-  interface SessionData {
-    cart?: string[];
-  }
+interface CartData {
+  cart?: string[];
 }
 
 @route("/cart")
 export class Cart {
-  @session accessor session!: Session;
+  @session accessor session!: Session<CartData>;
 
   @get show() {
     return { items: this.session.get("cart") ?? [], notice: this.session.flash("notice") ?? null };
@@ -33,7 +31,21 @@ export class Cart {
 export const app = yerd().sessions();
 ```
 
-The `declare module` block types your keys: `get("cart")` is `string[] | undefined`, and `set("cart", 42)` won't compile. Outside a route class, `currentContext().session` gives you the same object.
+`Session<CartData>` types the keys: `get("cart")` is `string[] | undefined`, `get("crat")` and `set("cart", 42)` won't compile. The type is only a view: every route sees the same session, so two routes can use different interfaces over it (keep their fields from clashing). `@args(session)` works the same way, typed by the parameter.
+
+Keys the whole app shares (a signed-in user id, say) can go on the global `SessionData` interface instead, and plain `Session` uses it:
+
+```ts
+declare module "@toyz/yerd" {
+  interface SessionData {
+    userId?: string;
+  }
+}
+
+@session accessor session!: Session; // get("userId") is string | undefined
+```
+
+Outside a route class, `currentContext().session` gives you the same object (typed by `SessionData`).
 
 ## The session API
 

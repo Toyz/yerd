@@ -390,8 +390,19 @@ export function ndjsonBody<const A extends DtoClass<unknown> | { transform?: Pip
   return ndjsonBodyAccessor(schema) as unknown as FieldDecorator<{}, AsyncIterable<LineValue<A>>, unknown>;
 }
 
-/** The session (needs app.sessions()). */
-export const session = createAccessor((ctx): import("../session/session.js").Session => ctx.session, { name: "session" });
+/**
+ * The session (needs app.sessions()). The accessor's type picks the shape:
+ * `Session<Cart>` types get/set by `Cart`'s fields; plain `Session` uses the
+ * app-wide `SessionData` interface.
+ *
+ * ```ts
+ * interface Cart { items?: string[]; coupon?: string }
+ *
+ * @session accessor session!: Session<Cart>;
+ * // this.session.get("items") is string[] | undefined; get("itmes") doesn't compile
+ * ```
+ */
+export const session = createAccessor((ctx): import("../session/session.js").Session<any> => ctx.session, { name: "session" });
 
 const cookieAccessor = createAccessor<unknown, [name: string, options?: AnyOptions]>(
   (ctx, name, options) => {

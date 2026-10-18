@@ -2,7 +2,15 @@
  * Sessions.
  *
  * Enabled with `app.sessions(...)`. Read with `@session accessor session!: Session`
- * or `currentContext().session`. Typed through declaration merging:
+ * or `currentContext().session`. Give it a shape per route, which types
+ * get/set/delete:
+ *
+ * ```ts
+ * interface Cart { items?: string[]; coupon?: string }
+ * @session accessor session!: Session<Cart>;
+ * ```
+ *
+ * or app-wide, through declaration merging (what plain `Session` uses):
  *
  * ```ts
  * declare module "@toyz/yerd" { interface SessionData { userId?: string; cart?: string[] } }
@@ -22,7 +30,7 @@
 
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from "node:crypto";
 
-/** Augment this to type session keys. */
+/** Augment this to type session keys app-wide; `Session<T>` types one route's view instead. */
 export interface SessionData {}
 
 type Data = Record<string, unknown>;
@@ -176,8 +184,12 @@ export function unseal<T>(secrets: readonly string[], sealed: string): T | undef
 
 type Key<D> = Extract<keyof D, string>;
 
-/** One request's view of the session. Changes are saved after the handler runs. */
-export class Session<D = SessionData> {
+/**
+ * One request's view of the session. Changes are saved after the handler
+ * runs. `D` is the shape get/set/delete are typed by: your own interface
+ * (`Session<Cart>`), or the merged `SessionData` by default.
+ */
+export class Session<D extends object = SessionData> {
   #data: Data;
   #incomingFlash: Data;
   #outgoingFlash: Data = {};

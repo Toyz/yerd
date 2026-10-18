@@ -309,18 +309,14 @@ export class Slow {
 }
 ```
 
-[`@session`](api:yerd.session) gives you the session once the app calls `.sessions()`. Session keys are typed by declaring them on `SessionData`; the [sessions and auth guide](09-sessions-and-auth.md) has the full story.
+[`@session`](api:yerd.session) gives you the session once the app calls `.sessions()`. `Session<T>` types its keys by `T`; the [sessions and auth guide](09-sessions-and-auth.md) has the full story.
 
 ```tsx
 import { get, route, session, type Session } from "@toyz/yerd";
 
-declare module "@toyz/yerd" {
-  interface SessionData { visits?: number }
-}
-
 @route("/visits")
 export class Visits {
-  @session accessor session!: Session;
+  @session accessor session!: Session<{ visits?: number }>;
 
   @get count() {
     const n = (this.session.get("visits") ?? 0) + 1;
