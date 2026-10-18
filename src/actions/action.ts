@@ -510,7 +510,10 @@ export function formAction(value: ActionLambda | Action<unknown> | BoundAction):
  * "/\\evil.com", "https://..." or "javascript:...". Browsers drop tabs and
  * newlines anywhere in a URL and read a backslash as "/", so "/\t/evil.com" is
  * "//evil.com" to them: control characters and backslashes are refused
- * outright, then the URL parser has the last word on the origin.
+ * outright, then the URL parser has the last word on the origin. What we
+ * hand back is the parsed path, and parsing drops dot segments: "/.//evil.com"
+ * (or "/%2e//evil.com", "/x/..//evil.com") comes out as "//evil.com", which a
+ * browser reads as another host. A result starting with "//" is refused too.
  */
 export function safeBack(value: string | null | undefined, fallback: string): string {
   if (!value || !value.startsWith("/") || /[\x00-\x1f\x7f\\]/.test(value)) return fallback;
@@ -520,5 +523,6 @@ export function safeBack(value: string | null | undefined, fallback: string): st
   } catch {
     return fallback;
   }
-  return url.origin === "http://x" ? url.pathname + url.search + url.hash : fallback;
+  if (url.origin !== "http://x" || url.pathname.startsWith("//")) return fallback;
+  return url.pathname + url.search + url.hash;
 }
