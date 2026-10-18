@@ -32,6 +32,13 @@ const sheet = css`
     background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: 6px;
   }
   .filter input::placeholder { color: var(--text-faint); }
+  .filter input::-webkit-search-cancel-button { display: none; }
+  .filter .clear {
+    position: absolute; right: 6px; top: 50%; margin-top: -13px; width: 26px; height: 26px;
+    display: grid; place-items: center; border: 0; border-radius: 4px; background: none; color: var(--text-faint); cursor: pointer;
+  }
+  .filter .clear:hover { color: var(--text); background: var(--bg-hover); }
+  .filter .clear svg { position: static; margin: 0; }
   .filter input:focus { outline: 2px solid var(--hat); outline-offset: 0; border-color: transparent; }
   .kinds { display: flex; gap: 4px; flex-wrap: wrap; }
   .kinds button {
@@ -111,14 +118,21 @@ export class PageApi extends LoomElement {
     this.api = await loadApi();
   }
 
-  #matches(e: Entry, tokens: string[]): boolean {
+  /**
+   * How well an export matches the filter: 0 is no match, then a name that
+   * starts with what you typed (3), a name that contains it (2), and a match
+   * only in its members, module or section (1).
+   */
+  #score(e: Entry, tokens: string[]): number {
     const kind = KINDS.find((k) => k.id === this.kind)!;
-    if (kind.id === "new" && e.since !== null && !(e.members ?? []).some((m) => m.since === null)) return false;
-    if (kind.kinds.length && !kind.kinds.includes(e.kind)) return false;
-    if (tokens.length === 0) return true;
+    if (kind.id === "new" && e.since !== null && !(e.members ?? []).some((m) => m.since === null)) return 0;
+    if (kind.kinds.length && !kind.kinds.includes(e.kind)) return 0;
+    if (tokens.length === 0) return 1;
     const name = e.name.toLowerCase();
     const rest = `${e.module} ${e.section} ${(e.members ?? []).map((m) => m.name).join(" ")}`.toLowerCase();
-    return tokens.every((t) => name.includes(t) || rest.includes(t));
+    if (!tokens.every((t) => name.includes(t) || rest.includes(t))) return 0;
+    if (name.startsWith(tokens[0]!)) return 3;
+    return tokens.every((t) => name.includes(t)) ? 2 : 1;
   }
 
   #row(e: Entry, first: string | undefined) {
@@ -155,12 +169,18 @@ export class PageApi extends LoomElement {
     const hasNew = api.entries.some((e) => e.since === null || (e.members ?? []).some((m) => m.since === null));
     let shown = 0;
     let total = 0;
-    const blocks = sections.map((section) => {
+    const groups = sections.map((section, order) => {
       // Types documented on another export's page are listed with it ("with ..."), unless you're searching.
       const inSection = api.entries.filter((e) => e.section === section && (searching || !e.partOf));
       total += inSection.length;
-      const entries = inSection.filter((e) => this.#matches(e, tokens)).sort((a, b) => KIND_ORDER[a.kind]! - KIND_ORDER[b.kind]! || a.name.localeCompare(b.name));
-      shown += entries.length;
+      const scored = inSection.map((e) => ({ e, score: this.#score(e, tokens) })).filter((s) => s.score > 0);
+      scored.sort((a, b) => b.score - a.score || KIND_ORDER[a.e.kind]! - KIND_ORDER[b.e.kind]! || a.e.name.localeCompare(b.e.name));
+      shown += scored.length;
+      return { section, order, entries: scored.map((s) => s.e), best: Math.max(0, ...scored.map((s) => s.score)) };
+    });
+    // While you type, the sections with the best name matches come first.
+    if (tokens.length) groups.sort((a, b) => b.best - a.best || a.order - b.order);
+    const blocks = groups.map(({ section, entries }) => {
       if (entries.length === 0) return null;
       const blurb = SECTION_INFO[section];
       return (
@@ -211,6 +231,13 @@ export class PageApi extends LoomElement {
                 if (e.key === "Escape") this.text = "";
               }}
             />
+            {this.text ? (
+              <button type="button" class="clear" aria-label="Clear the filter" onClick={() => (this.text = "")}>
+                <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={2.4} stroke-linecap="round" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6 6 18" />
+                </svg>
+              </button>
+            ) : null}
           </label>
           <div class="kinds" role="group" aria-label="Kind">
             {KINDS.filter((k) => k.id !== "new" || hasNew).map((k) => (

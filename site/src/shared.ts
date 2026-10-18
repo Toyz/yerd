@@ -76,6 +76,7 @@ export const pageStyles = css`
     :host { padding: 28px 16px 72px; }
   }
 
+  :focus-visible { outline: 2px solid var(--hat); outline-offset: 2px; border-radius: 2px; }
   a { color: var(--accent); text-decoration: underline; text-decoration-color: var(--accent-dim); text-decoration-thickness: 1px; text-underline-offset: 3px; }
   a:hover { text-decoration-color: currentColor; }
   a.external::after { content: "↗"; margin-left: 2px; font-size: 0.75em; color: var(--text-faint); }

@@ -24,6 +24,7 @@ const sheet = css`
   }
   .skip:focus { top: 10px; }
   main:focus { outline: none; }
+  :focus-visible { outline: 2px solid var(--hat); outline-offset: 2px; }
 
   /* ── top bar ── */
   header {
