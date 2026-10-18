@@ -66,11 +66,12 @@ const BY_DIR = {
   events: "Events",
   log: "Logging",
   vite: "Vite",
+  seo: "Sitemaps",
 };
 const SECTION_ORDER = [
   "Server", "Routing", "Request data", "DTOs and validation", "Responses", "Errors", "Rendering", "JSX",
   "Actions and dynamics", "Guards", "Dependency injection", "Events", "Sessions", "Auth", "Live and streaming",
-  "Logging", "Assets", "Decorator kit", "Vite", "Runtime",
+  "Logging", "Assets", "Sitemaps", "Decorator kit", "Vite", "Runtime",
 ];
 
 function sectionOf(file) {
@@ -438,7 +439,7 @@ const GUIDE_GROUPS = [
   { group: "Core concepts", guides: [["routing", "Routing"], ["request-data", "Request data"], ["responses", "Responses"], ["pages-and-layouts", "Pages and layouts"]] },
   { group: "Building apps", guides: [["interactivity", "Interactivity"], ["client-code", "Client code"], ["streaming-and-live", "Streaming and live"], ["services", "Services and DI"], ["events", "Events"], ["sessions-and-auth", "Sessions and auth"]] },
   { group: "Recipes", guides: [["recipes", "Recipes"]] },
-  { group: "Production", guides: [["logging", "Logging"], ["deploying", "Deploying"], ["testing", "Testing"], ["security", "Security"]] },
+  { group: "Production", guides: [["logging", "Logging"], ["deploying", "Deploying"], ["sitemaps", "Sitemaps and robots.txt"], ["testing", "Testing"], ["security", "Security"]] },
 ];
 
 function guideList() {
