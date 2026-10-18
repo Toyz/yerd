@@ -1,10 +1,10 @@
 # Sessions and auth
 
-This page covers sessions, signing users in with `@toyz/yerd/auth`, guards, and the security checks yerd does for you.
+Sessions, signing users in with `@toyz/yerd/auth`, and guards.
 
 ## Turn sessions on
 
-Sessions are off until you call `app.sessions()`. Then any route can read and write the session through `@session`.
+Call `app.sessions()`; then any route reads and writes the session through `@session`.
 
 ```tsx
 import { post, get, redirect, route, session, yerd, type Session } from "@toyz/yerd";
@@ -31,17 +31,15 @@ export class Cart {
 export const app = yerd().sessions();
 ```
 
-`Session<CartData>` types the session: `this.session.cart` is `string[] | undefined`, and `this.session.crat` or `this.session.cart = 42` won't compile. Values are plain properties:
-
-- assign to save one, assign `undefined` (or `delete`) to remove it;
-- changes made in place (`push`, editing a nested object) are noticed and saved too;
-- `get(key)` / `set(key, value)` do the same by name, and reach a field named like a session method (`id`, `flash`, ...).
-
-The type is only a view: every route sees the same session, so two routes can use different shapes over it (keep their field names apart). `@args(session)` works the same way, typed by the parameter.
+- `Session<CartData>` types the session's keys; typos and wrong types don't compile.
+- Assign to save, assign `undefined` (or `delete`) to remove. In-place changes (`push`, nested edits) are saved too.
+- `get(key)` / `set(key, value)` do the same by name, including keys named like session methods (`id`, `flash`).
+- The type is only a view over one shared session; routes may use different shapes, with distinct field names.
+- `@args(session)` gives a handler parameter the same thing.
 
 ### A class for methods and defaults
 
-Pass a class to `@session` and the session gets its methods, getters and setters, with `this` as the session. Field initializers are defaults: a missing value reads as the default, and it's only saved once it changes, so reading a default never writes the session by itself.
+Pass a class to `@session` to give the session its methods, getters and setters, with field initializers as defaults.
 
 ```tsx
 import { get, post, redirect, route, session, type Session } from "@toyz/yerd";
@@ -74,15 +72,15 @@ export class CartPage {
 }
 ```
 
-- The class is never stored: only its data fields are, so keep them JSON (plain objects, arrays, strings, numbers, booleans).
-- Its constructor runs once per request (for the defaults) and takes no arguments.
-- No `#private` fields: `this` is the session, not an instance of the class.
-- Session members win, so a method or getter named like one (`clear`, `delete`, `flash`, `get`, ...) would never run: a shape with one is refused the first time it's used.
+- A missing value reads as its default, which is only saved once it changes.
+- Only data fields are stored: keep them JSON. The constructor takes no arguments.
+- No `#private` fields: `this` is the session, not an instance.
+- A member named like a session method (`clear`, `flash`, `get`, ...) is refused on first use.
 - `@args(session(Cart))` gives a handler parameter the same view.
 
 ### Outside a route: session.as()
 
-Code that isn't a route class gets the plain session: auth hooks, `currentContext().session` in a component, a helper function. [`session.as(Shape)`](api:yerd.Session) gives it the same typed view `@session(Shape)` gives a route, methods and defaults included; `session.as<T>()` with no argument is a type-only view, like `Session<T>`:
+Code outside a route class (auth hooks, components via `currentContext().session`, helpers) gets the plain session; [`session.as(Shape)`](api:yerd.Session) gives it the typed view.
 
 ```tsx
 import { currentContext } from "@toyz/yerd";
@@ -105,57 +103,49 @@ export function lastSearch(): string | undefined {
 }
 ```
 
-Views are cheap and share one session: `as(Prefs)` in a component and `@session(Prefs)` in the route see, and change, the same `theme`.
+- `as(Shape)` includes methods and defaults; `as<T>()` is a type-only view, like `Session<T>`.
+- Views share one session: `as(Prefs)` here and `@session(Prefs)` in a route change the same `theme`.
 
 ### App-wide keys
 
-Most apps never need this. If a few keys really are everywhere (a theme every layout reads, say) and you'd rather not write `.as()` each time, declare them once on the global `SessionData` interface. Plain `Session` and `currentContext().session` are typed by it:
+For the few keys every page reads (a theme, say), declare them on the global `SessionData` interface; plain `Session` and `currentContext().session` are typed by it.
 
-```tsx
-import { post, redirect, route, session, type Session } from "@toyz/yerd";
-
+```ts
 declare module "@toyz/yerd" {
   interface SessionData {
     theme?: "light" | "dark";
   }
 }
 
-@route("/theme")
-export class Theme {
-  @session accessor session!: Session;
-
-  @post toggle() {
-    this.session.theme = this.session.theme === "dark" ? "light" : "dark"; // typed by SessionData
-    return redirect("/");
-  }
-}
+// anywhere: this.session.theme, currentContext().session.theme
 ```
 
-The interface is global, so every key on it is visible (and writable) from every route. Keep it to a handful; for anything that belongs to one feature, a shape class and `.as()` keep its keys next to its code.
+Every route sees these keys, so keep it to a handful; feature data belongs in a shape class.
 
 ## The session API
 
 | Method | Does |
 | --- | --- |
-| `session.key` / `session.key = value` | read and write a value (`undefined` removes it); a shape class adds its own methods |
+| `session.key` / `session.key = value` | read and write a value (`undefined` removes it) |
 | `get(key)` / `set(key, value)` | the same, by name |
-| `delete(key)` / `clear()` | remove one value / all of them (sign-in and the CSRF nonce included, so open forms stop working) |
-| `flash(key, value)` | keep a value for the next request that uses the session only (a notice after a redirect) |
-| `flash(key)` | read and consume a flash set by the previous request that used the session |
+| `delete(key)` / `clear()` | remove one value / all of them (`clear` also drops sign-in and the CSRF nonce, so open forms stop working) |
+| `flash(key, value)` | keep a value for the next request that uses the session (a notice after a redirect) |
+| `flash(key)` | read and consume that value |
 | `regenerate()` | new session id and CSRF nonce, same data; do this on login |
-| `destroy()` | drop the session and its cookie; setting a value afterwards starts a fresh one |
+| `destroy()` | drop the session and cookie; a later write starts a fresh one |
 | `isNew`, `createdAt` | whether the request arrived without a session; when it was created |
 
-HTML pages sent to someone with a session get `Cache-Control: private, no-cache` (unless the handler set its own), so a shared cache or the browser's Back button can't show a signed-in page to the wrong person, or a signed-out page after signing in.
-
-The session is opened the first time something uses it (`ctx.session`, a `@session` field, auth middleware, an action form), not before: a request that never touches it doesn't unseal the cookie or read the store. Changes are saved after the handler runs, including ones made in place. A request that changed nothing sends no cookie, unless a rolling session it used is due for a refresh; a request that never used the session doesn't refresh it, and doesn't use up a flash either.
+- The session opens on first use (`ctx.session`, `@session`, auth middleware, an action). A request that never uses it doesn't refresh it or consume a flash.
+- Changes are saved after the handler runs; an unchanged session sends no cookie unless a rolling refresh is due.
+- An unhandled crash (anything but an `YerdError`) saves nothing, so a half-finished login never sticks.
+- HTML sent to someone with a session gets `Cache-Control: private, no-cache` unless the handler set its own.
 
 > [!NOTE]
-> Rendering action forms never starts a session. A visitor who has one gets tokens bound to its CSRF nonce; a first-time visitor gets unbound tokens and no cookie, so pages with forms stay cacheable for them however they stream. A session gets its nonce when it's first written, so the action that starts it (an add-to-cart, a login) answers with bound forms. See [action tokens](15-security.md#action-tokens).
+> Rendering action forms never starts a session, so pages with forms stay cacheable for first-time visitors. See [action tokens](15-security.md#action-tokens).
 
 ## Routes without a session
 
-`session: false` on a route or a group means the session is never opened or saved there, whatever cookie comes in: no unsealing, no store read (even for an async store, which is otherwise read before middleware for every request carrying a session cookie), no `Set-Cookie`. It suits JSON APIs and webhooks. A route's own setting wins over its group's.
+`session: false` on a route or group means the session is never opened or saved there, whatever cookie arrives. Use it for JSON APIs and webhooks.
 
 ```ts
 import { get, group, route } from "@toyz/yerd";
@@ -171,16 +161,13 @@ export class Stats {
 }
 ```
 
-There, `ctx.session` throws an error naming the route and the option, a `@session` field refuses to boot, auth middleware sees nobody signed in (so `auth.required` turns requests away), and action tokens for the route's actions aren't bound to a session. Layouts and error pages rendered for the route can't read the session either.
-
-> [!NOTE]
-> If a request ends in an unhandled crash (anything other than a `YerdError`), the session isn't saved. A half-finished login or update never sticks.
+- A route's setting wins over its group's. No store read, no `Set-Cookie`.
+- `ctx.session` throws and a `@session` field refuses to boot. Layouts and error pages for the route can't read it either.
+- Auth sees nobody signed in (`auth.required` turns requests away), and the route's action tokens aren't session-bound.
 
 ## Stores and options
 
-The default [CookieStore](api:yerd.CookieStore) keeps the data in the cookie itself, sealed with AES-256-GCM: no server state at all, but a ~4 KB limit. [MemoryStore](api:yerd.MemoryStore) keeps data in the process and only an id in the cookie.
-
-The session cookie is sealed under its own key, not the one [seal()](api:yerd.seal) uses, so nothing your app seals can pass for a session and a session cookie doesn't open with `unseal()`. Upgrading from a version that shared the key signs everyone out once and invalidates values sealed before it.
+The default [CookieStore](api:yerd.CookieStore) keeps the data in the cookie, sealed with AES-256-GCM (no server state, ~4 KB limit). [MemoryStore](api:yerd.MemoryStore) keeps data in the process and only an id in the cookie.
 
 ```ts
 import { MemoryStore, yerd } from "@toyz/yerd";
@@ -198,27 +185,28 @@ export const app = yerd().sessions({
 | `absoluteMaxAge` | 30 days | lifetime from creation in ms, never extended |
 | `rolling` | `true` | refresh the idle expiry on requests that use the session |
 | `cookieName` | `"yerd_session"` | cookie name (gets a `__Host-` prefix over HTTPS) |
-| `secure` | auto | force the `Secure` flag on or off; by default it's on when the request came over HTTPS |
-| `trustProxy` | the app's `trustProxy` | believe `X-Forwarded-Proto` when deciding whether the request was HTTPS |
-| `generateId` | 32 random bytes | makes the id for a new or regenerated session; only for stores that keep ids (`kind: "id"`) |
+| `secure` | auto | force the `Secure` flag; by default on over HTTPS |
+| `trustProxy` | the app's `trustProxy` | believe `X-Forwarded-Proto` when detecting HTTPS |
+| `generateId` | 32 random bytes | the id for a new or regenerated session ([below](#custom-session-ids)) |
 
-Cookies are always `HttpOnly`, `SameSite=Lax` and `Path=/`.
+- Cookies are always `HttpOnly`, `SameSite=Lax` and `Path=/`.
+- The session cookie is sealed under its own key, separate from [seal()](api:yerd.seal). Upgrading from a version that shared the key signs everyone out once.
 
 ### MemoryStore
 
-`MemoryStore` takes `maxSize` (evicts the least recently saved past it; default no cap) and `sweepInterval` (how often, at most, a save also clears expired sessions; default 60 s). It's for dev, tests and single-process deploys. Under the Vite dev server its sessions survive app reloads, so editing a file doesn't sign you out (stores share records by `name`, default `"default"`; give two stores in one app different names).
+For dev, tests and single-process deploys. `maxSize` evicts the least recently saved past it (default no cap); `sweepInterval` is how often a save may also clear expired sessions (default 60 s). Sessions survive Vite dev reloads; give two stores in one app different `name`s.
 
 ### Which store
 
 | Store | Good for | Watch out for |
 | --- | --- | --- |
-| `CookieStore` (default) | small sessions (an id, a theme, a short cart), any number of instances, no infrastructure | ~4 KB after sealing: a bigger session is a 500 naming the size. Can't revoke a session server-side before it expires |
-| `MemoryStore` | dev, tests, one process | lost on restart; each instance has its own |
-| your own `SessionStore` | several instances, big sessions, "sign out everywhere" | one store lookup per request carrying a session cookie (read before middleware, since `ctx.session` is synchronous), unless the store is `sync` or the route has `session: false` |
+| `CookieStore` (default) | small sessions, any number of instances, no infrastructure | ~4 KB sealed (bigger is a 500); can't revoke a session before it expires |
+| `MemoryStore` | dev, tests, one process | lost on restart; per instance |
+| your own `SessionStore` | several instances, big sessions, "sign out everywhere" | one lookup per request carrying a session cookie, unless the store is `sync` |
 
 ### Your own store
 
-A store is three methods over any key-value database. Here `Kv` stands for your Redis client or similar:
+A store is three methods over any key-value database (`Kv` stands for your Redis client or similar):
 
 ```ts
 // src/session-store.ts
@@ -257,27 +245,20 @@ export class KvSessionStore implements SessionStore {
     await this.#kv.del(this.#key(id));
   }
 }
-```
 
-```ts
 // src/app.ts
-import { yerd } from "@toyz/yerd";
-import { KvSessionStore } from "./session-store.js";
-
 export const app = yerd().sessions({ store: new KvSessionStore(kv) }); // kv: your connected client
 ```
 
-- `get` returns `undefined` for an unknown or expired id; yerd then starts a fresh session.
-- `set` replaces the whole record. `ttlMs` is how long it may live: the idle `maxAge`, capped by what's left of `absoluteMaxAge`. Letting the database expire it keeps the store from filling up.
-- `destroy` runs on logout and when the id is rotated (`regenerate()`, login).
-- The record is JSON-safe (`data`, `flash`, `createdAt`), so `JSON.stringify` is all the serializing it needs. `data` includes yerd's CSRF nonce (`__yerd_csrf`).
-- Methods may be sync or async. Using the session is synchronous, so an async `get` is started as soon as a request carrying a session cookie is routed and awaited before middleware runs, whether or not the handler then uses the session (`session: false` routes skip it). A store whose `get` always answers at once (an in-process cache, a synchronous SQLite driver) should say `readonly sync = true`: it's then read only when the session is used, like `MemoryStore`.
-
-To sign a user out everywhere, have the store keep an index of sessions per user: `set` sees the record's data, signed-in user id included (under `createAuth`'s `sessionKey`, `"__yerd_uid"` by default), so it can remember which keys belong to whom and delete them all.
+- `get` returns `undefined` for an unknown or expired id.
+- `set` replaces the whole JSON-safe record; `ttlMs` is the idle `maxAge` capped by `absoluteMaxAge`, so let the database expire it.
+- `destroy` runs on logout and when the id rotates.
+- Methods may be async. An async `get` runs before middleware on every request with a session cookie; a store that always answers at once should set `readonly sync = true`.
+- For "sign out everywhere", index sessions per user in `set`: the record's `data` holds the user id under `createAuth`'s `sessionKey`.
 
 ### Custom session ids
 
-Stores that keep the data on the server (`MemoryStore`, or your own [SessionStore](api:yerd.SessionStore) with `kind: "id"`) put only an id in the cookie. By default it's 32 random bytes, base64url. Pass [`generateId`](api:yerd.SessionOptions/generateId) when the id should look a certain way: a prefix you can spot in logs, the format your Redis keys or database rows use, or a value from a database sequence.
+[`generateId`](api:yerd.SessionOptions/generateId) controls the id that `MemoryStore` or a [SessionStore](api:yerd.SessionStore) with `kind: "id"` puts in the cookie.
 
 ```ts
 import { randomUUID } from "node:crypto";
@@ -289,26 +270,15 @@ export const app = yerd().sessions({
 });
 ```
 
-It may be async, for ids that come from somewhere else:
-
-```ts
-yerd().sessions({
-  store: new PostgresSessionStore(pool),
-  generateId: async () => {
-    const { rows } = await pool.query("select nextval('session_ids') as id");
-    return `s${rows[0].id}`;
-  },
-});
-```
-
-- It's called for every new session and again on `regenerate()` (which `auth.login()` does), so a signed-in user gets a fresh id.
-- It must return a non-empty string, different from the session's old id; anything else is an error. Make ids unique: two live sessions with one id share their data.
-- Keep them unguessable even though they can't be forged (the id travels inside the sealed cookie): a leaked store dump or log line shouldn't name live sessions. A random UUID is fine; a plain counter is not, unless the store maps it to something random.
-- A `CookieStore` keeps the data in the cookie and has no ids, so `sessions({ generateId })` without an id store throws at startup.
+- It may be async (an id from a database sequence, say).
+- Called for every new session and on `regenerate()` (which `auth.login()` does).
+- Must return a non-empty string different from the old id. Two live sessions with one id share data.
+- Keep ids unguessable, so a leaked log line can't name a live session: a random UUID, not a counter.
+- With a `CookieStore` (no ids), it throws at startup.
 
 ## Sign-in with createAuth
 
-yerd doesn't know what a user is. [createAuth](api:auth.createAuth) asks you how to load one by id and gives you everything else.
+[createAuth](api:auth.createAuth) needs to know how to load a user by id; it handles the rest.
 
 ```ts
 // src/auth.ts
@@ -321,13 +291,8 @@ export const auth = createAuth<User>({
   roles: (user) => user.roles,
   loginPath: "/login",
 });
-```
 
-```ts
 // src/app.ts
-import { yerd } from "@toyz/yerd";
-import { auth } from "./auth.js";
-
 export const app = yerd().sessions().use(auth);
 ```
 
@@ -339,20 +304,20 @@ export const app = yerd().sessions().use(auth);
 | `loginPath` | `"/login"` | where browsers go when a page needs a signed-in user |
 | `sessionKey` | `"__yerd_uid"` | the session key holding the user id |
 
-`app.use(auth)` installs a middleware that loads the user once per request. It needs `app.sessions()`.
+`app.use(auth)` loads the user once per request. It needs `app.sessions()`.
 
 > [!WARNING]
-> Two kinds of sign-in in one app (users and admins) need a distinct `sessionKey` each. A second `createAuth()` on the same key throws, because signing in as one would count as the other.
+> Two kinds of sign-in in one app (users and admins) need a distinct `sessionKey` each. A second `createAuth()` on the same key throws.
 
 ## Login and logout
 
 `auth.login(user)` signs a user in:
 
-1. It rotates the session id, so an id someone saw or planted before login is worthless afterwards.
-2. If someone else was signed in on this session (a shared computer, no logout), it starts a fresh session, so nothing of theirs carries over to the new user. A guest's data (a cart) does carry over.
-3. It stores the user's id, then runs your `onLogin` hook, if any.
+1. Rotates the session id, so an id seen or planted before login is worthless.
+2. Starts a fresh session if someone else was signed in on it; a guest's data (a cart) carries over.
+3. Stores the user's id, then runs `onLogin`.
 
-`auth.logout()` runs `onLogout`, then destroys the session and its cookie.
+`auth.logout()` runs `onLogout`, then destroys the session and cookie.
 
 ```tsx
 // src/routes/login.tsx
@@ -401,14 +366,14 @@ export class Logout {
 // in a layout: <form action="/logout" method="post"><button>Log out</button></form>
 ```
 
-- [hashPassword](api:auth.hashPassword) hashes with argon2id (scrypt where Node lacks it) in PHC format. [verifyPassword](api:auth.verifyPassword) reads both.
-- Pass `undefined` to `verifyPassword` for an unknown user, as above: it still spends a full hash, so timing doesn't reveal which names exist.
-- [safeNext](api:auth.safeNext) only lets same-site paths through. `//evil.com`, `https://...` and friends become the fallback (default `"/"`). Always run `?next=` through it.
-- `login()` and `logout()` return a promise when a hook is async. `await` them either way: the session must be ready before the response goes out.
+- [hashPassword](api:auth.hashPassword) uses argon2id (scrypt where Node lacks it), PHC format; [verifyPassword](api:auth.verifyPassword) reads both.
+- Pass `undefined` to `verifyPassword` for an unknown user: it still spends a full hash, so timing doesn't reveal which names exist.
+- [safeNext](api:auth.safeNext) passes only same-site paths, else the fallback (`"/"`). Always run `?next=` through it.
+- Always `await` `login()` and `logout()`; with async hooks they return a promise.
 
 ### Keeping a guest's cart across sign-in
 
-`onLogin` runs right after `login()` has rotated the session and stored the user, and `onLogout` right before `logout()` destroys the session. Use them to merge what a guest collected into the user's own data, and to keep it for next time (another day, another device):
+`onLogin` runs after the user is stored and `onLogout` before the session is destroyed; use them to merge a guest's data with the user's saved data.
 
 ```ts
 // src/auth.ts
@@ -429,7 +394,9 @@ export const auth = createAuth<User>({
 });
 ```
 
-Here `Cart` is the shape class from [above](#a-class-for-methods-and-defaults) with one more method, `merge(saved: string[])`, and `Carts` is your own service that keeps each user's cart. The hooks get the plain session; [`session.as(Cart)`](#outside-a-route-sessionas) gives them the cart view without declaring any app-wide keys. A user who never signs out never triggers `onLogout`, so save on every cart change too. The [recipes guide](16-recipes.md#show-a-saved-cart-after-sign-in) builds the whole thing: the cart shape, the saved carts, the merge and a welcome-back notice.
+- `Cart` is the [shape class above](#a-class-for-methods-and-defaults) plus `merge(saved)`; `Carts` is your own service. Hooks use [`session.as()`](#outside-a-route-sessionas).
+- A user who never signs out never triggers `onLogout`, so save on every cart change too.
+- The [recipes guide](16-recipes.md#show-a-saved-cart-after-sign-in) builds the whole thing.
 
 ## Protecting routes
 
@@ -464,7 +431,7 @@ export function Greeting() {
 | `@auth.maybeUser` | the user or `undefined` |
 | `auth.current()` | the user or `undefined`, for components and plain functions |
 
-"Browser" means the request accepts `text/html`. Requests from yerd's client runtime get the redirect as a `yx-location` header instead.
+"Browser" means the request accepts `text/html`; yerd's client runtime gets the redirect as a `yx-location` header.
 
 ## Guards
 
@@ -519,21 +486,14 @@ export class Beta {
 }
 ```
 
-- Guards attach in five places, and run in this order: `app.guard(...)`, groups (outer to inner), the route's `guards` option, class decorators, then method decorators. The first one that doesn't continue decides.
+- Order: `app.guard(...)`, groups (outer to inner), the route's `guards` option, class decorators, method decorators. The first that doesn't continue decides.
 - [guards](api:yerd.guards) applies names or guard values to a class or method.
 - An unknown guard name is a boot error.
 - Actions run behind their class's guards plus their own, so `auth.required` on a group covers every page and action in it.
 
 ## The security model
 
-yerd blocks the common attacks by default. In short:
-
-- **Cross-site requests.** Every POST, PUT, PATCH and DELETE from another site is refused with a 403 before any guard, handler or action runs. `trustedOrigins` lists other origins allowed to post; `trustProxy` makes the check use `X-Forwarded-Host`.
-- **Action tokens.** Every action carries a signed token, so its arguments can't be forged. It expires after `actionTtl` seconds (a day) and, with sessions on, only works in the session it was rendered for.
-- **Sessions.** Sealed with AES-256-GCM, `HttpOnly`, `SameSite=Lax`, and `Secure` with a `__Host-` name over HTTPS. `login()` rotates the id and starts fresh when the user changes.
-- **Secrets.** Set `YERD_SECRET` (at least 32 bytes, a comma-separated list to rotate) in production. Without it, every restart signs everyone out.
+yerd refuses cross-site writes, signs action tokens per session, and seals session cookies by default. Set `YERD_SECRET` in production, or every restart signs everyone out. The [security guide](15-security.md) has the details and a go-live checklist.
 
 > [!NOTE]
 > A signed token proves the server rendered those arguments, not that this user may act on them. An action bound to `{ id }` still has to check that `this.me` owns `id`.
-
-The [security guide](15-security.md) has the details of each, the knobs, and a checklist for going live.
