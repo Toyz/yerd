@@ -4,9 +4,21 @@
  * errors logged (and rethrown).
  *
  * ```ts
- * @instrument() find(id: number) { ... }                      // UserRepo::find{id=7} ... 5.1ms
- * @instrument({ skip: ["password"], level: "info" }) create(email: string, password: string) { ... }
- * @instrument({ fields: (_self, [order]) => ({ orderId: order.id }) }) charge(order: Order) { ... }
+ * class UserRepo {
+ *   @instrument() find(id: number) { // UserRepo::find{id=7} ... 5.1ms
+ *     return this.db.users.get(id);
+ *   }
+ *
+ *   @instrument({ skip: ["password"], level: "info" })
+ *   create(email: string, password: string) {
+ *     return this.db.users.add(email, password);
+ *   }
+ *
+ *   @instrument({ fields: (_self, [order]) => ({ orderId: order.id }) })
+ *   charge(order: Order) {
+ *     return this.stripe.charge(order);
+ *   }
+ * }
  * ```
  *
  * Disabled (the default `debug` level under `YERD_LOG=info`) means the method
@@ -17,7 +29,6 @@
 import type { Level } from "./ilogger.js";
 import { withSpan } from "./span.js";
 
-/** Options for @instrument. */
 // ── typed argument paths ──
 //
 // TypeScript can't see parameter names (Parameters<F> keeps positions and
@@ -65,6 +76,17 @@ export type SkipPath<E extends string, Args extends readonly unknown[]> = E exte
         : E
       : E;
 
+/**
+ * Options for @instrument. All optional; `@instrument()` alone records every
+ * argument and the return value at debug level.
+ *
+ * ```ts
+ * @instrument({ name: "charge", level: "info", target: "billing", skip: ["card.cvc"], ret: false })
+ * async charge(orderId: string, card: { number: string; cvc: string }) {
+ *   return this.stripe.charge(orderId, card);
+ * }
+ * ```
+ */
 export interface InstrumentOptions<This = any, Args extends unknown[] = any[], S extends readonly string[] = readonly string[]> {
   /** Span name. Default `Class::method`. */
   name?: string;
@@ -77,13 +99,28 @@ export interface InstrumentOptions<This = any, Args extends unknown[] = any[], S
    * name (`"password"`), a position (`"1"`), or a dotted path into either
    * (`"opts.headers.authorization"`, `"1.items.0.token"`). Checked by the
    * compiler as far as types allow, and the names when the class loads.
+   *
+   * ```ts
+   * @instrument({ skip: ["input.password", "1.headers.authorization"] })
+   * create(input: Signup, request: { headers: { authorization: string } }) {
+   *   return this.users.add(input);
+   * }
+   * ```
    */
   // A mapped type alone (no intersection with S) so a wrong entry's error is
   // the message SkipPath built, at that entry.
   skip?: { readonly [K in keyof S]: SkipPath<S[K] & string, Args> };
   /** Record no arguments. */
   skipAll?: boolean;
-  /** Extra or derived fields. */
+  /**
+   * Extra or derived fields, from the instance and the arguments. Only called
+   * when the span is enabled.
+   *
+   * ```ts
+   * @instrument({ skipAll: true, fields: (self, [order]) => ({ orderId: order.id, region: self.region }) })
+   * ship(order: Order) { return this.carrier.book(order); }
+   * ```
+   */
   fields?: (self: This, args: Args) => Record<string, unknown>;
   /** Record the return value on exit. Default true. */
   ret?: boolean;
@@ -155,7 +192,6 @@ export function parameterNames(fn: Function): string[] {
   });
 }
 
-/** Wrap a method in a span; see the module notes above. Call it, even with no options: `@instrument()`. */
 /**
  * Resolve skip entries to argument positions, once, when the decorator runs:
  * position -> nested paths to drop ([] drops the whole argument). A name
@@ -217,6 +253,25 @@ export function className(self: unknown): string {
   return name ? name.replace(/\$\d+$/, "") : "anonymous";
 }
 
+/**
+ * Wrap a method in a span; see the module notes above. Call it, even with no
+ * options: `@instrument()`. Works on any class: services, routes, plain
+ * classes. A misspelled `skip` name throws when the class is defined.
+ *
+ * ```ts
+ * @service
+ * export class UserRepo {
+ *   @instrument() async find(id: number) {
+ *     return { id, name: "ada" };
+ *   }
+ *
+ *   @instrument({ skip: ["password"], level: "info" })
+ *   async create(email: string, password: string) {
+ *     return { email };
+ *   }
+ * }
+ * ```
+ */
 export function instrument<This, Args extends unknown[], R, const S extends readonly string[] = []>(
   options: InstrumentOptions<This, Args, S> = {},
 ) {

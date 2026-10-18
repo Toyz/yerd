@@ -36,19 +36,70 @@ const channelLog = new Logger("yerd::channels");
 /**
  * How messages travel between publishers and subscribers. The default is
  * in-process (MemoryBackend); register your own under the ChannelBackend
- * token to fan out across processes (Redis pub/sub, Postgres NOTIFY, ...).
+ * token to fan out across processes (Redis pub/sub, Postgres NOTIFY, NATS).
+ * Every subscriber hears every message: this is broadcast, not a work queue.
+ *
+ * A sketch over Redis pub/sub (two connections: a subscribed one can't publish):
+ *
+ * ```ts
+ * export class RedisBackend implements ChannelBackend {
+ *   constructor(private readonly pub: RedisClient, private readonly sub: RedisClient) {}
+ *
+ *   async publish(channel: string, message: unknown) {
+ *     await this.pub.publish(channel, JSON.stringify(message));
+ *   }
+ *
+ *   subscribe(channel: string, listener: (message: unknown) => void) {
+ *     const onMessage = (raw: string) => listener(JSON.parse(raw));
+ *     void this.sub.subscribe(channel, onMessage);
+ *     return () => void this.sub.unsubscribe(channel, onMessage);
+ *   }
+ * }
+ *
+ * app.services((s) => s.value(ChannelBackend, new RedisBackend(pub, sub)));
+ * ```
  */
 export interface ChannelBackend {
-  /** Deliver `message` to every current subscriber of `channel`. */
+  /**
+   * Deliver `message` to every current subscriber of `channel`, in this
+   * process and others. Channels.publish() awaits it.
+   *
+   * ```ts
+   * async publish(channel: string, message: unknown) {
+   *   await this.pub.publish(channel, JSON.stringify(message));
+   * }
+   * ```
+   */
   publish(channel: string, message: unknown): void | Promise<void>;
-  /** Start delivering a channel's messages to `listener`; returns a function that stops it. */
+  /**
+   * Start delivering a channel's messages to `listener`; returns a function
+   * that stops it. Called once per channel per subscriber, synchronously, so
+   * start listening right away rather than after an await.
+   *
+   * ```ts
+   * subscribe(channel: string, listener: (message: unknown) => void) {
+   *   const onMessage = (raw: string) => listener(JSON.parse(raw));
+   *   void this.sub.subscribe(channel, onMessage);
+   *   return () => void this.sub.unsubscribe(channel, onMessage);
+   * }
+   * ```
+   */
   subscribe(channel: string, listener: (message: unknown) => void): () => void;
 }
 
-/** DI token for a custom backend. */
+/** DI token for a custom backend: `app.services((s) => s.value(ChannelBackend, myBackend))`. */
 export const ChannelBackend = token<ChannelBackend>("ChannelBackend");
 
-/** One process, no setup. */
+/**
+ * One process, no setup: what Channels uses when no ChannelBackend is
+ * registered. Messages are delivered synchronously and by reference (not
+ * copied). In tests it can tell you whether a stream is still subscribed.
+ *
+ * ```ts
+ * const memory = app.container.get(Channels).backend as MemoryBackend;
+ * memory.listeners("room:42"); // 1 while a client is connected, 0 after it leaves
+ * ```
+ */
 export class MemoryBackend implements ChannelBackend {
   readonly #listeners = new Map<string, Set<(message: unknown) => void>>();
 
@@ -68,7 +119,13 @@ export class MemoryBackend implements ChannelBackend {
     };
   }
 
-  /** Current listener count for a channel. */
+  /**
+   * Current listener count for a channel.
+   *
+   * ```ts
+   * expect(memory.listeners("room:42")).toBe(0); // the stream cleaned up
+   * ```
+   */
   listeners(channel: string): number {
     return this.#listeners.get(channel)?.size ?? 0;
   }
@@ -80,7 +137,13 @@ const REF: unique symbol = Symbol.for("yerd.channel");
 export interface ChannelRef<T> {
   /** Brand that marks a channel() result. */
   readonly [REF]: true;
-  /** The channel name the backend sees. */
+  /**
+   * The channel name the backend sees.
+   *
+   * ```ts
+   * room("42").name; // "room:42"
+   * ```
+   */
   readonly name: string;
   /** Phantom: the message type. */
   readonly __message?: T;
@@ -107,7 +170,13 @@ function nameOf(target: Target<unknown>): string {
 
 /** Options for Channels.subscribe(). */
 export interface SubscribeOptions {
-  /** Messages kept for a slow subscriber before the oldest are dropped. Default 1000. */
+  /**
+   * Messages kept for a slow subscriber before the oldest are dropped. Default 1000.
+   *
+   * ```ts
+   * return this.channels.subscribe(room(this.id), this.stop, { buffer: 100 });
+   * ```
+   */
   buffer?: number;
 }
 
@@ -192,18 +261,59 @@ class Subscription<T> implements AsyncGenerator<T, undefined, unknown> {
   }
 }
 
-/** The channel hub. Built in: every app has one in DI. */
+/**
+ * The channel hub. Built in: every app has one in DI. Publish from anywhere,
+ * subscribe from an @sse or @ndjson route.
+ *
+ * ```ts
+ * interface ChatMessage { from: string; text: string }
+ * export const room = (id: string) => channel<ChatMessage>(`room:${id}`);
+ *
+ * @service
+ * export class Chat {
+ *   @inject(Channels) accessor channels!: Channels;
+ *   async say(roomId: string, message: ChatMessage) {
+ *     await this.channels.publish(room(roomId), message);
+ *   }
+ * }
+ *
+ * @route("/rooms/:id/events")
+ * export class RoomEvents {
+ *   @inject(Channels) accessor channels!: Channels;
+ *   @param("id") accessor id!: string;
+ *   @signal accessor stop!: AbortSignal;
+ *
+ *   @get @sse feed() {
+ *     return this.channels.subscribe(room(this.id), this.stop);
+ *   }
+ * }
+ * ```
+ */
 export class Channels {
   /** The backend registered under the ChannelBackend token, if any. */
   @maybe(ChannelBackend) accessor custom: ChannelBackend | undefined;
   readonly #memory = new MemoryBackend();
 
-  /** The backend in use: the custom one, else an in-process MemoryBackend. */
+  /**
+   * The backend in use: the custom one, else an in-process MemoryBackend.
+   *
+   * ```ts
+   * const memory = app.container.get(Channels).backend as MemoryBackend;
+   * ```
+   */
   get backend(): ChannelBackend {
     return this.custom ?? this.#memory;
   }
 
-  /** Send a message to everyone subscribed to the channel. */
+  /**
+   * Send a message to everyone subscribed to the channel. With a ChannelRef
+   * the message is type-checked; a plain string name takes anything.
+   *
+   * ```ts
+   * await this.channels.publish(room("42"), { from: "ada", text: "hi" });
+   * await this.channels.publish("news", "plain string names work too");
+   * ```
+   */
   async publish<C extends Target<any>>(target: C, message: MessageOf<C>): Promise<void> {
     await this.backend.publish(nameOf(target), message);
   }
@@ -213,6 +323,16 @@ export class Channels {
    * away, so messages published before the first read are kept. Each
    * subscriber has its own queue, so nothing is lost while a stream route is
    * still writing the previous message; past `buffer`, the oldest are dropped.
+   * Return it from an @sse route as is, or loop over it to reshape messages.
+   *
+   * ```ts
+   * @get @sse async *feed() {
+   *   const rooms = [room(this.id), room("lobby")];
+   *   for await (const message of this.channels.subscribe(rooms, this.stop, { buffer: 100 })) {
+   *     yield { ...message, at: Date.now() };
+   *   }
+   * }
+   * ```
    */
   subscribe<C extends Target<any>>(targets: C | readonly C[], signal: AbortSignal, options: SubscribeOptions = {}): AsyncGenerator<MessageOf<C>, undefined, unknown> {
     const list = (Array.isArray(targets) ? targets : [targets]) as readonly C[];

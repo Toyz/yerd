@@ -7,7 +7,14 @@
 
 import type { ILogger, Level, LogRecord } from "./ilogger.js";
 
-/** Options for ConsoleLogger. */
+/**
+ * Options for ConsoleLogger. Leave them out to follow the environment
+ * (YERD_LOG_FORMAT, NODE_ENV, NO_COLOR, whether stdout is a terminal).
+ *
+ * ```ts
+ * new ConsoleLogger({ format: "pretty", color: false }); // readable, but safe to pipe into a file
+ * ```
+ */
 export interface ConsoleLoggerOptions {
   /** Default: YERD_LOG_FORMAT, else pretty on a terminal outside production, else json. */
   format?: "pretty" | "json";
@@ -19,7 +26,18 @@ const COLORS: Record<Level, string> = { trace: "\x1b[90m", debug: "\x1b[36m", in
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
 
-/** The default ILogger sink: writes records to stdout / stderr. See the module notes above. */
+/**
+ * The default ILogger sink: writes records to stdout / stderr. See the module
+ * notes above. yerd uses one when no ILogger is registered; construct it
+ * yourself to pin its options or to keep it next to your own sink.
+ *
+ * ```ts
+ * app.services((s) => s.value(ILogger, new ConsoleLogger({ format: "json", color: false })));
+ *
+ * // or keep the console and ship records elsewhere too
+ * app.services((s) => s.value(ILogger, teeLogger(new ConsoleLogger(), new HttpLogger())));
+ * ```
+ */
 export class ConsoleLogger implements ILogger {
   /** The format chosen at construction. */
   readonly format: "pretty" | "json";
@@ -52,6 +70,7 @@ export class ConsoleLogger implements ILogger {
     }
   }
 
+  /** Write out the queued info-and-below lines now. The app calls it when it stops. */
   flush(): void {
     this.#scheduled = false;
     if (this.#batch.length === 0) return;

@@ -17,7 +17,24 @@ import { LEVELS, type Level } from "./ilogger.js";
 
 type Threshold = number;
 
-/** A parsed set of YERD_LOG directives that decides which records are written. */
+/**
+ * A parsed set of YERD_LOG directives that decides which records are written.
+ * The app builds one from YERD_LOG / `app.logging({ filter })`; build your own
+ * when a sink should be choosier than the app, like one that only forwards
+ * alerts.
+ *
+ * ```ts
+ * class AlertSink implements ILogger {
+ *   readonly #filter = new LogFilter("error,Billing=warn,[checkout]=warn");
+ *   readonly #pending: LogRecord[] = [];
+ *
+ *   write(record: LogRecord) {
+ *     const spans = record.spans.map((s) => s.name);
+ *     if (this.#filter.enabled(record.level, record.target, spans)) this.#pending.push(record);
+ *   }
+ * }
+ * ```
+ */
 export class LogFilter {
   readonly #base: Threshold;
   readonly #targets: Array<[prefix: string, threshold: Threshold]>;
@@ -25,7 +42,14 @@ export class LogFilter {
   /** target -> threshold, so the per-call decision is one Map lookup. */
   readonly #cache = new Map<string, Threshold>();
 
-  /** Parse `source` (the directive string). Throws on an unknown level; with no bare level, the base is info. */
+  /**
+   * Parse `source` (the directive string). Throws on an unknown level; with no bare level, the base is info.
+   *
+   * ```ts
+   * new LogFilter("warn,Billing=debug");
+   * new LogFilter("info,Billing=chatty"); // throws: Unknown log level "chatty" in YERD_LOG
+   * ```
+   */
   constructor(readonly source: string) {
     let base: Threshold = LEVELS.info;
     // Maps, so a later directive for the same name replaces an earlier one
@@ -67,7 +91,16 @@ export class LogFilter {
     return found;
   }
 
-  /** Whether a record at `level` for `target`, inside spans named `spans`, is written. */
+  /**
+   * Whether a record at `level` for `target`, inside spans named `spans`, is written.
+   *
+   * ```ts
+   * const filter = new LogFilter("warn,Billing=debug,[stripe]=trace");
+   * filter.enabled("debug", "Billing"); // true
+   * filter.enabled("info", "Orders"); // false
+   * filter.enabled("trace", "Orders", ["request", "stripe"]); // true: inside a stripe span
+   * ```
+   */
   enabled(level: Level, target: string, spans?: Iterable<string>): boolean {
     const value = LEVELS[level];
     // Inside a span with a directive, the innermost such span decides, louder
@@ -83,7 +116,14 @@ export class LogFilter {
     return value >= this.#thresholdFor(target);
   }
 
-  /** True when span directives exist (callers then need to pass span names). */
+  /**
+   * True when span directives exist (callers then need to pass span names).
+   * Lets a caller skip collecting span names when they can't matter.
+   *
+   * ```ts
+   * const spans = filter.hasSpanDirectives ? record.spans.map((s) => s.name) : undefined;
+   * ```
+   */
   get hasSpanDirectives(): boolean {
     return this.#spans.size > 0;
   }

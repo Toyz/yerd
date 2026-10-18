@@ -13,7 +13,7 @@
  *   }
  * }
  *
- * await log.span("import-batch", { size: rows.length }, async () => { ... });
+ * await log.span("import-batch", { size: rows.length }, () => importRows(rows));
  * ```
  *
  * Events logged inside a request carry its span (request id, method, path)
@@ -28,20 +28,53 @@ import { className } from "./instrument.js";
  * A logger for one target (category). Get one with @logger, inject the
  * app's with `@inject(Logger)` (target "app"), or use the exported `log`.
  * Records go to the app's ILogger once its filter allows the level.
+ *
+ * ```ts
+ * @service
+ * export class Billing {
+ *   @logger accessor log!: Logger; // target "Billing"
+ *
+ *   async charge(order: Order) {
+ *     const orderLog = this.log.child({ orderId: order.id });
+ *     orderLog.info("charging", { total: order.total });
+ *     await this.log.span("stripe", { amount: order.total }, () => this.stripe.charge(order));
+ *   }
+ * }
+ * ```
  */
 export class Logger {
-  /** `target` names the category in records and filters; `bound` fields go on every record. */
+  /**
+   * `target` names the category in records and filters; `bound` fields go on every record.
+   * @logger and child() are usually handier than `new`.
+   *
+   * ```ts
+   * const billing = new Logger("billing", { region: "eu" });
+   * ```
+   */
   constructor(
     readonly target = "app",
     readonly bound: Readonly<Record<string, unknown>> = {},
   ) {}
 
-  /** Whether `level` would be written here (to skip building expensive fields). */
+  /**
+   * Whether `level` would be written here (to skip building expensive fields).
+   *
+   * ```ts
+   * if (this.log.enabled("debug")) this.log.debug("cart", { lines: summarize(cart) });
+   * ```
+   */
   enabled(level: Level): boolean {
     return enabledHere(activeBinding(), level, this.target, currentSpan());
   }
 
-  /** Write an event at `level`. `error`, when given, is serialized into the record's `error`. */
+  /**
+   * Write an event at `level`. `error`, when given, is serialized into the record's `error`.
+   * For a level chosen at runtime; otherwise use the named methods.
+   *
+   * ```ts
+   * this.log.log(status >= 500 ? "error" : "info", "upstream answered", { status });
+   * ```
+   */
   log(level: Level, message: string, fields?: Record<string, unknown>, error?: unknown): void {
     const binding = activeBinding();
     const span = currentSpan();
@@ -50,27 +83,62 @@ export class Logger {
     emit(binding, level, this.target, "event", message, all, span, error === undefined ? {} : { error });
   }
 
-  /** Write a trace-level event. */
+  /**
+   * Write a trace-level event: the finest detail, usually off.
+   *
+   * ```ts
+   * this.log.trace("raw order", { order });
+   * ```
+   */
   trace(message: string, fields?: Record<string, unknown>): void {
     this.log("trace", message, fields);
   }
 
-  /** Write a debug-level event. */
+  /**
+   * Write a debug-level event.
+   *
+   * ```ts
+   * this.log.debug("cache miss", { key });
+   * ```
+   */
   debug(message: string, fields?: Record<string, unknown>): void {
     this.log("debug", message, fields);
   }
 
-  /** Write an info-level event. */
+  /**
+   * Write an info-level event.
+   *
+   * ```ts
+   * log.info("server starting", { port: 3000 });
+   * ```
+   */
   info(message: string, fields?: Record<string, unknown>): void {
     this.log("info", message, fields);
   }
 
-  /** Write a warn-level event. */
+  /**
+   * Write a warn-level event.
+   *
+   * ```ts
+   * this.log.warn("retrying", { attempt: 2 });
+   * ```
+   */
   warn(message: string, fields?: Record<string, unknown>): void {
     this.log("warn", message, fields);
   }
 
-  /** `log.error("charge failed", { orderId })`, or `log.error(err)` / `log.error("msg", { error: err })` for the stack. */
+  /**
+   * Write an error-level event. An Error passed directly, or under the `error`
+   * field, is logged with its stack.
+   *
+   * ```ts
+   * try {
+   *   await this.stripe.charge(order);
+   * } catch (error) {
+   *   this.log.error("charge failed", { orderId: order.id, error });
+   * }
+   * ```
+   */
   error(message: string | unknown, fields?: Record<string, unknown>): void {
     if (typeof message !== "string") {
       this.log("error", message instanceof Error ? message.message : String(message), fields, message);
@@ -83,23 +151,52 @@ export class Logger {
     } else this.log("error", message, fields);
   }
 
-  /** A logger with extra fields on every record. */
+  /**
+   * A logger with extra fields on every record (same target).
+   *
+   * ```ts
+   * const orderLog = this.log.child({ orderId: order.id });
+   * orderLog.info("charging"); // orderId=... on this and every later record
+   * ```
+   */
   child(fields: Record<string, unknown>): Logger {
     return new Logger(this.target, { ...this.bound, ...fields });
   }
 
-  /** A logger for another target. */
+  /**
+   * A logger for another target, keeping the bound fields.
+   *
+   * ```ts
+   * this.log.for("billing.audit").info("charged", { orderId: order.id });
+   * ```
+   */
   for(target: string): Logger {
     return new Logger(target, this.bound);
   }
 
-  /** Run `fn` inside a span: enter and exit records, duration, nesting across await. */
+  /**
+   * Run `fn` inside a span: enter and exit records, duration, nesting across
+   * await. Returns what `fn` returns (sync stays sync); a throw is logged at
+   * error and rethrown.
+   *
+   * ```ts
+   * const receipt = await this.log.span("stripe", { amount: order.total }, () => this.stripe.charge(order));
+   * ```
+   */
   span<T>(name: string, fields: Record<string, unknown>, fn: () => T, level: Level = "info"): T {
     return withSpan({ name, target: this.target, level, fields }, fn);
   }
 }
 
-/** The root logger, target "app". */
+/**
+ * The root logger, target "app". For scripts, module-level code and anywhere
+ * a class logger would be overkill.
+ *
+ * ```ts
+ * log.info("server starting", { port: 3000 });
+ * log.error("charge failed", { orderId: 42, error: new Error("card declined") });
+ * ```
+ */
 export const log = new Logger("app");
 
 function loggerAccessor(explicit: string | undefined) {
@@ -124,7 +221,21 @@ function loggerAccessor(explicit: string | undefined) {
 
 /**
  * A Logger whose target is the owning class's name (like `ILogger<UserRepo>`),
- * or `@logger("billing")` for a category of your own.
+ * or `@logger("billing")` for a category of your own. Works in any class and
+ * any lifetime; records still carry the current request's span.
+ *
+ * ```ts
+ * @service
+ * export class UserRepo {
+ *   @logger accessor log!: Logger; // target "UserRepo"
+ *   @logger("audit") accessor audit!: Logger;
+ *
+ *   remove(id: number) {
+ *     this.log.debug("removing", { id });
+ *     this.audit.info("user removed", { id });
+ *   }
+ * }
+ * ```
  */
 export function logger<This extends object>(
   target: ClassAccessorDecoratorTarget<This, Logger>,
