@@ -1,5 +1,6 @@
 import { createKey, localKey } from "../decorators/keys.js";
-import { assertPublicInstance, isDecoratorContext } from "../decorators/util.js";
+import { classValue, methodFlag, methodList, type DecoratorTarget } from "../decorators/kit.js";
+import { isDecoratorContext } from "../decorators/util.js";
 import {
   OWNER, classRegistration, currentServices, keyName,
   type Container, type Lifetime, type Registration, type ServiceKey,
@@ -9,7 +10,8 @@ import { parseDuration } from "../util/duration.js";
 // Public from here too, where it lived before it was shared.
 export { parseDuration };
 
-export const LIFETIME = createKey<Lifetime>("lifetime");
+/** A class's lifetime from @singleton / @scoped / @transient. */
+const LIFETIME = classValue<Lifetime>("lifetime");
 
 export interface InjectEntry {
   field: string;
@@ -49,7 +51,7 @@ export function resetServiceRegistry(): void {
 }
 
 export function lifetimeOf(def: { lifetime?: Lifetime | undefined; metadata: DecoratorMetadataObject }, fallback: Lifetime): Lifetime {
-  return def.lifetime ?? LIFETIME.from(def.metadata) ?? fallback;
+  return def.lifetime ?? LIFETIME.get(def.metadata) ?? fallback;
 }
 
 export function registrationFor(def: ServiceDef): Registration {
@@ -125,12 +127,6 @@ export function service(a?: unknown, b?: unknown): unknown {
   return (value: Function, context: ClassDecoratorContext) => addService(value, context, options, false);
 }
 
-function lifetimeDecorator(lifetime: Lifetime) {
-  return (_value: Function, context: ClassDecoratorContext): void => {
-    LIFETIME.set(context.metadata, lifetime);
-  };
-}
-
 /**
  * Make a @service or @route class a singleton: one instance for the life of
  * the app. Services already are by default, so it's mostly for routes, which
@@ -145,7 +141,7 @@ function lifetimeDecorator(lifetime: Lifetime) {
  * }
  * ```
  */
-export const singleton = lifetimeDecorator("singleton");
+export const singleton = LIFETIME("singleton");
 /**
  * Make a @service or @route class scoped: one instance per request. The
  * default for routes. Stacks with @service in any order.
@@ -158,7 +154,7 @@ export const singleton = lifetimeDecorator("singleton");
  * }
  * ```
  */
-export const scoped = lifetimeDecorator("scoped");
+export const scoped = LIFETIME("scoped");
 /**
  * Make a @service or @route class transient: a new instance every time it's
  * resolved (one per injecting instance, since @inject caches on its owner).
@@ -171,7 +167,7 @@ export const scoped = lifetimeDecorator("scoped");
  * }
  * ```
  */
-export const transient = lifetimeDecorator("transient");
+export const transient = LIFETIME("transient");
 
 function resolveFor<T>(owner: object, key: ServiceKey<T>, optional: boolean, perOwner: ReturnType<typeof localKey<T>>): T | undefined {
   if (perOwner.hasOwn(owner)) return perOwner.from(owner);
@@ -274,21 +270,24 @@ export function maybe<T>(key: ServiceKey<T>) {
 
 // ── Lifecycle ──
 
-export const ON_BOOT = createKey<Array<string | symbol>>("on-boot");
-export const ON_SHUTDOWN = createKey<Array<string | symbol>>("on-shutdown");
-
 export interface EveryEntry {
   method: string | symbol;
   ms: number;
   immediate: boolean;
 }
-export const EVERY = createKey<EveryEntry[]>("every");
+/** Per method: the schedules its @every decorators declared. */
+const EVERY = methodList<Omit<EveryEntry, "method">>("every");
 
-function hook(key: typeof ON_BOOT, label: string) {
-  return (_method: Function, context: ClassMethodDecoratorContext): void => {
-    assertPublicInstance(context, `@${label}`);
-    key.ownArray<string | symbol>(context.metadata).push(context.name);
-  };
+/** A class's @every methods, one entry per schedule. */
+export function everyOf(target: DecoratorTarget): EveryEntry[] {
+  const out: EveryEntry[] = [];
+  for (const [method, schedules] of EVERY.entries(target)) for (const schedule of schedules) out.push({ method, ...schedule });
+  return out;
+}
+
+/** Whether a class has any @onBoot, @onShutdown or @every method. */
+export function hasLifecycleHooks(target: DecoratorTarget): boolean {
+  return onBoot.members(target).size > 0 || onShutdown.members(target).size > 0 || EVERY.entries(target).size > 0;
 }
 
 /**
@@ -304,7 +303,7 @@ function hook(key: typeof ON_BOOT, label: string) {
  * }
  * ```
  */
-export const onBoot = hook(ON_BOOT, "onBoot");
+export const onBoot = methodFlag("onBoot");
 
 /**
  * Run when the app stops, after requests drain and background work ends.
@@ -318,7 +317,7 @@ export const onBoot = hook(ON_BOOT, "onBoot");
  * }
  * ```
  */
-export const onShutdown = hook(ON_SHUTDOWN, "onShutdown");
+export const onShutdown = methodFlag("onShutdown");
 
 /** Options for @every. */
 export interface EveryOptions {
@@ -350,13 +349,13 @@ export interface EveryOptions {
  * }
  * ```
  */
-export function every(interval: string | number, options: EveryOptions = {}) {
+export function every(
+  interval: string | number,
+  options: EveryOptions = {},
+): (method: (this: any, signal: AbortSignal) => unknown, context: ClassMethodDecoratorContext) => void {
   const ms = parseDuration(interval);
   if (ms <= 0) throw new TypeError(`@every interval must be positive`);
-  return (_method: (this: any, signal: AbortSignal) => unknown, context: ClassMethodDecoratorContext): void => {
-    assertPublicInstance(context, "@every");
-    EVERY.ownArray<EveryEntry>(context.metadata).push({ method: context.name, ms, immediate: options.immediate ?? false });
-  };
+  return EVERY({ ms, immediate: options.immediate ?? false });
 }
 
 /** What a @hosted class must implement. */

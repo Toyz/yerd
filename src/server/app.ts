@@ -11,7 +11,7 @@ import { ACCEPTS, METHOD_LAYOUTS, noLayout, prerender, applyLayouts, joinLayouts
 import { choose, expandType } from "../respond/negotiate.js";
 import { Container, Scope, ServiceCollection, currentServices, keyName, runWithServices, type Lifetime, type Registration } from "../di/container.js";
 import {
-  EVERY, INJECTS, ON_BOOT, ON_SHUTDOWN, lifetimeOf, registrationFor, resetServiceRegistry, serviceRegistry,
+  INJECTS, everyOf, hasLifecycleHooks, onBoot, onShutdown, lifetimeOf, registrationFor, resetServiceRegistry, serviceRegistry,
   type HostedService,
 } from "../di/decorators.js";
 import { jsx, type Component } from "../jsx/jsx-runtime.js";
@@ -24,7 +24,7 @@ import { CLOCK_PATH, CUES_PATH, Cues, DEFAULT_ROOM, isPublicRoom, validRoom, typ
 import { TestClient, answer } from "./in-process.js";
 import { compilePath } from "../log/paths.js";
 import { cssBundleClasses, cssBundleHash, cssBundleText, resetCss, resetCssBundle, useCssBundle } from "../render/css.js";
-import { EventTransport, Events, HANDLES, ON_EVENT, eventName } from "../events/events.js";
+import { EventTransport, Events, eventName, handlesOf, hasEventHandlers, onsOf } from "../events/events.js";
 import { ACTIONS, ActionForm, checkActionToken, fillHoles, resolveSecrets, safeBack, verifyAction } from "../actions/action.js";
 import { CLASS_GUARDS, METHOD_GUARDS, guardRegistry, isGuardRef, resetGuardRegistry, type GuardSpec } from "../decorators/guards.js";
 import { SessionManager, checkSessionOptions } from "../session/manager.js";
@@ -1079,11 +1079,8 @@ export class YerdApp {
         });
       }
       checkInjections(def.className, lifetime, def.metadata, container, problems);
-      for (const hookKey of [ON_BOOT, ON_SHUTDOWN, EVERY]) {
-        if ((hookKey.from(def.metadata) ?? []).length > 0) {
-          problems.push(`${def.className}: lifecycle hooks (@onBoot, @onShutdown, @every) belong on singleton services, not routes`);
-          break;
-        }
+      if (hasLifecycleHooks(def.metadata)) {
+        problems.push(`${def.className}: lifecycle hooks (@onBoot, @onShutdown, @every) belong on singleton services, not routes`);
       }
 
       const layouts = resolved.isolated ? resolved.layouts : joinLayouts(this.#layouts, resolved.layouts);
@@ -1176,15 +1173,10 @@ export class YerdApp {
       const metadata = metadataOf(registration.impl);
       const name = registration.impl.name || keyName(registration.key);
       checkInjections(name, registration.lifetime, metadata, container, problems);
-      if (registration.lifetime !== "singleton") {
-        for (const hookKey of [ON_BOOT, ON_SHUTDOWN, EVERY, ON_EVENT, HANDLES]) {
-          if ((hookKey.from(metadata) ?? []).length > 0) {
-            problems.push(`${name} (${registration.lifetime}): @onBoot, @onShutdown, @every, @on and @handles need a singleton service`);
-            break;
-          }
-        }
+      if (registration.lifetime !== "singleton" && (hasLifecycleHooks(metadata) || hasEventHandlers(metadata))) {
+        problems.push(`${name} (${registration.lifetime}): @onBoot, @onShutdown, @every, @on and @handles need a singleton service`);
       }
-      for (const { type, method } of HANDLES.from(metadata) ?? []) {
+      for (const { type, method } of handlesOf(metadata)) {
         const call = eventName(type);
         const other = answering.get(call);
         if (other) problems.push(`${call} is answered twice: by ${other} and ${name}.${String(method)} (a call has one @handles)`);
@@ -1259,8 +1251,8 @@ export class YerdApp {
     for (const registration of container.registrations()) {
       if (!registration.impl || registration.lifetime !== "singleton") continue;
       const metadata = metadataOf(registration.impl);
-      const ons = ON_EVENT.from(metadata) ?? [];
-      const answers = HANDLES.from(metadata) ?? [];
+      const ons = onsOf(metadata);
+      const answers = handlesOf(metadata);
       if (!ons.length && !answers.length) continue;
       const instance = runWithServices(container, undefined, () => container.get(registration.key)) as object;
       events.wire(container, instance, registration.impl.name, ons, answers);
@@ -1314,10 +1306,10 @@ export class YerdApp {
     await runWithServices(container, undefined, async () => {
       for (const registration of singletons) {
         const metadata = metadataOf(registration.impl!);
-        const boot = ON_BOOT.from(metadata) ?? [];
-        const shutdown = ON_SHUTDOWN.from(metadata) ?? [];
-        const periodic = EVERY.from(metadata) ?? [];
-        if (boot.length === 0 && shutdown.length === 0 && periodic.length === 0) continue;
+        if (!hasLifecycleHooks(metadata)) continue;
+        const boot = onBoot.members(metadata);
+        const shutdown = onShutdown.members(metadata);
+        const periodic = everyOf(metadata);
         const instance = container.get(registration.key) as Record<string | symbol, (...a: unknown[]) => unknown>;
         for (const method of boot) await instance[method]!.call(instance);
         for (const method of shutdown) lifecycle.shutdown.push(() => instance[method]!.call(instance));

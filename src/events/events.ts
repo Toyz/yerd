@@ -49,8 +49,8 @@
 
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createKey, localKey } from "../decorators/keys.js";
-import { assertPublicInstance } from "../decorators/util.js";
+import { localKey } from "../decorators/keys.js";
+import { methodList, type DecoratorTarget } from "../decorators/kit.js";
 import { parseDuration } from "../util/duration.js";
 import { Scope, runWithServices, token, type Container } from "../di/container.js";
 import { Logger } from "../log/logger.js";
@@ -190,8 +190,29 @@ export interface HandlesEntry {
   type: Function;
 }
 
-export const ON_EVENT = createKey<OnEntry[]>("events:on");
-export const HANDLES = createKey<HandlesEntry[]>("events:handles");
+/** Per method: the event classes its @on decorators subscribe it to. */
+const ON_EVENT = methodList<Omit<OnEntry, "method">>("on");
+/** Per method: the call classes its @handles decorators answer. */
+const HANDLES = methodList<Function>("handles");
+
+/** A class's @on handlers, one entry per subscription. */
+export function onsOf(target: DecoratorTarget): OnEntry[] {
+  const out: OnEntry[] = [];
+  for (const [method, entries] of ON_EVENT.entries(target)) for (const entry of entries) out.push({ method, ...entry });
+  return out;
+}
+
+/** A class's @handles methods, one entry per call class. */
+export function handlesOf(target: DecoratorTarget): HandlesEntry[] {
+  const out: HandlesEntry[] = [];
+  for (const [method, types] of HANDLES.entries(target)) for (const type of types) out.push({ method, type });
+  return out;
+}
+
+/** Whether a class has any @on or @handles method. */
+export function hasEventHandlers(target: DecoratorTarget): boolean {
+  return ON_EVENT.entries(target).size > 0 || HANDLES.entries(target).size > 0;
+}
 
 /**
  * Run this method of a singleton service whenever an event of this class is
@@ -214,15 +235,15 @@ export const HANDLES = createKey<HandlesEntry[]>("events:handles");
  * }
  * ```
  */
-export function on<E extends object>(type: EventClass<E>, options: OnOptions = {}) {
+export function on<E extends object>(
+  type: EventClass<E>,
+  options: OnOptions = {},
+): (method: (this: any, event: E) => unknown, context: ClassMethodDecoratorContext) => void {
   if (options.retries !== undefined && (!Number.isInteger(options.retries) || options.retries < 0)) {
     throw new TypeError("@on retries must be a whole number of at least 0");
   }
   if (options.backoff !== undefined) parseDuration(options.backoff);
-  return (_method: (this: any, event: E) => unknown, context: ClassMethodDecoratorContext): void => {
-    assertPublicInstance(context, "@on");
-    ON_EVENT.ownArray<OnEntry>(context.metadata).push({ method: context.name, type, options });
-  };
+  return ON_EVENT({ type, options });
 }
 
 /**
@@ -242,11 +263,10 @@ export function on<E extends object>(type: EventClass<E>, options: OnOptions = {
  * }
  * ```
  */
-export function handles<C extends Call<any>>(type: EventClass<C>) {
-  return (_method: (this: any, call: C) => ResultOf<C> | Promise<ResultOf<C>>, context: ClassMethodDecoratorContext): void => {
-    assertPublicInstance(context, "@handles");
-    HANDLES.ownArray<HandlesEntry>(context.metadata).push({ method: context.name, type });
-  };
+export function handles<C extends Call<any>>(
+  type: EventClass<C>,
+): (method: (this: any, call: C) => ResultOf<C> | Promise<ResultOf<C>>, context: ClassMethodDecoratorContext) => void {
+  return HANDLES(type);
 }
 
 // ── transport ──
