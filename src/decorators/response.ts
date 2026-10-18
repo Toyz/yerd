@@ -15,7 +15,7 @@
 
 import { createKey } from "./keys.js";
 import { assertPublicInstance } from "./util.js";
-import { checkHeader } from "../respond/response.js";
+import { assertStatus, checkHeader } from "../respond/response.js";
 
 export interface ResponseDefaults {
   status?: number;
@@ -62,7 +62,7 @@ function defaultsFor(context: ClassMethodDecoratorContext): ResponseDefaults {
  * ```
  */
 export function status(code: number) {
-  if (!Number.isInteger(code) || code < 200 || code > 599) throw new TypeError(`@status(${code}): not a response status (200-599)`);
+  assertStatus(code, "@status");
   return (_method: Function, context: ClassMethodDecoratorContext): void => {
     defaultsFor(context).status = code;
   };

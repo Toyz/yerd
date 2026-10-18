@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { accepts, catches, get, guards, negotiate, noLayout, metadataOf } from "@toyz/yerd";
+import { HttpError, accepts, catches, get, guards, negotiate, noLayout, metadataOf, res, status } from "@toyz/yerd";
+import { assertStatus } from "../../src/respond/response.js";
+import { coerce } from "../../src/respond/coerce.js";
 import { ACCEPTS, NO_LAYOUT } from "../../src/decorators/route.js";
 import { expandType, isMediaType, type MediaType } from "../../src/respond/negotiate.js";
 import { assertPublicInstance, isAsyncIterable, isDecoratorContext } from "../../src/decorators/util.js";
@@ -105,5 +107,17 @@ describe("isAsyncIterable", () => {
     expect(isAsyncIterable([1])).toBe(false);
     expect(isAsyncIterable(async function* () {})).toBe(false);
     expect(isAsyncIterable(null)).toBe(false);
+  });
+});
+
+describe("assertStatus", () => {
+  it("is the one status check, naming its caller", async () => {
+    expect(() => assertStatus(199, "here")).toThrow("here: 199 isn't a response status code (200-599)");
+    expect(() => assertStatus(200.5, "here")).toThrow(TypeError);
+    expect(() => assertStatus(599, "here")).not.toThrow();
+    expect(() => res(null, { status: 600 })).toThrow("res(): 600 isn't a response status code (200-599)");
+    expect(() => new HttpError(102)).toThrow("new HttpError(): 102 isn't a response status code (200-599)");
+    expect(() => status(1000)).toThrow("@status: 1000 isn't a response status code (200-599)");
+    await expect(coerce(42, { layouts: [] })).rejects.toThrow("A handler's returned status: 42 isn't a response status code (200-599)");
   });
 });

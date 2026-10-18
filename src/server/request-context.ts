@@ -16,7 +16,7 @@ import { readBody, readNdjson, type ParsedBody } from "./body.js";
 import type { RouteInfo, YerdContext } from "./context.js";
 import { parseCookies, serializeCookie, type CookieOptions } from "./cookies.js";
 import type { Outgoing } from "../respond/coerce.js";
-import { checkHeader } from "../respond/response.js";
+import { assertStatus, checkHeader } from "../respond/response.js";
 import type { ResponseDefaults } from "../decorators/response.js";
 import { REQUEST_SPAN, newSpanId, type Span } from "../log/span.js";
 import { HttpError } from "../respond/response.js";
@@ -192,7 +192,7 @@ export class RequestContext implements YerdContext {
   }
 
   status(code: number): void {
-    if (!Number.isInteger(code) || code < 200 || code > 599) throw new TypeError(`${code} isn't a response status (200-599)`);
+    assertStatus(code, "ctx.status()");
     this.#status = code;
   }
 

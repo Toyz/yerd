@@ -21,6 +21,18 @@ export function checkHeader(name: string, value: string, where = `Header ${name}
 }
 
 /**
+ * Throw a TypeError unless `code` can be a response's status: an integer
+ * from 200 to 599. A 1xx would go out as an interim response with no final
+ * one after it, and anything outside 100-999 makes Node throw past every
+ * error handler. `where` names the caller in the message.
+ */
+export function assertStatus(code: number, where: string): void {
+  if (!Number.isInteger(code) || code < 200 || code > 599) {
+    throw new TypeError(`${where}: ${code} isn't a response status code (200-599)`);
+  }
+}
+
+/**
  * An explicit response: status, headers and a body that is itself coerced.
  * Header names are lowercased here, so `Content-Type` replaces the default
  * `content-type` instead of going out next to it. You get one from res(),
@@ -59,9 +71,7 @@ export class YerdResponse {
     /** Set-Cookie values. */
     readonly cookies?: string[],
   ) {
-    if (!Number.isInteger(status) || status < 200 || status > 599) {
-      throw new TypeError(`${status} isn't a status a response can have (200-599)`);
-    }
+    assertStatus(status, "res()");
     const lower: HeaderInit = {};
     for (const name in headers) {
       const value = headers[name]!;
@@ -217,12 +227,8 @@ export class HttpError extends Error {
     options: { expose?: boolean; cause?: unknown; details?: Record<string, unknown> } = {},
   ) {
     super(message ?? `HTTP ${status}`, { cause: options.cause });
-    // Caught here rather than when the response is written: a 1xx would be sent
-    // as an interim response with no final one after it, and anything outside
-    // 100-999 makes Node throw past every error handler.
-    if (!Number.isInteger(status) || status < 200 || status > 599) {
-      throw new TypeError(`new HttpError(${status}): not a response status (200-599)`);
-    }
+    // Caught here rather than when the response is written, past every error handler.
+    assertStatus(status, "new HttpError()");
     this.name = "HttpError";
     this.expose = options.expose ?? status < 500;
     this.details = options.details;

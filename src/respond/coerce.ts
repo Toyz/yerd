@@ -6,7 +6,7 @@
 import { isYerdNode, jsx, type Child, type Component } from "../jsx/jsx-runtime.js";
 import { applyLayouts, type LayoutProps, type PageMeta } from "../decorators/route.js";
 import { renderToStream } from "../render/render.js";
-import { isBare, YerdResponse, type HeaderInit } from "./response.js";
+import { assertStatus, isBare, YerdResponse, type HeaderInit } from "./response.js";
 import { choose, isNegotiated, media, type MediaRange, type Negotiated } from "./negotiate.js";
 import { isAsyncIterable } from "../decorators/util.js";
 
@@ -145,10 +145,7 @@ export async function coerce(value: unknown, options: CoerceOptions): Promise<Ou
   if (typeof value === "string") return { status: 200, headers: { "content-type": TEXT }, body: value };
 
   if (typeof value === "number") {
-    // 1xx are interim responses: sent as the answer, the client would wait for a final one.
-    if (!Number.isInteger(value) || value < 200 || value > 599) {
-      throw new TypeError(`A handler returned ${value}, which isn't an HTTP status code`);
-    }
+    assertStatus(value, "A handler's returned status");
     return { status: value, headers: {}, body: null, explicitStatus: true };
   }
 
