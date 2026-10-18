@@ -78,8 +78,8 @@ Built-in transforms (throw a 400 on bad input):
 
 | Transform | Output |
 | --- | --- |
-| [`toInt`](api:yerd.toInt) | A safe integer. `"12"` yes, `"1.5"` and `"abc"` no. |
-| [`toNumber`](api:yerd.toNumber) | Any number. |
+| [`toInt`](api:yerd.toInt) | A safe base-10 integer, surrounding spaces trimmed. `"12"` and `" 12 "` yes; `"1.5"`, `"abc"` and `"0x10"` no. |
+| [`toNumber`](api:yerd.toNumber) | A decimal number, surrounding spaces trimmed: `"3.5"`, `"-.5"`, `"1e3"`. Blanks, hex (`"0x10"`), `"Infinity"` and values too big for a number are refused. |
 | [`toBool`](api:yerd.toBool) | `"true"`, `"1"` or `""` are true; `"false"` or `"0"` are false. |
 | [`trim`](api:yerd.trim) / [`lower`](api:yerd.lower) | The trimmed / lowercased string. |
 | [`oneOf("a", "b")`](api:yerd.oneOf) | One of the listed strings; the type is their union. |
@@ -160,11 +160,39 @@ The `is.*` decorators:
 
 Every one takes `optional`, `transform` and `validate`. Outside a request, [`parse(Dto, raw)`](api:yerd.parse) validates a value and [`dto(Dto)`](api:yerd.dto) gives you a transform for any `transform` option.
 
+The format decorators hand you clean values, typed:
+
+```tsx
+import { body, is, post, route } from "@toyz/yerd";
+
+class ReturnRequest {
+  @is.uuid({ version: 4 }) orderId!: string; // " 3F2504E0-4F89-41D3-9A0C-0305E82C3301 " arrives lowercased and trimmed
+  @is.email() email!: string; // trimmed
+  @is.date() delivered!: Date; // "2026-10-17" arrives as a Date (midnight UTC)
+  @is.url({ optional: true }) photoLink?: string; // http(s) only, normalized: "HTTPS://Example.com" -> "https://example.com/"
+}
+
+@route("/returns")
+export class Returns {
+  @body(ReturnRequest) accessor request!: Promise<ReturnRequest>;
+
+  @post async create() {
+    const r = await this.request;
+    const days = (Date.now() - r.delivered.getTime()) / 86_400_000;
+    return days <= 30 ? { ok: true, order: r.orderId } : { ok: false, reason: "Returns close 30 days after delivery" };
+  }
+}
+```
+
+A failure names the format: `Expected a version 4 UUID`, `Expected an email address`, `Expected an ISO 8601 date`, `Expected a http or https URL`. `is.date()` rejects dates that don't exist (`2026-02-30`) instead of rolling them over, and a date with a time but no zone (`2026-10-17T09:30`) is read in the server's time zone, so send a `Z` or an offset when it matters.
+
 ### Your own types
 
 `transform` runs after the type check, and each step gets the previous one's output, so the last step decides the field's type. Throw from a step to reject the value with that message. A pipeline whose steps don't fit together, or a field whose type doesn't match the output, won't compile.
 
 ```tsx
+import { is, trim, uuid } from "@toyz/yerd";
+
 type Uuid = string & { readonly __brand: "Uuid" };
 
 function toUuid(value: string): Uuid {
@@ -353,6 +381,74 @@ export class Visits {
   }
 }
 ```
+
+## Your own accessors
+
+The built-in decorators are made with [createAccessor](api:yerd.createAccessor), and so are yours. Give it a function of the request context; you get a decorator that works on accessor fields and in `@args`.
+
+```tsx
+import { HttpError, createAccessor, get, param, resolve, route, service } from "@toyz/yerd";
+
+/** The visitor's first choice from Accept-Language: "pt-PT,pt;q=0.9,en;q=0.8" -> "pt-PT". */
+export const language = createAccessor(
+  (ctx) => ctx.headers["accept-language"]?.split(",")[0]?.split(";")[0]?.trim() || undefined,
+  { name: "language" },
+);
+
+interface Shop {
+  slug: string;
+  name: string;
+}
+
+@service
+export class Shops {
+  async bySlug(slug: string): Promise<Shop | undefined> {
+    return slug === "acme" ? { slug, name: "Acme" } : undefined;
+  }
+}
+
+/** The shop this request is for, from the subdomain (acme.example.com). A 404 if there's none. */
+export const shop = createAccessor(
+  async (ctx): Promise<Shop> => {
+    const slug = ctx.url.hostname.split(".")[0] ?? "";
+    const found = await resolve(Shops).bySlug(slug);
+    if (!found) throw new HttpError(404, "No such shop");
+    return found;
+  },
+  { name: "shop" },
+);
+
+/** A numeric path param, checked at boot: the route must have it. */
+export const idParam = createAccessor(
+  (ctx, name: string) => {
+    const id = Number(ctx.params[name]);
+    if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(404, "Not found");
+    return id;
+  },
+  { name: "idParam", validate: (route, name) => (route.paramNames.includes(name) ? undefined : `${route.pattern} has no :${name}`) },
+);
+
+@route("/products/:id")
+export class Product {
+  @language accessor lang = "en"; // missing header: the initializer
+  @shop accessor shop!: Promise<Shop>;
+  @idParam("id") accessor id!: number;
+
+  @get async show() {
+    const { name } = await this.shop;
+    return { shop: name, product: this.id, lang: this.lang };
+  }
+}
+```
+
+- The function runs at most once per request for each decorator and argument list, the first time something reads it; every later read gets the same value (or the same promise).
+- Returning `undefined` uses the field's initializer, like `@query`.
+- Throwing (an `HttpError`, say) answers the request, the same as a guard.
+- Arguments after `ctx` become the decorator's arguments: `@idParam("id")`. `validate` runs at boot for every route class that uses it; return a message to stop the app from booting.
+- The field's type is checked against what the function returns: `@language accessor lang!: number` won't compile.
+- They work on services too, reading whatever request is running (see [request data in a service](08-services.md#request-data-in-a-service)), and in `@args(language, idParam("id"))`.
+
+For lower-level work, `currentContext()` gives you the same context anywhere in a request, and [readBody](api:yerd.readBody) parses a raw `IncomingMessage` body the way `@body` does.
 
 ## When input is bad
 

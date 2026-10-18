@@ -139,6 +139,8 @@ export class Q3 {
 For an area with its own document (an admin with its own `<head>` and styles), set `inheritLayouts: false`. The group's layouts replace the app's root layouts and any outer group's; inner groups still nest inside it.
 
 ```tsx
+import { group } from "@toyz/yerd";
+
 @group("/console", { layout: AdminDocument, inheritLayouts: false })
 export class Console {}
 ```
@@ -176,6 +178,8 @@ A layout that is already in the chain is not applied again. That is why `About` 
 To make a layout the whole chain, with no app or group layouts, pass `{ inherit: false }`:
 
 ```tsx
+import { get, layout, route } from "@toyz/yerd";
+
 @route("/report")
 export class Report {
   @get @layout(PrintLayout, { inherit: false }) page() {
@@ -253,6 +257,33 @@ Guards run top to bottom, and the first one that doesn't continue decides the re
 5. Guards on the handler method
 
 Stacked decorators run in the order written. Guards also run in front of [actions](06-interactivity.md). For login, roles and named guards backed by services, see [sessions and auth](09-sessions-and-auth.md).
+
+## Middleware
+
+A guard decides whether a handler runs. Middleware wraps the whole request instead: it runs before the guards, calls `next()` for everything after (guards, then the handler or action), and sees the response on its way out. Register it with `app.use()`.
+
+```ts
+import { yerd, type Middleware } from "@toyz/yerd";
+
+/** How long the app took, as a Server-Timing header (browser dev tools show it under Timing). */
+const timing: Middleware = async (ctx, next) => {
+  const started = performance.now();
+  const out = await next();
+  out.headers["server-timing"] = `app;dur=${(performance.now() - started).toFixed(1)};desc="${ctx.route.className}"`;
+  return out;
+};
+
+export const app = yerd().use(timing);
+```
+
+- [Middleware](api:yerd.Middleware) gets the request context and `next`. `next()` resolves to the response: `status`, `headers` (lowercase names), `body` and `cookies`. Change them and return it.
+- Several run in the order you `use()` them, the first outermost.
+- It runs for requests that matched a route. 404s, 405s, static files and refused cross-site posts never reach it.
+- The session is loaded and the DI scope is ready, so `currentContext()`, `resolve()` and `ctx.session` work.
+- Errors thrown by the handler come out of `next()`, so a `try`/`catch` around it sees them. A throw from the middleware itself is handled like a handler's: `@catches`, then `app.onError`, then the error page.
+- To turn a request away, prefer a guard (it can redirect or return any response). Middleware can throw an [`HttpError`](api:yerd.HttpError).
+
+`app.use()` also takes anything with a `middleware` function, which is how [`createAuth`](09-sessions-and-auth.md#sign-in-with-createauth) plugs in: `app.use(auth)`.
 
 ## Content negotiation
 

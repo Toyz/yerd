@@ -84,7 +84,7 @@ Attribute names are the real HTML names, lowercase: `for`, `maxlength`, `tabinde
 | `class` / `className` | strings, arrays and `{ name: boolean }` objects, merged into one attribute |
 | `style` object | camelCase to kebab-case, `--custom` kept, empty values skipped |
 | `Date` / `URL` attribute | ISO string / `href` |
-| `on*` handler function | nothing, for now |
+| `on*` handler function | nothing, except inside [`<Local>`](06-interactivity.md#local-state-no-server-at-all), where it runs in the browser (a string handler renders as written) |
 
 Style numbers get no unit: `{ width: 10 }` renders `width:10`, which CSS ignores, so write `"10px"`.
 
@@ -356,5 +356,5 @@ const signup = (
 - Names are HTML names: `htmlFor` and `tabIndex` don't exist, because they'd render as wrong HTML.
 - `aria-*` and `data-*` attributes are accepted on every element.
 - Custom elements (any tag with a dash, like `<my-widget>`) take any attributes.
-- `on*` handlers type-check but render nothing yet.
+- `on*` handlers are dropped on the server, except inside [`<Local>`](06-interactivity.md#local-state-no-server-at-all), where they run in the browser against its state. For server-side reactions, use an [action](06-interactivity.md#actions-forms-that-call-methods).
 - Your own [custom attributes](06-interactivity.md#custom-attributes) are typed by extending `CustomAttributes`.
