@@ -198,7 +198,11 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
       if (isEventHandlerName(name)) {
         // Inside <Local> a handler runs in the browser: its source goes along.
         // Elsewhere there's nothing to run it, so it's dropped.
-        if (local) out += ` data-yx-on-${name.slice(2).toLowerCase()}="${escapeHtml(handlerSource(name, value))}"`;
+        if (local) {
+          // The name becomes part of an attribute name, so it's checked like one.
+          if (!info.valid) throw new TypeError(`Invalid attribute name: ${JSON.stringify(name)}`);
+          out += ` data-yx-on-${name.slice(2).toLowerCase()}="${escapeHtml(handlerSource(name, value))}"`;
+        }
         continue;
       }
       throw new TypeError(`Attribute ${name} got a function; only on* event handlers (dropped on the server) and formaction={action} on a submit button accept one`);
