@@ -40,7 +40,8 @@ iterable for a stream, JSX for a page, `res()` / `redirect()` for full control.
 - **Interactivity without a client framework**: `@action` forms that post
   with or without JavaScript, morphing Regions, boosted navigation, live
   refresh over SSE, custom attributes with a client half, `prefetch`, and an
-  auto mode (`<Scripts auto />`) that needs no attributes at all.
+  auto mode (`<Scripts auto />`) that needs no attributes at all. For real
+  client code: islands and lazy custom elements, loaded only where they're used.
 - **Sessions and auth**: sealed cookie or memory sessions, `createAuth`,
   argon2id passwords, session-bound CSRF tokens, cross-site request checks.
 - **Streaming**: NDJSON and SSE, per-user channels.

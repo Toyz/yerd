@@ -713,7 +713,7 @@ engine's help.
 
 ## Client runtime layout
 
-Today the client is a core and three chunks, each one self-contained
+Today the client is a core and four chunks, each one self-contained
 function in `src/client/`, shipped as its source (`fn.toString()`):
 
 ```
@@ -721,6 +721,8 @@ runtime.ts        yerdRuntime(): the core, at /_yerd/runtime.js
 runtime-cues.ts   yerdCues(): `sync` and cues, at /_yerd/runtime-cues.js
 runtime-dnd.ts    yerdDnd(): drop targets, file drops, dropTo, at /_yerd/runtime-dnd.js
 runtime-local.ts  yerdLocal(): <Local> state and handlers, at /_yerd/runtime-local.js
+runtime-lazy.ts   yerdLazy(): the app's islands, lazy elements and attribute modules, at /_yerd/runtime-lazy.js
+index.ts          types only: @toyz/yerd/client, for the app's client modules
 hooks.ts          types only: what the core hands a chunk, and what it hands back
 ```
 
@@ -734,7 +736,7 @@ custom attributes' client halves. Both live in that string rather than in the
 function, because a function body can't say `import.meta`, and Vite's SSR
 transform (dev, and the tests) rewrites `import()` in source it loads.
 `chunkSource(name)` is a chunk as a module, `export default` its function.
-All four are served with `cache-control: no-cache` and an ETag, compressed
+All five are served with `cache-control: no-cache` and an ETag, compressed
 once; an unknown chunk name is a 404.
 
 Loading. The core imports a chunk the first time the page has an element that
@@ -780,8 +782,67 @@ Input that arrives first. Nothing meant for a chunk is lost while it loads:
   that starts before the chunk and drops after it simply works: the chunk
   reads the same drag state.
 - cues: no input to keep; the chunk connects the elements when it starts.
+- lazy: nothing to hold either; an element's trigger is armed once the
+  chunk is in.
 
-Because they ship as source, all four must be compiled at ES2017 or later
+### The lazy chunk: the app's own client modules
+
+`runtime-lazy.ts` imports app modules the first time they're needed:
+islands (`<Island>`), lazy custom elements (`lazyElement()`) and
+module-backed attribute halves (`attribute(name, { client: "src/....client.ts" })`).
+These are ordinary ES modules built by Vite (every `*.client.{ts,tsx,js,jsx}`
+is a client entry, with `preserveEntrySignatures: "exports-only"` so the
+default export survives), not source text like everything else here.
+
+The registry. Lazy tags and module-backed attributes are app-wide, so they
+travel with the runtime script: `runtimeResponse()` passes
+`lazyRegistry(moduleAttributes())` to `runtimeSource()`, which hands it to the
+core as its fifth argument (`{ elements: { tag: { url, when, css } },
+attributes: { name: ... } }`). URLs are resolved per serve through
+`clientModule()` in assets.ts: `/src/...` in dev, the manifest's file (under
+the build's base) in production, plus the CSS the manifest lists for the
+module and its static imports. A module the manifest lacks is logged and left
+out, so one bad path doesn't break the runtime. Islands carry their own:
+`<yerd-island data-yx-island=url data-yx-when data-yx-props data-yx-styles>`.
+
+Loading the chunk. The core's trigger for "lazy" is built from the registry:
+`[data-yx-island]`, each lazy tag, and `[name]` for each module-backed
+attribute. The chunk imports modules through `hooks.importModule`, which is
+the core's own `importChunk` (only the served module can call `import()`).
+
+Inside the chunk:
+
+- Islands are registered with the core as the attribute `data-yx-island`, so
+  the core's MutationObserver connects and disconnects them; disconnect runs
+  the mount's cleanup. Islands render `data-yx-keep` (a morph never patches
+  what a mount drew) and a default key hashed from module and props (a morph
+  keeps an unchanged island, and replaces one whose props changed).
+- Module-backed attributes are registered with the core under their own name
+  with a placeholder setup that arms the trigger and forwards
+  `update`/`disconnect` to the real handle once the module is in. The first
+  trigger to fire loads the module; every waiting element then connects.
+- Lazy tags are found by `onPage` and the chunk's own MutationObserver
+  (childList only); the first trigger to fire imports the module, which
+  defines the element, and the rest are disarmed.
+- Triggers: `load`, `idle` (requestIdleCallback with a 2s timeout, or a
+  200ms timer), `visible` (one shared IntersectionObserver, rootMargin
+  200px), `interaction` (pointerenter, pointerdown, focusin, touchstart) and
+  `media:<query>`. Events aren't replayed.
+- Each URL is imported once per page (a map of promises; a failure stays
+  failed until the next full load). Manifest CSS is linked first (resolving on
+  load or error); for a lazy element before the import, since defining it
+  upgrades it at once.
+- `data-yx-loading` / `data-yx-failed` and `yx:lazy-start` / `yx:lazy-end`
+  (`{ src, ok, error? }`) mark the element whose trigger fired.
+
+Preloading. The renderer sets the LAZY bit for an island, a lazy tag (tags
+with a dash are looked up in the registry) or a module-backed attribute
+(attrs.ts records them in `lazyAttributes` as it writes them), and for
+trigger "load" adds the module and its static imports to
+`state.modules`; `placeHints()` writes those as modulepreload links after
+the chunk hints.
+
+Because they ship as source, all five must be compiled at ES2017 or later
 (`runtimePieces()` refuses a build with async lowered to helpers). The
 published package serves them minified: `npm run build` runs
 `scripts/minify-runtime.ts` after tsc, which minifies each function with
@@ -797,7 +858,8 @@ started with the core. Tests of the split runtime call the core's source with
 a base URL and their own import callback instead.
 
 `<Scripts />` writes the `<script type="module">` tag.
-There is no `@toyz/yerd/client` export yet; it arrives with islands.
+`@toyz/yerd/client` (`src/client/index.ts`) is types only: what an island's
+mount function, a module-backed attribute half and the lazy events look like.
 
 The planned layout once islands and sprinkles land:
 

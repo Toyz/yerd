@@ -1032,7 +1032,8 @@ are not.
 
 Published to npm as **`@toyz/yerd`** (same scope as `@toyz/loom`). Subpath
 exports today: `@toyz/yerd` (server), `@toyz/yerd/jsx-runtime`,
-`@toyz/yerd/jsx-dev-runtime`, `@toyz/yerd/vite`, `@toyz/yerd/auth`. Ships
+`@toyz/yerd/jsx-dev-runtime`, `@toyz/yerd/vite`, `@toyz/yerd/auth`,
+`@toyz/yerd/client` (types for client modules). Ships
 `dist/` (tsc output of `tsconfig.build.json`, with `.d.ts` files), `LICENSE`
 and `README.md`, with zero runtime `dependencies`; requires Node 24 or later.
 Apps set `"jsxImportSource": "@toyz/yerd"`.

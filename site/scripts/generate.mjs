@@ -33,6 +33,7 @@ const ENTRIES = [
   { module: "@toyz/yerd", file: "src/index.ts" },
   { module: "@toyz/yerd/auth", file: "src/auth/index.ts" },
   { module: "@toyz/yerd/vite", file: "src/vite/index.ts" },
+  { module: "@toyz/yerd/client", file: "src/client/index.ts" },
   { module: "@toyz/yerd/jsx-runtime", file: "src/jsx/jsx-runtime.ts" },
 ];
 
@@ -435,7 +436,7 @@ const DESIGN_NOTES = [
 const GUIDE_GROUPS = [
   { group: "Get started", guides: [["getting-started", "Installation"], ["your-first-app", "Your first app"]] },
   { group: "Core concepts", guides: [["routing", "Routing"], ["request-data", "Request data"], ["responses", "Responses"], ["pages-and-layouts", "Pages and layouts"]] },
-  { group: "Building apps", guides: [["interactivity", "Interactivity"], ["streaming-and-live", "Streaming and live"], ["services", "Services and DI"], ["events", "Events"], ["sessions-and-auth", "Sessions and auth"]] },
+  { group: "Building apps", guides: [["interactivity", "Interactivity"], ["client-code", "Client code"], ["streaming-and-live", "Streaming and live"], ["services", "Services and DI"], ["events", "Events"], ["sessions-and-auth", "Sessions and auth"]] },
   { group: "Recipes", guides: [["recipes", "Recipes"]] },
   { group: "Production", guides: [["logging", "Logging"], ["deploying", "Deploying"], ["testing", "Testing"], ["security", "Security"]] },
 ];

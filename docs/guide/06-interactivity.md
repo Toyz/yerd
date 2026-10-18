@@ -748,9 +748,12 @@ const button = <button tooltip="Delete this todo">x</button>;
 - The client half connects when an element with the attribute appears (first load, a morph, a boosted page), gets `update` when the value changes, and `disconnect` when it goes away.
 - It can return nothing, a cleanup function, or `{ update, disconnect }`. Its third argument is the runtime API ([YerdClient](api:yerd.YerdClient)), grouped by job: `yerd.page` (`refresh()`, `load(url, push)`, `apply(html)`, `morph(from, to)`), `yerd.net` (`prefetch(url)`, `fetch(url)`) and `yerd.clock` (`now()`, `sync()`).
 - Define attributes at module level in a file the server imports. Names are lowercase words joined by dashes.
+- A client half that needs imports can be a module instead, loaded only where it's used: see [lazy attribute halves](17-client-code.md#lazy-attribute-halves).
 
 > [!WARNING]
 > The client half is shipped to the browser as source text (`fn.toString()`). It must be self-contained: no imports, and no variables from the surrounding module. Everything it needs comes in through `(el, value, yerd)`.
+
+For bigger client code (a chart, an editor, a custom element), see [Client code](17-client-code.md).
 
 ## Security in brief
 
