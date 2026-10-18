@@ -1,6 +1,6 @@
 {
   "name": "@toyz/yerd",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A TypeScript web server where routes are decorated classes and TSX is the template engine. Zero runtime dependencies.",
   "keywords": [
     "web",
@@ -16,9 +16,13 @@
   "type": "module",
   "license": "MIT",
   "author": "toyz",
+  "homepage": "https://github.com/Toyz/yerd#readme",
+  "bugs": {
+    "url": "https://github.com/Toyz/yerd/issues"
+  },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Toyz/yerd.git"
+    "url": "git+https://github.com/Toyz/yerd.git"
   },
   "engines": {
     "node": ">=24"
