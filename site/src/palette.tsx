@@ -13,6 +13,7 @@ import { LoomElement, LoomEvent, animationFrame, app, component, css, mount, on,
 import { hotkey, hotkeyLabel } from "@toyz/loom/element";
 import { LoomRouter } from "@toyz/loom/router";
 import { entryId, loadApi, loadGuides, sectionId, type Api, type GuideInfo } from "./data";
+import { tagStyles } from "./shared";
 import { summary } from "./ui";
 
 /** Ask the palette to open (the sidebar button sends it). */
@@ -215,43 +216,50 @@ function Highlighted({ text, hits }: { text: string; hits: number[] }) {
 }
 
 const sheet = css`
+  ${tagStyles}
   :host { display: none; position: fixed; inset: 0; z-index: 1000; align-items: flex-start; justify-content: center; padding-top: min(14vh, 120px); }
   :host(.open) { display: flex; }
-  .backdrop { position: fixed; inset: 0; background: rgba(5, 7, 10, 0.62); backdrop-filter: blur(10px); animation: fade 0.12s ease; }
+  .backdrop { position: fixed; inset: 0; background: light-dark(rgba(60, 42, 24, 0.32), rgba(8, 6, 4, 0.66)); backdrop-filter: blur(6px); animation: fade 0.12s ease; }
   .modal {
-    position: relative; width: min(680px, calc(100vw - 32px)); max-height: min(560px, 76vh);
+    position: relative; width: min(680px, calc(100vw - 24px)); max-height: min(560px, 76vh);
     display: flex; flex-direction: column; overflow: hidden;
-    background: var(--bg-raised); border: 1px solid var(--border); border-radius: 14px;
-    box-shadow: 0 30px 70px rgba(0, 0, 0, 0.55); animation: pop 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+    background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: 10px;
+    box-shadow: var(--shadow); animation: pop 0.14s cubic-bezier(0.16, 1, 0.3, 1);
   }
   @keyframes fade { from { opacity: 0; } }
-  @keyframes pop { from { opacity: 0; transform: scale(0.97) translateY(-6px); } }
+  @keyframes pop { from { opacity: 0; transform: scale(0.98) translateY(-6px); } }
   .bar { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
-  .bar svg { flex: none; color: var(--text-faint); }
-  .input { flex: 1; background: none; border: 0; outline: none; color: var(--text); font: inherit; font-size: 1rem; caret-color: var(--accent); }
+  .bar svg { flex: none; color: var(--hat); }
+  .input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--text); font: inherit; font-size: 1.05rem; caret-color: var(--hat); }
   .input::placeholder { color: var(--text-faint); }
   kbd {
     display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 20px; padding: 0 5px;
-    border: 1px solid var(--border); border-radius: 5px; font-family: var(--mono); font-size: 0.68rem; color: var(--text-faint); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 4px; font: 600 0.7rem var(--mono); color: var(--text-dim); background: var(--bg-sunken);
   }
-  .results { overflow-y: auto; padding: 6px; flex: 1; scrollbar-width: thin; }
-  .label { font-size: 0.66rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-faint); padding: 10px 12px 4px; }
-  .item { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 9px; cursor: pointer; }
-  .item.active { background: var(--accent-bg); }
-  .item .icon { flex: none; width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; font-family: var(--mono); font-size: 0.7rem; color: var(--text-dim); background: var(--bg); border: 1px solid var(--border); }
-  .item.active .icon { color: var(--accent); border-color: var(--accent-dim); }
+  .results { overflow-y: auto; padding: 6px 8px 8px; flex: 1; scrollbar-width: thin; }
+  .label { font: 400 0.95rem var(--display); color: var(--text-dim); padding: 12px 10px 4px; }
+  .item { --hole: var(--bg-raised); display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 6px; cursor: pointer; border-left: 3px solid transparent; }
+  .item.active { --hole: var(--bg-hover); background: var(--bg-hover); border-left-color: var(--hat); }
+  .item .icon { flex: none; width: 24px; height: 24px; border-radius: 5px; display: grid; place-items: center; font: 600 0.72rem var(--mono); color: var(--text-faint); background: var(--bg-sunken); }
+  .item.active .icon { color: var(--accent); }
   .info { flex: 1; min-width: 0; }
-  .title { font-size: 0.92rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .title.mono { font-family: var(--mono); font-size: 0.86rem; }
-  .title mark { background: none; color: var(--accent); font-weight: 600; }
-  .detail { font-size: 0.76rem; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
-  .where { flex: none; font-size: 0.72rem; color: var(--text-faint); max-width: 34%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .empty { padding: 36px 16px; text-align: center; color: var(--text-faint); }
-  .foot { display: flex; gap: 18px; padding: 10px 18px; border-top: 1px solid var(--border); font-size: 0.72rem; color: var(--text-faint); }
+  .title { font-size: 0.95rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .title.mono { font-family: var(--mono); font-size: 0.88rem; }
+  .title mark { background: none; color: var(--accent); font-weight: 700; text-decoration: underline; text-decoration-color: var(--accent-dim); text-underline-offset: 3px; }
+  .detail { font-size: 0.8rem; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .where { flex: none; font-size: 0.78rem; color: var(--text-faint); max-width: 34%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .empty { padding: 36px 16px; text-align: center; color: var(--text-dim); }
+  .foot { display: flex; gap: 18px; padding: 10px 18px; border-top: 1px solid var(--border); font-size: 0.78rem; color: var(--text-faint); }
   .foot span { display: inline-flex; align-items: center; gap: 5px; }
+  @media (max-width: 600px) {
+    :host { padding-top: 12px; }
+    .modal { max-height: calc(100dvh - 24px); }
+    .foot { display: none; }
+    .where { display: none; }
+  }
 `;
 
-const ICON: Record<Kind, string> = { api: "{}", member: ".", section: "#", guide: "G", command: ">" };
+const ICON: Record<Kind, string> = { api: "{}", member: ".", section: "#", guide: "¶", command: "/" };
 
 @component("doc-palette")
 @styles(sheet)
@@ -399,7 +407,7 @@ export class DocPalette extends LoomElement {
             </div>
             {item.detail ? <div class="detail">{item.detail}</div> : null}
           </div>
-          <span class="where">{item.badge ?? item.where}</span>
+          {item.badge ? <span class={`tag ${item.badge}`}>{item.badge}</span> : <span class="where">{item.where}</span>}
         </div>,
       );
     }

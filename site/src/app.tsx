@@ -1,149 +1,204 @@
 /**
- * The shell: sidebar (brand, versions, search, guide groups, API sections)
- * and the routed outlet. Groups collapse; the one holding the current page
- * always opens, and what you collapse is remembered between visits.
+ * The shell: a top bar (brand, Guides / API / Benchmarks, search, theme,
+ * GitHub), a sidebar only where one helps (the guides on guide pages, the
+ * API sections on API pages), the routed outlet and the footer. On narrow
+ * screens the sidebar and the top links move into a drawer.
  */
 
-import { LoomElement, component, css, mount, on, reactive, styles } from "@toyz/loom";
+import { LoomElement, component, css, dialog, mount, on, persist, reactive, styles } from "@toyz/loom";
 import { RouteChanged } from "@toyz/loom/router";
-import { entryId, loadApi, loadGuides, sectionId, type Api, type GuideInfo } from "./data";
+import { loadApi, loadGuides, moduleShort, sectionId, type Api, type GuideInfo } from "./data";
 import { OpenPalette, PALETTE_HOTKEY } from "./palette";
 import { pageStyles } from "./shared";
+import { GnomeMark } from "./ui";
+
+type Theme = "system" | "light" | "dark";
+const THEME_NEXT: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
+const THEME_LABEL: Record<Theme, string> = { system: "Theme: follows your system", light: "Theme: light", dark: "Theme: dark" };
 
 const sheet = css`
   :host { display: block; min-height: 100vh; }
-  .layout { display: flex; min-height: 100vh; }
+  .skip {
+    position: absolute; left: 12px; top: -48px; z-index: 50;
+    padding: 8px 14px; border-radius: 5px; background: var(--text); color: var(--bg); text-decoration: none;
+  }
+  .skip:focus { top: 10px; }
+  main:focus { outline: none; }
 
-  aside {
-    position: fixed;
-    inset: 0 auto 0 0;
-    width: var(--sidebar);
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-raised);
+  /* ── top bar ── */
+  header {
+    position: sticky; top: 0; z-index: 40;
+    height: var(--top);
+    display: flex; align-items: center; gap: 28px;
+    padding: 0 24px;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; flex: none; }
+  .brand .gnome { margin-top: -3px; }
+  .brand span { font: 400 1.45rem/1 var(--display); letter-spacing: -0.01em; }
+  .brand:hover .gnome { transform: rotate(-6deg); }
+  .gnome { transition: transform 0.2s ease; }
+
+  nav.primary { display: flex; gap: 4px; }
+  nav.primary a {
+    position: relative;
+    padding: 6px 10px; border-radius: 5px;
+    color: var(--text-dim); text-decoration: none; font-size: 0.95rem;
+  }
+  nav.primary a:hover { color: var(--text); background: var(--bg-hover); }
+  nav.primary a.on { color: var(--text); font-weight: 700; }
+  nav.primary a.on::after {
+    content: ""; position: absolute; left: 10px; right: 10px; bottom: -13px; height: 3px;
+    background: var(--hat); border-radius: 2px 2px 0 0;
+  }
+
+  .tools { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  button.search {
+    display: flex; align-items: center; gap: 10px;
+    width: 230px; padding: 6px 8px 6px 12px;
+    border-radius: 6px; border: 1px solid var(--border-strong);
+    background: var(--bg-raised); color: var(--text-faint);
+    font: inherit; font-size: 0.9rem; cursor: pointer; text-align: left;
+  }
+  button.search:hover { border-color: var(--accent-dim); color: var(--text-dim); }
+  button.search .label { flex: 1; }
+  kbd {
+    font: 600 0.72rem var(--mono); padding: 2px 6px; border-radius: 4px;
+    border: 1px solid var(--border); background: var(--bg-sunken); color: var(--text-dim);
+  }
+  .icon-btn {
+    display: grid; place-items: center; width: 36px; height: 36px; flex: none;
+    border-radius: 6px; border: 1px solid transparent; background: none; color: var(--text-dim); cursor: pointer;
+  }
+  .icon-btn:hover { color: var(--text); background: var(--bg-hover); }
+  .tools .link { color: var(--text-dim); text-decoration: none; font-size: 0.9rem; padding: 6px 8px; border-radius: 5px; }
+  .tools .link:hover { color: var(--text); background: var(--bg-hover); }
+  .tools .version { font: 0.78rem var(--mono); color: var(--text-faint); }
+  .only-narrow { display: none; }
+
+  /* ── body ── */
+  .body { display: flex; align-items: flex-start; }
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: calc(100vh - var(--top)); }
+  loom-outlet { display: block; flex: 1; }
+
+  aside.side {
+    position: sticky; top: var(--top);
+    width: var(--sidebar); flex: none;
+    height: calc(100vh - var(--top));
+    overflow-y: auto; scrollbar-width: thin;
+    padding: 28px 12px 40px 20px;
     border-right: 1px solid var(--border);
-    z-index: 20;
   }
-  .brand { padding: 20px 20px 14px; }
-  .brand-row { display: flex; align-items: center; gap: 10px; }
-  .brand-row a { display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; }
-  .mark {
-    width: 30px; height: 30px; border-radius: 7px;
-    display: grid; place-items: center;
-    background: var(--accent); color: var(--bg);
-    font: 700 16px var(--mono);
-  }
-  .name { font-weight: 700; font-size: 1.15rem; letter-spacing: -0.02em; }
-  .versions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; font-family: var(--mono); font-size: 0.7rem; }
-  .pill { padding: 3px 7px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--text-dim); }
-  .pill.main { color: var(--accent); border-color: var(--accent-dim); }
 
-  .search { padding: 4px 14px 12px; border-bottom: 1px solid var(--border); }
-  .search-button {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 8px 10px;
-    border-radius: 6px;
-    border: 1px solid var(--border-strong);
-    background: var(--bg-sunken);
-    color: var(--text-faint);
-    font: inherit;
-    font-size: 0.88rem;
-    cursor: pointer;
-    text-align: left;
-  }
-  .search-button:hover { border-color: var(--accent-dim); color: var(--text-dim); }
-  .search-button kbd {
-    font-family: var(--mono); font-size: 0.7rem; padding: 1px 6px; border: 1px solid var(--border);
-    border-radius: 5px; background: var(--bg-raised); color: var(--text-faint);
-  }
-  input:focus { outline: none; border-color: var(--accent-dim); }
-
-  nav { flex: 1; overflow-y: auto; padding: 10px 0 32px; scrollbar-width: thin; }
-
-  .home-link loom-link::part(anchor) {
-    display: flex; align-items: center; gap: 8px;
-    margin: 0 12px 6px; padding: 8px 10px; border-radius: 6px;
-    color: var(--text); text-decoration: none; font-size: 0.9rem; font-weight: 600;
-  }
-  .home-link loom-link::part(anchor):hover { background: var(--bg-hover); }
-  .home-link.active loom-link::part(anchor) { background: var(--accent-bg); color: var(--accent); }
-
-  .group { margin: 4px 0; }
-  .group.divided { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .group + .group { margin-top: 14px; }
   button.group-title {
-    display: flex; align-items: center; justify-content: space-between; width: 100%;
-    padding: 7px 20px; border: 0; background: none; cursor: pointer;
-    font: 700 0.72rem var(--font); letter-spacing: 0.07em; text-transform: uppercase;
-    color: var(--text-faint);
+    display: flex; align-items: center; gap: 6px; width: 100%;
+    padding: 4px 8px; border: 0; background: none; cursor: pointer; border-radius: 4px;
+    font: 700 0.84rem var(--font); color: var(--text); text-align: left;
   }
-  button.group-title:hover { color: var(--text-dim); }
-  button.group-title.current { color: var(--text-dim); }
-  .chevron { font-size: 0.8rem; transition: transform 0.15s ease; }
+  button.group-title:hover { background: var(--bg-hover); }
+  .chevron { width: 10px; height: 10px; color: var(--text-faint); transition: transform 0.15s ease; flex: none; }
   .closed .chevron { transform: rotate(-90deg); }
-  .items { padding-bottom: 4px; }
   .closed .items { display: none; }
+  .items { margin: 4px 0 0; padding: 0; list-style: none; }
 
-  .nav-link loom-link::part(anchor) {
-    display: block;
-    margin: 0 12px;
-    padding: 5px 10px 5px 12px;
-    border-radius: 6px;
-    color: var(--text-dim);
-    text-decoration: none;
-    font-size: 0.9rem;
-    line-height: 1.4;
+  .items a {
+    position: relative; display: block;
+    padding: 4px 8px 4px 24px; border-radius: 4px;
+    color: var(--text-dim); text-decoration: none; font-size: 0.92rem; line-height: 1.4;
   }
-  .nav-link loom-link::part(anchor):hover { color: var(--text); background: var(--bg-hover); }
-  .nav-link.active loom-link::part(anchor) { color: var(--accent); background: var(--accent-bg); font-weight: 600; }
-  .nav-link.featured loom-link::part(anchor)::after { content: " ✦"; color: var(--accent); font-size: 0.75em; }
+  .items a:hover { color: var(--text); background: var(--bg-hover); }
+  /* You are here: the gnome's hat. */
+  .items a.on { color: var(--text); font-weight: 700; }
+  .items a.on::before {
+    content: ""; position: absolute; left: 9px; top: 50%; margin-top: -6px;
+    border-left: 4.5px solid transparent; border-right: 4.5px solid transparent; border-bottom: 10px solid var(--hat);
+  }
+  .side-head { font: 400 1.05rem var(--display); color: var(--text); padding: 0 8px 10px; }
+  .side-head a { color: inherit; text-decoration: none; }
+  .side-head a:hover { color: var(--accent); }
 
-  .hint { padding: 6px 22px; font-size: 0.8rem; color: var(--text-faint); }
+  /* ── footer ── */
+  footer {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px;
+    padding: 22px 48px 28px; border-top: 1px solid var(--border);
+    font-size: 0.85rem; color: var(--text-faint);
+  }
+  footer .grow { flex: 1; min-width: 220px; display: flex; align-items: center; gap: 10px; }
+  footer a { color: var(--text-dim); text-decoration: none; }
+  footer a:hover { color: var(--accent); text-decoration: underline; }
+  footer code { font: 0.8rem var(--mono); }
 
-  .foot { padding: 12px 20px; border-top: 1px solid var(--border); font-size: 0.78rem; color: var(--text-faint); }
-  .foot a { color: var(--text-dim); text-decoration: none; }
-  .foot a:hover { color: var(--accent); }
+  /* ── drawer (narrow screens) ── */
+  dialog.drawer {
+    margin: 0 0 0 auto; height: 100dvh; max-height: none; width: min(320px, 86vw);
+    padding: 0; border: 0; border-left: 1px solid var(--border);
+    background: var(--bg); color: var(--text);
+    box-shadow: var(--shadow);
+  }
+  dialog.drawer[open] { animation: slide 0.18s ease-out; }
+  dialog.drawer::backdrop { background: rgba(30, 20, 10, 0.35); }
+  @keyframes slide { from { transform: translateX(24px); opacity: 0; } }
+  .drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 12px 20px; border-bottom: 1px solid var(--border); }
+  .drawer-body { padding: 16px 12px 40px 16px; overflow-y: auto; }
+  .drawer-links { display: grid; gap: 2px; margin-bottom: 20px; }
+  .drawer-links a { padding: 8px 10px; border-radius: 5px; color: var(--text); text-decoration: none; font: 400 1.15rem var(--display); }
+  .drawer-links a.on { background: var(--accent-bg); color: var(--accent); }
+  .drawer-meta { margin: 20px 10px 0; font-size: 0.85rem; color: var(--text-faint); display: flex; flex-wrap: wrap; gap: 6px 16px; }
+  .drawer-meta a { color: var(--text-dim); }
 
-  main { flex: 1; margin-left: var(--sidebar); min-width: 0; }
-
-  .menu {
-    display: none;
-    position: fixed; top: 12px; left: 12px; z-index: 30;
-    width: 38px; height: 38px; border-radius: 8px;
-    border: 1px solid var(--border-strong); background: var(--bg-raised); color: var(--text);
-    font-size: 18px; cursor: pointer;
+  @media (max-width: 1080px) {
+    button.search { width: auto; }
+    button.search .label { display: none; }
+    .tools .version { display: none; }
   }
   @media (max-width: 900px) {
-    aside { transform: translateX(-100%); transition: transform 0.2s ease; box-shadow: 0 0 40px rgba(0, 0, 0, 0.5); }
-    aside.open { transform: none; }
-    main { margin-left: 0; padding-top: 48px; }
-    .menu { display: block; }
+    header { padding: 0 12px 0 16px; gap: 12px; }
+    nav.primary, aside.side, .tools .link, .only-wide { display: none; }
+    .only-narrow { display: grid; }
+    button.search kbd { display: none; }
+    button.search { border: 0; background: none; padding: 8px; }
+    footer { padding: 20px 16px 28px; }
   }
 `;
 
-const STORE = "yerd-docs:collapsed";
-/** Collapsed until opened: the long, less-travelled lists. */
-const COLLAPSED_BY_DEFAULT = ["API reference"];
+const ChevronIcon = () => (
+  <svg class="chevron" viewBox="0 0 10 10" aria-hidden="true">
+    <path d="M1.5 3.5 5 7l3.5-3.5" fill="none" stroke="currentColor" stroke-width={1.6} stroke-linecap="round" stroke-linejoin="round" />
+  </svg>
+);
 
-function readCollapsed(): Set<string> {
-  try {
-    const saved = localStorage.getItem(STORE);
-    if (saved) return new Set(JSON.parse(saved) as string[]);
-  } catch {
-    // storage blocked: fall back to the defaults
-  }
-  return new Set(COLLAPSED_BY_DEFAULT);
-}
+const SearchIcon = () => (
+  <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={2.2} stroke-linecap="round" aria-hidden="true">
+    <circle cx={11} cy={11} r={7} />
+    <path d="m20 20-3.5-3.5" />
+  </svg>
+);
 
-function saveCollapsed(collapsed: Set<string>): void {
-  try {
-    localStorage.setItem(STORE, JSON.stringify([...collapsed]));
-  } catch {
-    // not remembered this time; harmless
+function ThemeIcon({ theme }: { theme: Theme }) {
+  if (theme === "light") {
+    return (
+      <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={2} stroke-linecap="round" aria-hidden="true">
+        <circle cx={12} cy={12} r={4.5} />
+        <path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" />
+      </svg>
+    );
   }
+  if (theme === "dark") {
+    return (
+      <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={2} stroke-linejoin="round" aria-hidden="true">
+        <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />
+      </svg>
+    );
+  }
+  return (
+    <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={2} aria-hidden="true">
+      <circle cx={12} cy={12} r={8.5} />
+      <path d="M12 3.5a8.5 8.5 0 0 1 0 17Z" fill="currentColor" />
+    </svg>
+  );
 }
 
 @component("yerd-docs")
@@ -152,10 +207,13 @@ export class YerdDocs extends LoomElement {
   @reactive accessor path = currentPath();
   @reactive accessor api: Api | undefined = undefined;
   @reactive accessor guides: GuideInfo[] = [];
-  @reactive accessor open = false;
-  @reactive accessor collapsed: Set<string> = readCollapsed();
+  /** Groups you closed; the one holding the current page opens anyway. */
+  @persist("yerd-docs:collapsed") accessor collapsed: string[] = [];
+  @persist("yerd-docs:theme") accessor theme: Theme = "system";
+  @dialog accessor menuOpen = false;
 
   @mount async load() {
+    applyTheme(this.theme);
     const [api, guides] = await Promise.all([loadApi(), loadGuides()]);
     this.api = api;
     this.guides = guides;
@@ -163,123 +221,182 @@ export class YerdDocs extends LoomElement {
 
   @on(RouteChanged) onRoute(event: RouteChanged) {
     this.path = event.path;
-    this.open = false;
+    this.menuOpen = false;
+  }
+
+  #cycleTheme() {
+    this.theme = THEME_NEXT[this.theme] ?? "system";
+    applyTheme(this.theme);
+    this.scheduleUpdate();
   }
 
   #toggle(group: string) {
-    const next = new Set(this.collapsed);
-    if (next.has(group)) next.delete(group);
-    else next.add(group);
-    this.collapsed = next;
-    saveCollapsed(next);
+    this.collapsed = this.collapsed.includes(group) ? this.collapsed.filter((g) => g !== group) : [...this.collapsed, group];
+    this.scheduleUpdate();
   }
 
-  #link(to: string, label: string, active = this.path === to, extra = "") {
-    return (
-      <div class={`nav-link ${active ? "active" : ""} ${extra}`}>
-        <loom-link to={to}>{label}</loom-link>
-      </div>
-    );
+  get #area(): "home" | "guide" | "api" | "benchmarks" | "other" {
+    if (this.path === "/") return "home";
+    if (this.path.startsWith("/guide/")) return "guide";
+    if (this.path === "/api" || this.path.startsWith("/api/")) return "api";
+    if (this.path === "/benchmarks") return "benchmarks";
+    return "other";
   }
 
-  /** A collapsible group; it opens by itself while it holds the current page. */
-  #group(title: string, current: boolean, items: unknown[], divided = false) {
-    const closed = this.collapsed.has(title) && !current;
+  #onGuide(slug: string): boolean {
+    return this.path === `/guide/${slug}` || this.path.startsWith(`/guide/${slug}/`);
+  }
+
+  #group(title: string, items: Array<{ to: string; label: string; on: boolean }>) {
+    const current = items.some((i) => i.on);
+    const closed = this.collapsed.includes(title) && !current;
     return (
-      <div class={`group ${closed ? "closed" : ""} ${divided ? "divided" : ""}`} loom-key={title}>
-        <button class={`group-title ${current ? "current" : ""}`} aria-expanded={closed ? "false" : "true"} onClick={() => this.#toggle(title)}>
+      <div class={`group ${closed ? "closed" : ""}`} loom-key={title}>
+        <button class="group-title" aria-expanded={closed ? "false" : "true"} onClick={() => this.#toggle(title)}>
+          <ChevronIcon />
           <span>{title}</span>
-          <span class="chevron">▾</span>
         </button>
-        <div class="items">{items}</div>
+        <ul class="items">
+          {items.map((i) => (
+            <li>
+              <a href={`#${i.to}`} class={i.on ? "on" : ""} aria-current={i.on ? "page" : undefined}>
+                {i.label}
+              </a>
+            </li>
+          ))}
+        </ul>
       </div>
     );
   }
 
-  #nav() {
+  /** The guides, by group, in reading order. Design notes show only while you're reading one. */
+  #guideNav() {
+    const reading = this.guides.find((g) => this.#onGuide(g.slug));
+    const groups = [...new Set(this.guides.map((g) => g.group))].filter((g) => g !== "Design notes" || reading?.group === "Design notes");
+    return groups.map((group) => {
+      const items = this.guides
+        .filter((g) => g.group === group && g.slug !== "overview")
+        .map((g) => ({ to: `/guide/${g.slug}`, label: g.title, on: this.#onGuide(g.slug) }));
+      return items.length ? this.#group(group, items) : null;
+    });
+  }
+
+  #apiNav() {
     const api = this.api;
-    // Design notes are reachable from the guides that cite them and the footer, not the sidebar.
-    const groups = [...new Set(this.guides.map((g) => g.group))].filter((g) => g !== "Design notes");
-    const inApi = this.path === "/api" || this.path.startsWith("/api/");
-    return (
-      <>
-        <div class={`home-link ${this.path === "/" ? "active" : ""}`}>
-          <loom-link to="/">Home</loom-link>
-        </div>
-        {groups.map((group) => {
-          const items = this.guides.filter((g) => g.group === group && g.slug !== "overview");
-          if (items.length === 0) return null;
-          const current = items.some((g) => this.path === `/guide/${g.slug}` || this.path.startsWith(`/guide/${g.slug}/`));
-          return this.#group(
-            group,
-            current,
-            items.map((g) =>
-              this.#link(
-                `/guide/${g.slug}`,
-                g.title,
-                this.path === `/guide/${g.slug}` || this.path.startsWith(`/guide/${g.slug}/`),
-                g.slug === "your-first-app" ? "featured" : "",
-              ),
-            ),
-          );
-        })}
-        {api
-          ? this.#group(
-              "API reference",
-              inApi,
-              [this.#link("/api", "All exports"), ...api.sections.map((s) => this.#link(`/api/section/${sectionId(s)}`, s, this.path === `/api/section/${sectionId(s)}`))],
-              true,
-            )
-          : null}
-      </>
-    );
+    if (!api) return null;
+    const entry = this.path.startsWith("/api/") && !this.path.startsWith("/api/section/") ? this.path.slice(5).split("/")[0] : undefined;
+    const entrySection = entry ? api.entries.find((e) => `${moduleShort(e.module)}.${e.name}` === entry)?.section : undefined;
+    const items = [
+      { to: "/api", label: "All exports", on: this.path === "/api" },
+      ...api.sections.map((s) => ({
+        to: `/api/section/${sectionId(s)}`,
+        label: s,
+        on: this.path === `/api/section/${sectionId(s)}` || entrySection === s,
+      })),
+    ];
+    return this.#group("API reference", items);
+  }
+
+  #sideContent() {
+    const area = this.#area;
+    if (area === "guide") return this.#guideNav();
+    if (area === "api") return this.#apiNav();
+    return null;
+  }
+
+  #primaryLinks(extra = "") {
+    const area = this.#area;
+    return [
+      <a class={`${area === "guide" ? "on" : ""} ${extra}`} href="#/guide/getting-started" aria-current={area === "guide" ? "true" : undefined}>Guides</a>,
+      <a class={`${area === "api" ? "on" : ""} ${extra}`} href="#/api" aria-current={area === "api" ? "true" : undefined}>API</a>,
+      <a class={`${area === "benchmarks" ? "on" : ""} ${extra}`} href="#/benchmarks" aria-current={area === "benchmarks" ? "true" : undefined}>Benchmarks</a>,
+    ];
   }
 
   update() {
     const api = this.api;
+    const side = this.#sideContent();
+    const area = this.#area;
     return (
-      <div class="layout">
-        <button class="menu" aria-label="Menu" onClick={() => (this.open = !this.open)}>
-          ≡
-        </button>
-        <aside class={this.open ? "open" : ""}>
-          <div class="brand">
-            <div class="brand-row">
-              <a href="#/">
-                <div class="mark">y</div>
-                <div class="name">yerd</div>
-              </a>
-            </div>
-            {api ? (
-              <div class="versions">
-                {api.latest ? <span class="pill" title="Latest release on npm">v{api.latest}</span> : null}
-                <span class="pill main" title={`These docs were generated from main at ${api.commit}`}>
-                  main @ {api.commit}
-                </span>
-              </div>
-            ) : null}
-          </div>
-          <div class="search">
-            <button class="search-button" onClick={() => OpenPalette.dispatch()}>
-              <span>Search guides and API...</span>
+      <div>
+        <a class="skip" href="#main" onClick={(e: Event) => { e.preventDefault(); (this.shadow.querySelector("main") as HTMLElement | null)?.focus(); }}>
+          Skip to content
+        </a>
+        <header>
+          <a class="brand" href="#/" aria-label="yerd home">
+            <GnomeMark size={30} />
+            <span>yerd</span>
+          </a>
+          <nav class="primary" aria-label="Main">{this.#primaryLinks()}</nav>
+          <div class="tools">
+            <button class="search" onClick={() => OpenPalette.dispatch()} aria-label="Search the docs">
+              <SearchIcon />
+              <span class="label">Search</span>
               <kbd>{PALETTE_HOTKEY}</kbd>
             </button>
+            {api?.latest ? (
+              <a class="link version" href="https://www.npmjs.com/package/@toyz/yerd" target="_blank" rel="noopener" title={`Latest release on npm. These docs are built from main at ${api.commit}.`}>
+                v{api.latest}
+              </a>
+            ) : null}
+            <a class="link" href="https://github.com/Toyz/yerd" target="_blank" rel="noopener">GitHub</a>
+            <button class="icon-btn" onClick={() => this.#cycleTheme()} aria-label={THEME_LABEL[this.theme]} title={THEME_LABEL[this.theme]}>
+              <ThemeIcon theme={this.theme} />
+            </button>
+            <button class="icon-btn only-narrow" onClick={() => (this.menuOpen = true)} aria-label="Open menu">
+              <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={2} stroke-linecap="round" aria-hidden="true">
+                <path d="M4 7h16M4 12h16M4 17h16" />
+              </svg>
+            </button>
           </div>
-          <nav>{this.#nav()}</nav>
-          <div class="foot">
-            <a href="https://github.com/Toyz/yerd" target="_blank" rel="noopener">GitHub</a> ·{" "}
-            <a href="https://www.npmjs.com/package/@toyz/yerd" target="_blank" rel="noopener">npm</a> ·{" "}
-            <a href="#/guide/design">design notes</a> · built with{" "}
-            <a href="https://github.com/Toyz/loom" target="_blank" rel="noopener">loom</a>
+        </header>
+        <div class="body">
+          {side ? <aside class="side" aria-label={area === "api" ? "API sections" : "Guides"}>{side}</aside> : null}
+          <main id="main" tabIndex={-1}>
+            <loom-outlet styles={[pageStyles]}></loom-outlet>
+            <footer>
+              <span class="grow">
+                <GnomeMark size={18} />
+                <span>
+                  yerd is MIT licensed. {api ? <>These docs were built from main at <code>{api.commit}</code>.</> : null}
+                </span>
+              </span>
+              <a href="https://www.npmjs.com/package/@toyz/yerd" target="_blank" rel="noopener">npm</a>
+              <a href="#/guide/design">Design notes</a>
+              <a href="https://github.com/Toyz/loom" target="_blank" rel="noopener">Built with loom</a>
+            </footer>
+          </main>
+        </div>
+        <dialog class="drawer" aria-label="Menu" onClick={(e: Event) => e.target === e.currentTarget && (this.menuOpen = false)}>
+          <div class="drawer-head">
+            <a class="brand" href="#/">
+              <GnomeMark size={26} />
+              <span>yerd</span>
+            </a>
+            <button class="icon-btn" onClick={() => (this.menuOpen = false)} aria-label="Close menu">
+              <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={2} stroke-linecap="round" aria-hidden="true">
+                <path d="M6 6l12 12M18 6 6 18" />
+              </svg>
+            </button>
           </div>
-        </aside>
-        <main>
-          <loom-outlet styles={[pageStyles]}></loom-outlet>
-        </main>
+          <div class="drawer-body">
+            <nav class="drawer-links" aria-label="Main">{this.#primaryLinks()}</nav>
+            {area === "api" ? this.#apiNav() : this.#guideNav()}
+            <div class="drawer-meta">
+              <a href="https://github.com/Toyz/yerd" target="_blank" rel="noopener">GitHub</a>
+              <a href="https://www.npmjs.com/package/@toyz/yerd" target="_blank" rel="noopener">npm{api?.latest ? ` v${api.latest}` : ""}</a>
+            </div>
+          </div>
+        </dialog>
         <doc-palette></doc-palette>
       </div>
     );
   }
+}
+
+function applyTheme(theme: Theme): void {
+  if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+  else delete document.documentElement.dataset.theme;
 }
 
 function currentPath(): string {
