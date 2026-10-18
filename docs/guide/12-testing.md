@@ -1,6 +1,6 @@
 # Testing
 
-This page covers testing yerd apps with vitest: real HTTP requests against a test server, sessions and action forms, fake services, and unit tests for services, guards and DTOs.
+This page covers testing yerd apps with vitest: requests through the whole app with no server, sessions and action forms, events, fake services, and unit tests for services, guards and DTOs.
 
 ## Set up vitest
 
@@ -107,49 +107,80 @@ it("boots", async () => {
 
 ## Sessions and action forms
 
-Node's `fetch` has no cookie jar, so bring a tiny one. Action tokens are bound to the session they were rendered for, so fetch the form and post it with the same cookies.
+Action tokens are bound to the session they were rendered for, so a test fetches the page and posts its form with the same cookies. That's what `client.action()` does:
 
 ```ts
-import { expect, it } from "vitest";
+import { afterAll, expect, it } from "vitest";
+import { yerd } from "@toyz/yerd";
+import { SignupPage } from "../src/routes/signup.js";
 
-function client(base: string) {
-  let cookies = "";
-  return async (path: string, init: RequestInit = {}) => {
-    const res = await fetch(base + path, {
-      redirect: "manual",
-      ...init,
-      headers: { cookie: cookies, ...(init.headers as Record<string, string>) },
-    });
-    for (const c of res.headers.getSetCookie()) cookies = /Max-Age=0/.test(c) ? "" : c.split(";")[0]!;
-    return res;
-  };
-}
-
-/** The action token from a page's form, fetched with the same jar you'll post with. */
-async function tokenFrom(c: ReturnType<typeof client>, path: string) {
-  const html = await (await c(path, { headers: { accept: "text/html" } })).text();
-  return /name="_yx" value="([^"]+)"/.exec(html)![1]!;
-}
+const app = yerd({ routes: [SignupPage], services: [], handleSignals: false }).sessions();
+afterAll(() => app.stop());
 
 it("signs up", async () => {
-  const c = client(server.url);
-  const res = await c("/signup", {
-    method: "POST",
-    headers: { yx: "1" },
-    body: new URLSearchParams({ _yx: await tokenFrom(c, "/signup"), name: "ada", password: "correct horse" }),
-  });
-  expect(res.status).toBe(200);
+  const client = app.client();
+  const res = await client.action("/signup", { name: "ada", email: "ada@example.com", age: "36" });
+  expect(res.headers.get("yx-location")).toBe("/welcome");
+});
+
+it("says what's wrong, by field", async () => {
+  const res = await app.client().action("/signup", { name: "a", email: "nope", age: "7" });
+  expect(res.status).toBe(400);
+  expect(await res.json()).toMatchObject({ issues: [{ path: "name" }, { path: "email" }, { path: "age" }] });
+});
+
+it("works without JavaScript too", async () => {
+  const client = app.client();
+  const res = await client.action("/signup", { name: "a", email: "nope", age: "7" }, { script: false });
+  expect(res.status).toBe(303); // back to the form
+  expect(await client.page("/signup")).toContain("Must be 2 to 40 characters");
 });
 ```
 
-- The jar keeps one cookie (the session), which is all yerd sets. Grow it if your app sets more.
-- `redirect: "manual"` lets you assert on redirects instead of following them.
-- `yx: "1"` posts the way yerd's client runtime does: you get the action's own result (204 for nothing, the returned JSX or data, a `yx-location` header for a redirect). Without it you get what a browser without JavaScript gets: a 303 back to the page.
+What a posted action answers depends on how it was posted:
+
+| | Like the runtime (default) | `script: false`, like a plain form |
+| --- | --- | --- |
+| returns nothing | 204 | 303 back to the page |
+| returns JSX | 200, the JSX without layouts | 303 back to the page |
+| returns `redirect(url)` | 200 with a `yx-location` header | 303 to `url` |
+| throws a validation error | 400, JSON `{ error, issues }` | your error page (or the flash-and-redirect you wrote) |
 
 > [!TIP]
-> A token fetched with one jar and posted with another is a 403. That's the session binding working, and it's worth a test of its own.
+> A token rendered for one client and posted by another is a 403. That's the session binding working, and it's worth a test of its own: take a token from `a.page("/signup")` and post it with `b.request(...)`.
 
-To test pages behind `auth.required`, log in once with this helper and keep using the same `c`: the session cookie now carries the user.
+To test pages behind `auth.required`, sign in once with `client.action("/login", {...})` and keep using the same client: its session cookie now carries the user.
+
+### Actions on other elements, and browser values
+
+`client.action()` counts every action on the page, forms and other elements alike, in page order; pick one with `index`. Values an action lambda reads from the page (`el.value`, `ref("#x").checked`, `drag.data("id")`) travel as `_yxh0`, `_yxh1`, ... in the order the lambda first read them, so pass them as fields:
+
+```ts
+it("searches as you type", async () => {
+  const res = await app.client().action("/people", { _yxh0: "ada" }); // the search input's el.value
+  expect(await res.text()).toContain("Ada Lovelace");
+});
+```
+
+Without the `_yxh` fields the action answers 400: it needs values only a browser running the runtime can send.
+
+## Testing events
+
+Events go out once the app has started, and the first request starts it. Wait for one with `waitFor`, created before the request that emits it:
+
+```ts
+import { Events } from "@toyz/yerd";
+import { OrderPlaced } from "../src/events.js";
+
+it("announces the order", async () => {
+  await app.start(); // the container exists, and @on handlers are listening
+  const placed = app.container.get(Events).waitFor(OrderPlaced, { timeout: "2s" });
+  await app.client().action("/checkout");
+  expect((await placed).totalCents).toBeGreaterThan(0);
+});
+```
+
+More in the [events guide](14-events.md#testing-events).
 
 ## Faking services
 
@@ -167,10 +198,9 @@ const fakeMailer: Mailer = {
   },
 };
 
-server = await yerd({ routes: [Signup], services: [SmtpMailer], handleSignals: false })
+const app = yerd({ routes: [Signup], services: [SmtpMailer], handleSignals: false })
   .sessions()
-  .services((s) => s.value(Mailer, fakeMailer))
-  .listen(0, "127.0.0.1");
+  .services((s) => s.value(Mailer, fakeMailer));
 ```
 
 This works for tokens and classes alike: `s.value(TodoRepo, new InMemoryTodoRepo())` replaces a class-keyed service, as long as the fake has the same shape.
@@ -206,13 +236,12 @@ import { ILogger, yerd, type LogRecord } from "@toyz/yerd";
 
 const records: LogRecord[] = [];
 
-server = await yerd({ routes: [Hello], services: [], handleSignals: false })
+const app = yerd({ routes: [Hello], services: [], handleSignals: false })
   .services((s) => s.value(ILogger, { write: (r) => records.push(r) }))
-  .logging({ filter: "info" })
-  .listen(0, "127.0.0.1");
+  .logging({ filter: "info" });
 
 it("logs an access line", async () => {
-  const res = await fetch(server.url + "/hello");
+  const res = await app.request("/hello");
   await new Promise((r) => setTimeout(r, 5)); // the access line is written after the response
   const access = records.find((r) => r.target === "yerd::request" && r.kind === "span-exit");
   expect(access?.fields).toEqual({ status: 200 });

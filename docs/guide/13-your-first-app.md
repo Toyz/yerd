@@ -16,7 +16,7 @@ npm install @toyz/yerd
 npm install -D typescript @types/node vite esbuild vitest
 ```
 
-Copy the `tsconfig.json` from [Getting started](01-getting-started.md#configure-typescript), with one change: add `"DOM"` to `lib`. Vite's client types and a few of yerd's own types mention browser things, and `tsc` complains without it.
+Copy the `tsconfig.json` from [Getting started](01-getting-started.md#configure-typescript) as it is. Keep `"DOM"` in `lib`: Vite's client types and a few of yerd's own types mention browser things, and `tsc` complains without it.
 
 ```json
 "lib": ["ES2023", "esnext.decorators", "DOM"],
@@ -499,66 +499,48 @@ export default defineConfig({
 });
 ```
 
-The test boots the real app on a free port and talks HTTP to it. Action tokens are tied to the session they were rendered for, so each test gets a tiny cookie jar and uses it for both the page and the post.
+The test sends requests straight into the app, no server or port involved. [app.client()](12-testing.md#a-client-that-keeps-cookies) keeps cookies like a browser, and `client.action()` fetches a page and submits its form with your fields. Action tokens are tied to the session they were rendered for, so the page and the post have to come from the same client.
 
 ```ts
 // test/links.test.ts
-import { afterAll, beforeAll, expect, it } from "vitest";
-import { yerd, type RunningServer } from "@toyz/yerd";
+import { afterAll, expect, it } from "vitest";
+import { yerd } from "@toyz/yerd";
 import { Links } from "../src/links.js";
 import { Home } from "../src/routes/home.js";
 
-let server: RunningServer;
-beforeAll(async () => {
-  server = await yerd({ routes: [Home], services: [Links], handleSignals: false }).sessions().listen(0, "127.0.0.1");
-});
-afterAll(() => server.close());
-
-/** fetch with a one-cookie jar, so the session (and its action tokens) carry over. */
-function client() {
-  let cookie = "";
-  return async (path: string, init: RequestInit = {}) => {
-    const res = await fetch(server.url + path, { redirect: "manual", ...init, headers: { cookie, ...init.headers } });
-    for (const c of res.headers.getSetCookie()) cookie = c.split(";")[0]!;
-    return res;
-  };
-}
-
-/** The add form's action token: the first _yx field on the page. */
-const tokenIn = (html: string) => /name="_yx" value="([^"]+)"/.exec(html)![1]!;
+const app = yerd({ routes: [Home], services: [Links], handleSignals: false }).sessions();
+afterAll(() => app.stop());
 
 it("adds a link and says so", async () => {
-  const c = client();
-  const _yx = tokenIn(await (await c("/")).text());
-
-  const res = await c("/", { method: "POST", body: new URLSearchParams({ _yx, title: "Node.js", url: "https://nodejs.org" }) });
+  const client = app.client();
+  const res = await client.action("/", { title: "Node.js", url: "https://nodejs.org" }, { script: false });
   expect(res.status).toBe(303);
 
-  const page = await (await c("/")).text();
+  const page = await client.page("/");
   expect(page).toContain('<a href="https://nodejs.org">Node.js</a>');
   expect(page).toContain("Added &quot;Node.js&quot;");
 });
 
 it("shows what's wrong and keeps what you typed", async () => {
-  const c = client();
-  const _yx = tokenIn(await (await c("/")).text());
+  const client = app.client();
+  await client.action("/", { title: "Oops", url: "not a url" }, { script: false });
 
-  await c("/", { method: "POST", body: new URLSearchParams({ _yx, title: "Oops", url: "not a url" }) });
-
-  const page = await (await c("/")).text();
+  const page = await client.page("/");
   expect(page).toContain("Links start with http:// or https://");
   expect(page).toContain('value="Oops"');
 });
 
 it("refuses a token from someone else's session", async () => {
-  const _yx = tokenIn(await (await client()("/")).text());
-  const res = await client()("/", { method: "POST", body: new URLSearchParams({ _yx, title: "x", url: "https://x.dev" }) });
+  const html = await app.client().page("/");
+  const _yx = /name="_yx" value="([^"]+)"/.exec(html)![1]!;
+  const res = await app.client().request("/", { method: "POST", body: new URLSearchParams({ _yx, title: "x", url: "https://x.dev" }) });
   expect(res.status).toBe(403);
 });
 ```
 
-- `routes` and `services` limit the app to exactly these classes, and `handleSignals: false` leaves Ctrl-C to vitest.
-- `redirect: "manual"` lets you assert on the 303 instead of following it. These posts have no `yx` header, so they get the no-JavaScript treatment.
+- `routes` and `services` limit the app to exactly these classes, and `handleSignals: false` leaves Ctrl-C to vitest. The first request starts the app; `app.stop()` shuts it down.
+- `script: false` posts like a browser without JavaScript, so you get the 303 back to the page. Without it, the client posts the way the runtime does and gets the 204.
+- The add form is the first action on the page, so `client.action()` picks it; pass `{ index }` for another.
 - The last test is the security model at work: a token rendered for one visitor is useless to another.
 
 **Try it:** `npx vitest run`. Three tests pass. [Testing](12-testing.md) covers scripted posts, fake services and logs.
@@ -602,8 +584,10 @@ You've used most of yerd in one small app. Each piece has its own guide:
 - [Interactivity](06-interactivity.md): actions, Regions, boosted links, live refresh and auto mode.
 - [Streaming and live](07-streaming-and-live.md): SSE, NDJSON and channels.
 - [Services](08-services.md): lifetimes, tokens, `@onBoot` and background work.
+- [Events](14-events.md): send the welcome mail or update a dashboard in the background.
 - [Sessions and auth](09-sessions-and-auth.md): logins, guards and the security model.
 - [Logging](10-logging.md), [Deploying](11-deploying.md) and [Testing](12-testing.md).
+- [Security](15-security.md) before you go live, and [Recipes](16-recipes.md) for complete solutions to common tasks.
 
 Want every open tab to update when someone adds a link? [Live refresh](06-interactivity.md#live-refresh) does it with a channel and one attribute.
 

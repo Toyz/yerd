@@ -181,16 +181,21 @@ export class About {
 
 ## What you get
 
-yerd is one package with no runtime dependencies: a router, a TSX renderer that streams, request decorators with validation, DI, sessions, server actions with a tiny client runtime, SSE and NDJSON streaming, and structured logging. Handlers return whatever is natural (a string, an object, JSX, a number) and yerd turns it into a response. Read on in roughly this order:
+yerd is one package with no runtime dependencies: a router, a TSX renderer that streams, request decorators with validation, DI, an event bus, sessions, server actions with a tiny client runtime, SSE and NDJSON streaming, and structured logging. Handlers return whatever is natural (a string, an object, JSX, a number) and yerd turns it into a response.
 
-- [Routing](02-routing.md): paths, verbs, params, groups, layouts, guards.
-- [Request data](03-request-data.md): query, headers, bodies, forms, uploads, validation.
-- [Responses](04-responses.md): what you can return, status codes, cookies, errors.
-- [Pages and layouts](05-pages-and-layouts.md): TSX, components, metadata.
-- [Interactivity](06-interactivity.md): actions, regions, boosted navigation.
+New to yerd? [Your first app](13-your-first-app.md) builds a small app step by step. Otherwise, read on in roughly this order:
+
+- [Routing](02-routing.md): paths, verbs, params, groups, layouts, guards, middleware.
+- [Request data](03-request-data.md): query, headers, bodies, forms, uploads, validation, your own accessors.
+- [Responses](04-responses.md): what you can return, status codes, cookies, caching, errors.
+- [Pages and layouts](05-pages-and-layouts.md): TSX, components, metadata, assets, prerendering.
+- [Interactivity](06-interactivity.md): actions, triggers, Regions, drag and drop, boosted navigation, local state.
 - [Streaming and live updates](07-streaming-and-live.md): SSE, NDJSON, channels.
 - [Services](08-services.md): dependency injection and background work.
-- [Sessions and auth](09-sessions-and-auth.md): sessions, login, guards.
+- [Events](14-events.md): reacting to what happened, calls, transports.
+- [Sessions and auth](09-sessions-and-auth.md): sessions, stores, login, guards.
 - [Logging](10-logging.md): request logs, spans, filters.
-- [Deploying](11-deploying.md): production builds and prerendering.
-- [Testing](12-testing.md): testing routes and services.
+- [Deploying](11-deploying.md): production builds, static files, proxies.
+- [Testing](12-testing.md): testing routes, actions, services and events.
+- [Security](15-security.md): what yerd protects against, and a checklist for going live.
+- [Recipes](16-recipes.md): complete solutions to common tasks.
