@@ -379,14 +379,32 @@ const DESIGN_NOTES = [
   { slug: "spikes", file: "docs/SPIKES.md" },
 ];
 
+/**
+ * The sidebar: guides by group, in reading order, with short titles. A guide
+ * file not listed here still shows up, at the end of "Guides", so a new file
+ * is never silently missing.
+ */
+const GUIDE_GROUPS = [
+  { group: "Get started", guides: [["getting-started", "Installation"], ["your-first-app", "Your first app"]] },
+  { group: "Core concepts", guides: [["routing", "Routing"], ["request-data", "Request data"], ["responses", "Responses"], ["pages-and-layouts", "Pages and layouts"]] },
+  { group: "Building apps", guides: [["interactivity", "Interactivity"], ["streaming-and-live", "Streaming and live"], ["services", "Services and DI"], ["sessions-and-auth", "Sessions and auth"]] },
+  { group: "Production", guides: [["logging", "Logging"], ["deploying", "Deploying"], ["testing", "Testing"]] },
+];
+
 function guideList() {
-  const list = [{ slug: "overview", file: "README.md", title: "Overview", group: "Start" }];
+  const list = [{ slug: "overview", file: "README.md", title: "Introduction", group: "Get started" }];
   const dir = join(repo, "docs", "guide");
-  if (existsSync(dir)) {
-    for (const name of readdirSync(dir).filter((f) => /^\d+-[\w-]+\.md$/.test(f)).sort()) {
-      list.push({ slug: name.replace(/^\d+-|\.md$/g, ""), file: `docs/guide/${name}`, group: "Guides" });
+  const files = existsSync(dir) ? readdirSync(dir).filter((f) => /^\d+-[\w-]+\.md$/.test(f)).sort() : [];
+  const bySlug = new Map(files.map((f) => [f.replace(/^\d+-|\.md$/g, ""), f]));
+  for (const { group, guides } of GUIDE_GROUPS) {
+    for (const [slug, title] of guides) {
+      const file = bySlug.get(slug);
+      if (!file) continue;
+      list.push({ slug, file: `docs/guide/${file}`, title, group });
+      bySlug.delete(slug);
     }
   }
+  for (const [slug, file] of bySlug) list.push({ slug, file: `docs/guide/${file}`, group: "Production" });
   for (const note of DESIGN_NOTES) list.push({ ...note, group: "Design notes" });
   return list;
 }

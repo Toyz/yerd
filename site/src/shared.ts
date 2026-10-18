@@ -71,12 +71,20 @@ export const pageStyles = css`
   }
   blockquote p { color: var(--text); }
 
-  .table { overflow-x: auto; margin: 1em 0; border: 1px solid var(--border); border-radius: var(--radius); }
-  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
-  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  th { background: var(--bg-raised); color: var(--text); font-weight: 600; white-space: nowrap; }
+  .table { overflow-x: auto; margin: 1.4em 0; border: 1px solid var(--border); border-radius: var(--radius); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.92rem; line-height: 1.55; }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th {
+    background: var(--bg-raised); color: var(--text-faint); font-weight: 700; white-space: nowrap;
+    font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em;
+  }
   td { color: var(--text-dim); }
+  tbody tr:nth-child(even) td { background: rgba(255, 255, 255, 0.015); }
+  tbody tr:hover td { background: var(--bg-hover); }
   tr:last-child td { border-bottom: 0; }
+  /* The first column is usually the name (an option, a decorator, a value): keep it on one line. */
+  td:first-child { white-space: nowrap; color: var(--text); }
+  td code { white-space: nowrap; }
 
   .badge {
     display: inline-flex;

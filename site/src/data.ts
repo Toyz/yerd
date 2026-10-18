@@ -49,7 +49,7 @@ export interface GuideInfo {
   slug: string;
   title: string;
   file: string;
-  group: "Start" | "Guides" | "Design notes";
+  group: string;
 }
 
 const base = import.meta.env.BASE_URL;
