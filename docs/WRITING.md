@@ -51,9 +51,12 @@ content-type: application/json; charset=utf-8
 
 - Each exchange: the request line, a blank-free block of the status line and the headers worth showing (not all of them), a blank line, then the body.
 - Several exchanges are separated by a line with `---`.
-- A request with a body: put it after the request line, then a line with `>>>` before the status line.
+- A request with a body: put it after the request line, then a line with `>>>` before the status line. An action's token is long and unreadable: write `_yx=(the form's token)&qty=3`.
+- The request side has no headers. When one matters (a browser's `Accept: text/html`, the runtime's `yx`), say so in the line before the block.
+- Write the standard reason phrase (`303 See Other`): `app.request()` leaves `statusText` empty.
 - An HTML body is shown as source and, on the site, rendered in a small preview. Keep it short: elide with `<!-- ... -->`.
 - Answers must be true. Take them from running `examples/shop` (or a test), not from memory.
+- A tutorial step whose code is a subset of the shop answers for that subset: run it, or elide the parts the step doesn't have yet so the answer holds for both.
 
 Errors are the named classes (`NotFound`, `Conflict`...), returned or thrown, never a bare
 `404`. Numbers are for statuses without a body: `return 204` after a delete.
@@ -126,3 +129,4 @@ where you can.
 
 - Other guides: `[sessions](09-sessions-and-auth.md#section)`. Renaming a heading changes its anchor: update every link to it (grep `docs/`, `site/`, `src/` JSDoc and the README).
 - The API: `[Session](api:yerd.Session)`.
+- Files in the repository: a full GitHub URL (`https://github.com/Toyz/yerd/blob/main/examples/shop/src/cart.ts`). A relative path breaks on either GitHub or the site.
