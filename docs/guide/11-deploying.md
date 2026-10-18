@@ -184,3 +184,5 @@ Pass `handleSignals: false` (to `yerd()` or `listen(port, host, { handleSignals:
 ## Before you go live
 
 Run through the [security checklist](15-security.md#checklist). With several instances, sessions need a shared store (or the default cookie store), events a [transport](14-events.md#several-instances-and-other-apps), and channels a [backend](07-streaming-and-live.md#channels).
+
+For search engines, turn on a [sitemap and robots.txt](18-sitemaps.md) with your public origin.
