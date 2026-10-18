@@ -1,10 +1,10 @@
 # Pages and layouts
 
-This page covers how yerd turns TSX into HTML: components, attributes, layouts, error pages, assets, prerendering and per-request `<Dynamic>` parts.
+How TSX becomes HTML: components, attributes, layouts, error pages, assets, prerendering and per-request `<Dynamic>` parts.
 
 ## A page is just JSX
 
-Return JSX from a handler and yerd renders it to HTML, wrapped in your layouts. There is no React here: TSX compiles against yerd's own JSX runtime, and the result is a plain HTML string streamed to the browser.
+Return JSX from a handler and yerd renders it to HTML inside your layouts. There's no React: TSX compiles against yerd's own JSX runtime and streams a plain HTML string.
 
 ```tsx
 import { get, route } from "@toyz/yerd";
@@ -17,11 +17,12 @@ export class Hello {
 }
 ```
 
-Your `tsconfig.json` needs `"jsx": "react-jsx"` and `"jsxImportSource": "@toyz/yerd"` (see [getting started](01-getting-started.md)). When the first element rendered is `<html>`, yerd puts `<!doctype html>` in front of it for you.
+- `tsconfig.json` needs `"jsx": "react-jsx"` and `"jsxImportSource": "@toyz/yerd"` (see [getting started](01-getting-started.md)).
+- When the first element is `<html>`, `<!doctype html>` is added in front.
 
 ## Components
 
-A component is a function that takes props and returns JSX. Children arrive as `children`, typed with [Child](api:yerd.Child).
+A component is a function from props to JSX; children arrive as `children`, typed with [Child](api:yerd.Child).
 
 ```tsx
 import type { Child } from "@toyz/yerd";
@@ -38,7 +39,7 @@ function Card({ title, children }: { title: string; children?: Child }) {
 const page = <Card title="Inbox">Nothing new.</Card>;
 ```
 
-Components can be `async`. yerd awaits them in place, and flushes everything above them to the browser first, so a slow query doesn't hold up the top of the page.
+Components can be `async`. They're awaited in place, and everything above them is flushed to the browser first:
 
 ```tsx
 async function Stats() {
@@ -55,10 +56,7 @@ const page = (
 );
 ```
 
-Async siblings wait together. When the renderer has to wait on a child, it calls every `async` component after it among the same children (a `.map()` array or a fragment there included) right away, so three slow sections take as long as the slowest, not the sum. The output still goes out in page order: a section that finishes early waits for the ones above it, then goes out with them. If one fails, the page fails at that point, after everything above it, as if they had run one by one. Two things to know:
-
-- Only components declared `async` start early, and only those among the same children. Plain components, and async components inside a later element or component (the `<Orders />` in `<section><Orders /></section>`, or in `<Card><Orders /></Card>`), run when the renderer gets to them. To have slow parts wait together, make them siblings.
-- A component that starts early runs before the components above it have rendered, so don't have it depend on side effects of theirs.
+Async siblings wait together, so three slow sections take as long as the slowest:
 
 ```tsx
 const page = (
@@ -70,11 +68,14 @@ const page = (
 );
 ```
 
-Arrays render in order, so `.map()` works as you'd expect. A `key` on an element is written as `data-key`, which the client runtime uses to match elements when it updates the page.
+- Output still goes out in page order. If one fails, the page fails at that point, as if they ran one by one.
+- Only `async` components among the same children (a `.map()` array or fragment included) start early; one nested inside a later element (`<section><Orders /></section>`) runs when reached. Make slow parts siblings.
+- An early starter runs before the components above it render, so don't depend on their side effects.
+- Arrays render in order. A `key` is written as `data-key`, which the client runtime uses to match elements.
 
 ## What renders how
 
-Attribute names are the real HTML names, lowercase: `for`, `maxlength`, `tabindex`, `autocomplete`. The one alias is `className`, which becomes `class`.
+Attribute names are the real lowercase HTML names (`for`, `maxlength`, `tabindex`); the one alias is `className` for `class`.
 
 ```tsx
 <div
@@ -101,14 +102,14 @@ Attribute names are the real HTML names, lowercase: `for`, `maxlength`, `tabinde
 | `Date` / `URL` attribute | ISO string / `href` |
 | `on*` handler function | nothing, except inside [`<Local>`](06-interactivity.md#local-state-no-server-at-all), where it runs in the browser (a string handler renders as written) |
 
-Style numbers get no unit: `{ width: 10 }` renders `width:10`, which CSS ignores, so write `"10px"`.
+- Style numbers get no unit: `{ width: 10 }` renders `width:10`, which CSS ignores; write `"10px"`.
 
 > [!NOTE]
-> URL attributes (`href`, `src`, `action`, `formaction` and friends) are checked: `javascript:`, `vbscript:` and `data:` URLs become `about:blank#blocked`. `data:image/...` is allowed on `src` and `poster`.
+> URL attributes (`href`, `src`, `action`, `formaction` and friends) with `javascript:`, `vbscript:` or `data:` URLs become `about:blank#blocked`. `data:image/...` is allowed on `src` and `poster`.
 
 ### raw() and escaping
 
-Text is always escaped. When you already have trusted HTML (rendered Markdown, an SVG from disk), wrap it in [raw](api:yerd.raw) to write it as is.
+Text is always escaped; wrap trusted HTML (rendered Markdown, an SVG from disk) in [raw](api:yerd.raw) to write it as is.
 
 ```tsx
 import { raw } from "@toyz/yerd";
@@ -117,11 +118,11 @@ const article = <article>{raw(markdownToHtml(post.body))}</article>;
 ```
 
 > [!WARNING]
-> `raw()` skips escaping completely. Never pass it anything a user typed unless you sanitized it first.
+> `raw()` skips escaping completely. Never pass it user input you haven't sanitized.
 
 ### script and style
 
-`<script>` and `<style>` contents are raw text, so `a > b` stays `a > b`. To hand data to an inline script, use [json](api:yerd.json): it escapes `<`, `>` and `&` so the data can't close the tag.
+`<script>` and `<style>` contents are raw text (`a > b` stays as is). Hand data to an inline script with [json](api:yerd.json), which escapes `<`, `>` and `&` so it can't close the tag.
 
 ```tsx
 import { json } from "@toyz/yerd";
@@ -132,13 +133,12 @@ import { json } from "@toyz/yerd";
 </head>
 ```
 
-Text that could end the element early (`</script`, `<!--`, `</style`) throws at render time instead of breaking your page.
-
-As an attribute value, `json()` is escaped like any string, so `data-props={json(props)}` is safe too.
+- Text that could end the element early (`</script`, `<!--`, `</style`) throws at render time.
+- As an attribute value `json()` is escaped like any string, so `data-props={json(props)}` is safe.
 
 ## Layouts
 
-A layout is a component that receives [LayoutProps](api:yerd.LayoutProps): the page as `children`, plus `meta`. Register the root layout once with `app.layout()`, and every JSX response goes through it.
+A layout is a component that receives [LayoutProps](api:yerd.LayoutProps) (the page as `children`, plus `meta`). Register the root layout with `app.layout()`.
 
 ```tsx
 import { Scripts, Stylesheet, yerd, type LayoutProps } from "@toyz/yerd";
@@ -160,11 +160,12 @@ function RootLayout({ children, meta }: LayoutProps) {
 const app = yerd().layout(RootLayout);
 ```
 
-Layouts are ordinary components, so they can be async, resolve services and read the session. Layouts only wrap JSX: JSON, strings and streams go out untouched.
+- Layouts can be async, resolve services and read the session.
+- They only wrap JSX: JSON, strings and streams go out untouched.
 
 ### Page metadata
 
-`meta` is a [PageMeta](api:yerd.PageMeta) object merged from the route's group, the route, and anything the handler sets with [setMeta](api:yerd.setMeta).
+`meta` is a [PageMeta](api:yerd.PageMeta) merged from the route's group, the route, and the handler's [setMeta](api:yerd.setMeta) calls.
 
 ```tsx
 import { get, param, route, setMeta } from "@toyz/yerd";
@@ -180,7 +181,7 @@ export class Post {
 }
 ```
 
-Add your own fields with declaration merging, and every layout sees them typed:
+Add your own typed fields with declaration merging:
 
 ```ts
 declare module "@toyz/yerd" {
@@ -192,7 +193,7 @@ declare module "@toyz/yerd" {
 
 ### Nested layouts
 
-Put `@layout()` on a route class, a single handler method, or a `@group` class. Those layouts nest inside the root layout, outermost first.
+`@layout()` on a route class, a handler method or a `@group` class nests layouts inside the root layout, outermost first.
 
 ```tsx
 import { get, layout, noLayout, route, type LayoutProps } from "@toyz/yerd";
@@ -222,11 +223,13 @@ export class DocsToc {
 }
 ```
 
-`{ inherit: false }` makes those layouts the whole chain, without the root layout. A layout already in the chain is never applied twice, so naming `RootLayout` again is harmless. Groups and their layouts are covered in [routing](02-routing.md).
+- `{ inherit: false }` drops the root layout from the chain.
+- A layout already in the chain is never applied twice.
+- Groups are covered in [routing](02-routing.md).
 
 ## Error pages
 
-Give the app an error page and 404s, thrown [YerdError](api:yerd.YerdError)s and crashes render as HTML inside your root layouts. It gets [ErrorPageProps](api:yerd.ErrorPageProps): the `status`, a `message` safe to show, and the `error` that was thrown.
+With an error page, 404s, thrown [YerdError](api:yerd.YerdError)s and crashes render as HTML inside your root layouts. It gets [ErrorPageProps](api:yerd.ErrorPageProps): `status`, a safe-to-show `message`, and the thrown `error`.
 
 ```tsx
 import { YerdError, yerd, type ErrorPageProps } from "@toyz/yerd";
@@ -247,13 +250,13 @@ const app = yerd().layout(RootLayout).errorPage(ErrorPage);
 ```
 
 - Only requests that accept HTML get the page; API clients still get text or JSON.
-- `message` is the YerdError's message below 500, and the plain status text (`Internal Server Error`) otherwise. Internal error messages never reach the page unless you render `error` yourself.
-- `error` is what was thrown: a `YerdError` (a `NotFound` for an unknown path) or anything you threw on purpose, or whatever crashed. Use it to tell cases apart (`error instanceof NotSignedIn`) or to show the stack in development. Don't print its message or stack in production: it can hold secrets, SQL or file paths.
-- `meta.title` is the message, unless the route already set a title.
+- `message` is the YerdError's message below 500, else the status text (`Internal Server Error`).
+- Use `error` to tell cases apart (`error instanceof NotSignedIn`). Don't print its message or stack in production: it can hold secrets, SQL or paths.
+- `meta.title` is the message unless the route set a title.
 
 ## Assets
 
-[Stylesheet](api:yerd.Stylesheet) and [assetUrl](api:yerd.assetUrl) take a source path and give you the right URL in dev and production.
+[Stylesheet](api:yerd.Stylesheet) and [assetUrl](api:yerd.assetUrl) take a source path and give the right URL in dev and production.
 
 ```tsx
 import { Stylesheet, assetUrl } from "@toyz/yerd";
@@ -264,11 +267,13 @@ import { Stylesheet, assetUrl } from "@toyz/yerd";
 </head>
 ```
 
-In dev that's `/src/styles.css`, served by Vite. After `vite build` it's the hashed file (`/assets/styles-AbC123.css`), as long as the file is listed in the Vite plugin's `client` option. See [deploying](11-deploying.md).
+- In dev that's `/src/styles.css`, served by Vite. After `vite build` it's the hashed file (`/assets/styles-AbC123.css`), if the file is listed in the Vite plugin's `client` option (see [deploying](11-deploying.md)).
+- Files in `public/` are served as they are; write `assetUrl("x.svg")`, not `"public/x.svg"`.
+- In dev, both warn once per file when it doesn't exist, is written with `public/`, or isn't in `client`: those break after `vite build`.
 
 ### Scoped CSS: css``
 
-[css](api:yerd.css) turns a block of rules into a class name, and a page gets those rules only if something on it uses the class. Styles live next to the component they style, with no stylesheet to keep in sync.
+[css](api:yerd.css) turns a block of rules into a class name; a page gets the rules only if something on it uses the class.
 
 ```tsx
 import { css, keyframes, type Child } from "@toyz/yerd";
@@ -293,10 +298,10 @@ export function Card({ title, children }: { title: string; children: Child }) {
 }
 ```
 
-- The class (`yx-1k3j9a...`) is a hash of the rules: the same on every server and every restart, so it can be cached and shared. The rules are written as `.yx-1k3j9a { ...your rules }`, so `&` is the element (native CSS nesting) and `& h2` its headings.
-- Use it like any class: `class={card}`, `class={[card, "wide"]}`, `class={{ [selected]: isSelected }}`. A flag that's off still sends its rules, since `<Local>` state may switch it on in the browser.
-- Interpolate another class to get its selector (`${card}:hover & { ... }`), a `keyframes` name for an animation (the keyframes go wherever the rule goes), anything else as text.
-- [css.global](api:yerd.css) is for rules that aren't scoped: resets, `body`, `:root` variables, `@font-face`.
+- The class (`yx-1k3j9a...`) is a hash of the rules, stable across servers and restarts. `&` is the element (native CSS nesting).
+- Use it like any class: `class={card}`, `class={[card, "wide"]}`, `class={{ [selected]: isSelected }}`. A flag that's off still sends its rules, since `<Local>` state may switch it on.
+- Interpolate another class for its selector (`${card}:hover & { ... }`), a `keyframes` name for an animation, anything else as text.
+- [css.global](api:yerd.css) is for unscoped rules: resets, `body`, `:root` variables, `@font-face`.
 
 Put [`<Styles />`](api:yerd.Styles) in your root layout's `<head>`:
 
@@ -318,21 +323,16 @@ export function RootLayout({ children }: LayoutProps) {
 }
 ```
 
-Where the rules go:
-
-| | Scoped rules | Global rules |
-| --- | --- | --- |
-| Development | into `<head>` at `<Styles />`, once per page; if the head has already been sent (see below), a `<style>` just before the first element using the class, which the runtime moves into `<head>` | written by `<Styles />` |
-| After `vite build` | one hashed stylesheet (`/assets/yerd-<hash>.css`, cached for a year), linked by `<Styles />`; nothing is inlined | in that stylesheet too |
-
-A page is held in memory until its first async boundary (an async component, a `<Dynamic>`), so for most pages the head is still there when the body renders and every rule lands in `<head>`: structural selectors like `li:first-child` or `h1 + p` see only your elements, with or without JavaScript. Classes first used after the head has gone out get their `<style>` next to the element instead, which the runtime moves into `<head>`; until it runs, that `<style>` counts as a sibling. To keep structural selectors exact everywhere, use the class before the first async boundary, or ship a build (`vite build` inlines nothing). An action's response repeats the rules of what it renders, so a Region that arrives later is styled too.
+- In dev, rules are inlined at `<Styles />`. After `vite build`, scoped and global rules go into one hashed stylesheet that `<Styles />` links.
+- In dev, a class first used after an async boundary (an async component, a `<Dynamic>`) gets its `<style>` next to the element until the runtime moves it into `<head>`, which can throw off structural selectors like `li:first-child`. Use such classes before the first async boundary, or rely on the build.
+- An action's response carries the rules for what it renders.
 
 > [!NOTE]
-> Classes are found in `class` and `className` props (strings, arrays, flag objects, `raw()` values, `<Local>` bindings), and `keyframes` names in `style` (`style={{ animation: `${pop} 1s` }}`). A class name buried in other HTML isn't seen. Without `<Styles />`, or after the head has gone out, rules for classes inside `<select>`, `<colgroup>`, `<svg>` or `<math>` are written right after the element closes, where a `<style>` is parsed properly.
+> Classes are found in `class` and `className` props (strings, arrays, flag objects, `raw()` values, `<Local>` bindings) and `keyframes` names in `style`. A class name buried in other HTML isn't seen.
 
 ### Images
 
-Images are plain HTML, and the browser's loading hints are typed: `loading="lazy"` defers offscreen images and iframes, `decoding="async"` keeps decoding off the main thread, `fetchpriority="high"` hurries the one that matters (your hero image), and `srcset` / `sizes` / `<picture>` pick the right file for the screen.
+Images are plain HTML with typed loading hints: `loading="lazy"`, `decoding="async"`, `fetchpriority="high"` for the hero image, and `srcset` / `sizes` / `<picture>`.
 
 ```tsx
 <img src={assetUrl("src/hero.jpg")} alt="" width={1200} height={600} fetchpriority="high" />
@@ -348,13 +348,11 @@ Images are plain HTML, and the browser's loading hints are typed: `loading="lazy
 </picture>
 ```
 
-In development, `assetUrl()` and `<Stylesheet>` warn in the terminal (once per file) when a file doesn't exist, when it's in `public/` but written with the folder (`assetUrl("public/x.svg")` instead of `assetUrl("x.svg")`), or when it isn't in the plugin's `client` option: those work in dev and break after `vite build`. In production, files from `public/` resolve as they are.
-
-Give images a `width` and `height` so the page doesn't jump as they load. Files in `public/` are served as they are; `assetUrl()` is for files Vite should fingerprint (list them in the plugin's `client` option).
+Give images a `width` and `height` so the page doesn't jump as they load.
 
 ## Prerendering
 
-Pages that are the same for everyone can be rendered once at build time. Add [@prerender](api:yerd.prerender) and `vite build` writes them as static files that the server sends without running your handler.
+[@prerender](api:yerd.prerender) renders a page once at `vite build`; the server then sends the static file without running your handler.
 
 ```tsx
 import { get, param, prerender, route } from "@toyz/yerd";
@@ -379,13 +377,13 @@ export class PublicConfig {
 }
 ```
 
-- HTML goes to `<path>/index.html`. Anything else is written to the path itself, so give JSON routes an extension.
+- HTML goes to `<path>/index.html`; anything else to the path itself, so give JSON routes an extension.
 - Routes with params need `paths`: a list, or a function (async is fine) that may `resolve()` services.
-- A prerendered route can't read request data (query, headers, cookies, session, body, the signed-in user). The build fails and names the route, instead of freezing one visitor's data into a file.
+- A prerendered route can't read request data (query, headers, cookies, session, body, user); the build fails naming the route.
 
 ## Dynamic parts
 
-A mostly-static page often has one per-visitor corner, like "Log in" vs. "@ada". Wrap it in [Dynamic](api:yerd.Dynamic): the prerendered file ships the `fallback`, and the client runtime fetches the real content after the page loads.
+Wrap a per-visitor corner of a static page ("Log in" vs. "@ada") in [Dynamic](api:yerd.Dynamic): the prerendered file ships the `fallback`, and the runtime fetches the real content after load.
 
 ```tsx
 import { Dynamic, type LayoutProps } from "@toyz/yerd";
@@ -416,7 +414,8 @@ function MarketingLayout({ children }: LayoutProps) {
 | `noscript` | What visitors without JavaScript see instead of the fallback. |
 | `as` | The wrapper element, `div` by default. Other props become its attributes. |
 
-On normal (not prerendered) requests, `<Dynamic>` just renders its children inline. All of a page's Dynamic parts are fetched in one request, and the page needs `<Scripts />` (see [interactivity](06-interactivity.md)).
+- On normal requests `<Dynamic>` renders its children inline.
+- All of a page's Dynamic parts are fetched in one request. The page needs `<Scripts />` (see [interactivity](06-interactivity.md)).
 
 ## Typed JSX elements
 
@@ -432,8 +431,7 @@ const signup = (
 );
 ```
 
-- Names are HTML names: `htmlFor` and `tabIndex` don't exist, because they'd render as wrong HTML.
-- `aria-*` and `data-*` attributes are accepted on every element.
-- Custom elements (any tag with a dash, like `<my-widget>`) take any attributes.
-- `on*` handlers are dropped on the server, except inside [`<Local>`](06-interactivity.md#local-state-no-server-at-all), where they run in the browser against its state. For server-side reactions, use an [action](06-interactivity.md#actions-forms-that-call-methods).
-- Your own [custom attributes](06-interactivity.md#custom-attributes) are typed by extending `CustomAttributes`.
+- Names are HTML names: `htmlFor` and `tabIndex` don't exist.
+- `aria-*` and `data-*` are accepted everywhere; custom elements (tags with a dash) take any attributes.
+- `on*` handlers are dropped on the server except inside [`<Local>`](06-interactivity.md#local-state-no-server-at-all). For server-side reactions, use an [action](06-interactivity.md#actions-forms-that-call-methods).
+- Type your own [custom attributes](06-interactivity.md#custom-attributes) by extending `CustomAttributes`.

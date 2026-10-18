@@ -896,6 +896,24 @@ out its offset from the server. It measures once per page, when the first
 the tab comes back into view; `sync` re-aligns its animations after a
 re-measure. On a normal connection pages agree to within a few milliseconds.
 
+### Scoped CSS delivery
+
+`css```'s class is a hash of its rules, so it's the same on every server and
+every restart and can be cached and shared; the rules are written as
+`.yx-<hash> { ... }`. A page is held in memory until its first async boundary
+(an async component, a `<Dynamic>`), so for most pages the head is still
+unsent when the body renders, and in development every scoped rule lands in
+`<head>` at `<Styles />`, once per page. A class first used after the head
+has gone out gets a `<style>` just before the first element using it, which
+the runtime moves into `<head>`; until it runs, that `<style>` counts as a
+sibling for structural selectors. Without `<Styles />`, or after the head has
+gone out, rules for classes inside `<select>`, `<colgroup>`, `<svg>` or
+`<math>` are written right after the element closes, where a `<style>` is
+parsed properly. After `vite build` nothing is inlined: scoped and global
+rules go into one stylesheet (`/assets/yerd-<hash>.css`, cached for a year)
+that `<Styles />` links. An action's response repeats the rules of what it
+renders, so a Region that arrives later is styled too.
+
 ## Milestone (slots in as M6 in PLAN.md)
 
 1. Isomorphic jsx-runtime split; DOM renderer; browser test harness; morph port
