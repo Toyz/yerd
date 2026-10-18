@@ -92,7 +92,22 @@ function bindable(value: unknown, path: string): unknown {
   });
 }
 
-/** The inverse of a boolean binding: `hidden={not(s.open)}`. */
+/**
+ * The inverse of a boolean binding: `hidden={not(s.open)}`. `!s.open` would
+ * only render the starting value; `not()` stays in step in the browser. On a
+ * plain boolean it's just `!`.
+ *
+ * ```tsx
+ * <Local state={{ open: false }}>
+ *   {(s) => (
+ *     <div>
+ *       <button onClick={() => (s.open = !s.open)} aria-expanded={s.open}>Details</button>
+ *       <p hidden={not(s.open)}>Only shown when open.</p>
+ *     </div>
+ *   )}
+ * </Local>
+ * ```
+ */
 export function not(binding: boolean): boolean {
   if (!isBinding(binding)) return !binding;
   const b = binding as unknown as Binding;
@@ -102,7 +117,22 @@ export function not(binding: boolean): boolean {
 /**
  * Whether a field equals a value, kept in step: `class={{ active: eq(s.tab, "specs") }}`,
  * `hidden={not(eq(s.slide, 2))}`. The value is compared as JSON (strings,
- * numbers, booleans, null).
+ * numbers, booleans, null). A binding is a direct field read, so
+ * `s.tab === "specs"` would only render the starting value; eq() is the
+ * comparison that stays in step. Enough for tabs, steppers and sliders:
+ *
+ * ```tsx
+ * <Local state={{ tab: "specs" }}>
+ *   {(s) => (
+ *     <div>
+ *       <button class={{ active: eq(s.tab, "specs") }} onClick={() => (s.tab = "specs")}>Specs</button>
+ *       <button class={{ active: eq(s.tab, "reviews") }} onClick={() => (s.tab = "reviews")}>Reviews</button>
+ *       <section hidden={not(eq(s.tab, "specs"))}>{specs}</section>
+ *       <section hidden={not(eq(s.tab, "reviews"))}>{reviews}</section>
+ *     </div>
+ *   )}
+ * </Local>
+ * ```
  */
 export function eq<T>(field: T, value: T): boolean {
   if (!isBinding(field)) return field === value;
@@ -122,6 +152,15 @@ export interface LocalProps<S extends object> {
    * for sessionStorage. Saved values are merged over `state` on load (so new
    * fields get their defaults); every scope with the same key, in this tab
    * and others, stays in step.
+   *
+   * ```tsx
+   * <Local state={{ collapsed: false }} persist="prefs">
+   *   {(s) => <button onClick={() => (s.collapsed = !s.collapsed)} aria-expanded={not(s.collapsed)}>Menu</button>}
+   * </Local>
+   * <Local state={{ step: 1 }} persist={{ key: "wizard", storage: "session" }}>
+   *   {(s) => <span>Step {s.step}</span>}
+   * </Local>
+   * ```
    */
   persist?: string | { key: string; storage?: "local" | "session" };
   /** Renders the UI from the state. Its parameter's name is how handlers refer to the state. */
@@ -129,8 +168,29 @@ export interface LocalProps<S extends object> {
 }
 
 /**
- * A client-side state scope. See the module docs; the renderer handles it
- * (this function is only its identity and type).
+ * A client-side state scope: interactivity that runs in the browser with no
+ * request. The render prop gets the state; reading a field renders its value
+ * and keeps that spot (text, attribute or class flag) in step, and `on*`
+ * handlers inside run in the browser against the state. Handlers are sent as
+ * source, so they may use only the state (by the render prop's parameter
+ * name) and their event argument. Each `<Local>` has its own copy of the
+ * state. The renderer handles it (this function is only its identity and type).
+ *
+ * ```tsx
+ * export function Details() {
+ *   return (
+ *     <Local state={{ open: false, likes: 0 }}>
+ *       {(s) => (
+ *         <div>
+ *           <button onClick={() => (s.open = !s.open)} aria-expanded={s.open}>Details</button>
+ *           <p hidden={not(s.open)}>Only shown when open.</p>
+ *           <button class={{ liked: s.likes }} onClick={() => s.likes++}>Like ({s.likes})</button>
+ *         </div>
+ *       )}
+ *     </Local>
+ *   );
+ * }
+ * ```
  */
 export function Local<S extends object>(_props: LocalProps<S>): Child {
   throw new Error("<Local> is rendered by yerd's renderer");

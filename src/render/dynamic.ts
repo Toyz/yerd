@@ -10,6 +10,12 @@ export interface DynamicProps {
    * What a prerendered page shows instead when JavaScript is off (the fallback
    * would never be filled in): a link, a static version, a message. Rendered at
    * build time inside <noscript>, which also hides the fallback.
+   *
+   * ```tsx
+   * <Dynamic id="cart" fallback={<span class="skeleton" />} noscript={<a href="/cart">View cart</a>}>
+   *   {() => <CartSummary />}
+   * </Dynamic>
+   * ```
    */
   noscript?: Child;
   /** Renders the real content, per request. May read request data (session, user, query). */

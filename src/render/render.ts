@@ -35,9 +35,23 @@ function checkTag(tag: string): void {
   if (checkedTags.size < 1024) checkedTags.add(tag);
 }
 
-/** Options for renderToString() and renderToStream(). */
+/**
+ * Options for renderToString() and renderToStream(). Responses yerd renders
+ * for you set these themselves; pass them when you render on your own.
+ *
+ * ```tsx
+ * const html = await renderToString(<Page />, { document: true });
+ * ```
+ */
 export interface RenderOptions {
-  /** Prepend `<!doctype html>` when the first element rendered is `<html>`. */
+  /**
+   * Prepend `<!doctype html>` when the first element rendered is `<html>`.
+   *
+   * ```tsx
+   * await renderToString(<html><body>Hi</body></html>, { document: true });
+   * // "<!doctype html><html><body>Hi</body></html>"
+   * ```
+   */
   document?: boolean;
   /**
    * How <Dynamic> parts render: "fallback" (build-time prerendering: the
@@ -368,7 +382,19 @@ function explainOverflow(error: unknown): unknown {
   );
 }
 
-/** Render to a stream of HTML chunks, flushed at the points where rendering has to wait. */
+/**
+ * Render to a stream of HTML chunks, flushed at the points where rendering
+ * has to wait (an async component, a promise child), so the top of the page
+ * goes out first. Handlers that return JSX are already streamed this way;
+ * use it to send rendered HTML somewhere else, like a file.
+ *
+ * ```tsx
+ * import { createWriteStream } from "node:fs";
+ * import { Readable } from "node:stream";
+ *
+ * Readable.from(renderToStream(<Report />, { document: true })).pipe(createWriteStream("report.html"));
+ * ```
+ */
 export async function* renderToStream(child: Child, options: RenderOptions = {}): AsyncGenerator<string> {
   const state: State = {
     buffer: "",
@@ -413,7 +439,16 @@ export async function* renderToStream(child: Child, options: RenderOptions = {})
   if (state.buffer) yield state.buffer;
 }
 
-/** Render to a single HTML string. */
+/**
+ * Render to a single HTML string, awaiting async components. For HTML that
+ * isn't a response (an email body, a snippet in a test); handlers can just
+ * return the JSX.
+ *
+ * ```tsx
+ * const html = await renderToString(<WelcomeEmail name={user.name} />);
+ * await mailer.send({ to: user.email, subject: "Welcome", html });
+ * ```
+ */
 export async function renderToString(child: Child, options: RenderOptions = {}): Promise<string> {
   let html = "";
   for await (const chunk of renderToStream(child, options)) html += chunk;

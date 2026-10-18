@@ -11,7 +11,8 @@
  * `false`, `null` and `undefined` write nothing, strings and numbers are
  * escaped. `class` takes a ClassValue and `style` a string or CSSProperties.
  * Functions write nothing, which is why the `on*` handlers below compile but
- * don't render yet: they become client sprinkles later.
+ * render nothing, except inside a `<Local>`, where they're shipped to the
+ * browser and run against its state.
  *
  * Types only; nothing here exists at runtime.
  */
@@ -33,27 +34,68 @@ type Open<T extends string> = T | (string & {});
 /**
  * Inline style. Keys can be camelCase (`fontSize`, rendered as `font-size`),
  * kebab-case, or custom properties (`--gap`). `null`, `undefined`, `false`
- * and `""` drop the declaration.
+ * and `""` drop the declaration. Numbers get no unit (`{ width: 10 }` renders
+ * `width:10`, which CSS ignores), so write `"10px"`.
+ *
+ * ```tsx
+ * <div style={{ marginTop: "8px", "--gap": "1rem", display: isOpen ? undefined : "none" }} />
+ * // style="margin-top:8px;--gap:1rem"  (when open)
+ *
+ * function Box({ style, children }: { style?: CSSProperties; children?: Child }) {
+ *   return <div style={{ padding: "1rem", ...style }}>{children}</div>;
+ * }
+ * ```
  */
 export interface CSSProperties {
   [property: string]: string | number | null | undefined | false;
 }
 
 /**
- * An event handler. Handlers render nothing today (they're dropped on the
- * server) and become client sprinkles later. A string is an inline handler and
- * does render. Declared method-style so a handler taking a narrower event, like
+ * An event handler. Outside a `<Local>` a function handler renders nothing
+ * (it's dropped on the server); inside one it's sent to the browser as source
+ * and runs against the Local's state. A string is an inline handler and does
+ * render. Declared method-style so a handler taking a narrower event, like
  * `(e: MouseEvent) => void`, is accepted.
+ *
+ * ```tsx
+ * <Local state={{ count: 0 }}>
+ *   {(s) => <button onClick={(e: MouseEvent) => (s.count += e.shiftKey ? 10 : 1)}>+{s.count}</button>}
+ * </Local>
+ *
+ * <button onclick="history.back()">Back</button>
+ * ```
  */
 export type EventHandler = { bivarianceHack(event: Event): unknown }["bivarianceHack"] | string;
 
 /**
  * A yerd action: a lambda calling one @action method (`() => this.remove({ id })`),
- * an action that takes no arguments (`this.add`), or bind(...) of one.
+ * an action that takes no arguments (`this.add`), or bind(...) of one. What
+ * the `action` prop takes on any element; type a prop with it to pass any of
+ * those down.
+ *
+ * ```tsx
+ * function SaveKey({ save }: { save: ActionValue }) {
+ *   return <input action={save} trigger="keydown:Enter" />;
+ * }
+ *
+ * // in the route: <SaveKey save={({ el }) => this.save({ title: el.value })} />
+ * ```
  */
 export type ActionValue = ActionLambda | BoundAction<any>;
 
-/** Things yerd can turn into a form submission target: a URL or an action. */
+/**
+ * Things yerd can turn into a form submission target: a URL or an action.
+ * What a form's `action` and a button's `formaction` take.
+ *
+ * ```tsx
+ * function SaveForm({ to, children }: { to: FormActionValue; children?: Child }) {
+ *   return <form action={to} method="post">{children}<button>Save</button></form>;
+ * }
+ *
+ * <SaveForm to="/legacy/save" />
+ * <SaveForm to={this.save} />
+ * ```
+ */
 export type FormActionValue = string | ActionValue;
 
 type TriggerEvent =
@@ -71,6 +113,13 @@ type TriggerEvent =
  * `"visible"` when it scrolls into view (once per
  * render: infinite scroll); `"load"` as soon as the page has it; `"every 5s"`
  * on a timer while it's on the page and the tab is visible.
+ *
+ * ```tsx
+ * <input type="search" action={({ el }) => this.search({ q: el.value })} trigger="input 250ms" />
+ * <input action={({ el }) => this.add({ title: el.value })} trigger="keydown:Enter" />
+ * <section action={({ drag }) => this.move({ id: drag.data("id"), to: "done" })} trigger="drop:.card" />
+ * <div action={this.refreshStats} trigger="every 30s" />
+ * ```
  */
 export type ActionTrigger =
   | TriggerEvent
@@ -102,7 +151,18 @@ export type FormMethod = "get" | "post" | "dialog" | "GET" | "POST" | "DIALOG";
 export type FormEnctype = "application/x-www-form-urlencoded" | "multipart/form-data" | "text/plain";
 export type PopoverTargetAction = "hide" | "show" | "toggle";
 
-/** Values for `<input type>`; any other string is allowed too. */
+/**
+ * Values for `<input type>`; any other string is allowed too. Narrow it in a
+ * wrapper component to the types it supports:
+ *
+ * ```tsx
+ * function NumberField({ type = "number", ...rest }: InputAttributes & { type?: Extract<InputType, "number" | "range"> }) {
+ *   return <input type={type} {...rest} />;
+ * }
+ *
+ * <NumberField name="qty" min={1} max={10} />
+ * ```
+ */
 export type InputType =
   | "button"
   | "checkbox"
@@ -163,13 +223,49 @@ export type AutoFill = Open<
 /**
  * Custom attributes (see attribute()), on every element. Augment it to type
  * your own: `declare module "@toyz/yerd" { interface CustomAttributes { tooltip?: string } }`.
+ *
+ * ```tsx
+ * export const tooltip = attribute("tooltip", {
+ *   client(el, value) {
+ *     el.title = value;
+ *   },
+ * });
+ *
+ * declare module "@toyz/yerd" {
+ *   interface CustomAttributes {
+ *     tooltip?: string;
+ *   }
+ * }
+ *
+ * <button tooltip="Delete this todo">x</button>
+ * ```
  */
 export interface CustomAttributes {
-  /** Warm the link's page (or `{ url }`) before it's needed. See PrefetchValue. */
+  /**
+   * Warm the link's page (or `{ url }`) before it's needed. See PrefetchValue.
+   *
+   * ```tsx
+   * <a href="/todos" prefetch>Todos</a>
+   * <a href="/reports" prefetch="visible">Reports</a>
+   * ```
+   */
   prefetch?: PrefetchValue;
 }
 
-/** Attributes every HTML element accepts. */
+/**
+ * Attributes every HTML element accepts: the standard global attributes,
+ * `aria-*` and `data-*`, yerd's `action` / `trigger` / `dropTo`, and your
+ * CustomAttributes. Spread it into a wrapper component's props to pass
+ * attributes through:
+ *
+ * ```tsx
+ * function Panel({ heading, children, ...rest }: GlobalAttributes & { heading: string }) {
+ *   return <section {...rest} class="panel"><h2>{heading}</h2>{children}</section>;
+ * }
+ *
+ * <Panel heading="Stats" id="stats" data-tab="1" aria-live="polite">{stats}</Panel>
+ * ```
+ */
 export interface GlobalAttributes extends CustomAttributes {
   children?: Child;
   /**
@@ -177,11 +273,30 @@ export interface GlobalAttributes extends CustomAttributes {
    * with the client runtime: `<button action={() => this.remove({ id })}>`,
    * `<input action={({ el }) => this.search({ q: el.value })} trigger="input 250ms">`.
    * Use a form when it must work without JavaScript.
+   *
+   * ```tsx
+   * <button action={() => this.remove({ id })}>Delete</button>
+   * <input type="search" action={({ el }) => this.search({ q: el.value })} trigger="input 250ms" />
+   * ```
    */
   action?: ActionValue;
-  /** When `action` fires. See ActionTrigger. */
+  /**
+   * When `action` fires. See ActionTrigger.
+   *
+   * ```tsx
+   * <div action={() => this.more({ page: 2 })} trigger="visible" />
+   * ```
+   */
   trigger?: ActionTrigger;
-  /** For `trigger="drop:files"`: which files it takes, like an input's (`"image/*,.pdf"`). */
+  /**
+   * For `trigger="drop:files"`: which files it takes, like an input's (`"image/*,.pdf"`).
+   *
+   * ```tsx
+   * <div class="dropzone" action={this.upload} trigger="drop:files" accept="image/*,.pdf">
+   *   Drop photos or PDFs
+   * </div>
+   * ```
+   */
   accept?: string;
   /**
    * Make this element a drop zone for a file input elsewhere in the form
@@ -190,9 +305,24 @@ export interface GlobalAttributes extends CustomAttributes {
    * and go up with the form when it's submitted. The input still works on
    * its own, with or without JavaScript. While files are staged the zone has
    * `data-yx-files="<count>"`.
+   *
+   * ```tsx
+   * <form action={this.post} enctype="multipart/form-data">
+   *   <input id="photos" type="file" name="photos" multiple accept="image/*" />
+   *   <div class="dropzone" dropTo="#photos">Drop photos here</div>
+   *   <button>Post</button>
+   * </form>
+   * ```
    */
   dropTo?: string;
-  /** Not an attribute: the JSX key. On an element it renders as `data-key`. */
+  /**
+   * Not an attribute: the JSX key. On an element it renders as `data-key`,
+   * which the runtime uses to match elements when it morphs a list.
+   *
+   * ```tsx
+   * <ul>{todos.map((t) => <li key={t.id}>{t.title}</li>)}</ul>
+   * ```
+   */
   key?: string | number;
 
   id?: string;
@@ -242,11 +372,22 @@ export interface GlobalAttributes extends CustomAttributes {
 
   [aria: `aria-${string}`]: string | number | boolean | null | undefined;
   [data: `data-${string}`]: string | number | boolean | null | undefined;
-  /** Event handlers: they compile, but don't render yet (future client sprinkles). */
+  /** Event handlers: they compile, but render nothing outside a `<Local>` (see EventHandler). */
   [handler: `on${string}`]: EventHandler | undefined;
 }
 
-/** For elements that can't have children (`<br>`, `<img>`, `<input>`, ...). */
+/**
+ * For elements that can't have children (`<br>`, `<img>`, `<input>`, ...).
+ * Passing children to one is a compile error.
+ *
+ * ```tsx
+ * function Divider(props: VoidAttributes) {
+ *   return <hr class="divider" {...props} />;
+ * }
+ *
+ * <Divider id="end" />
+ * ```
+ */
 export interface VoidAttributes extends GlobalAttributes {
   /** Void elements take no children. */
   children?: undefined;
@@ -254,7 +395,20 @@ export interface VoidAttributes extends GlobalAttributes {
 
 // ── per element ──
 
-/** Attributes for `<a>`. */
+/**
+ * Attributes for `<a>`. A boosted link (inside `data-yx-boost`) with a
+ * `target`, `download` or `rel="external"` is left to the browser.
+ *
+ * ```tsx
+ * <a href="/report.csv" download="report.csv">Download</a>
+ *
+ * function ExternalLink(props: AnchorAttributes) {
+ *   return <a target="_blank" rel="noopener noreferrer" {...props} />;
+ * }
+ *
+ * <ExternalLink href="https://example.com/docs">Docs</ExternalLink>
+ * ```
+ */
 export interface AnchorAttributes extends GlobalAttributes {
   href?: string;
   target?: HTMLAttributeAnchorTarget;
@@ -326,7 +480,25 @@ interface FormSubmitterAttributes {
   popovertargetaction?: PopoverTargetAction;
 }
 
-/** Attributes for `<button>`. `formaction` may be a yerd action, like a form's `action`. */
+/**
+ * Attributes for `<button>`. `formaction` may be a yerd action, like a form's
+ * `action`: that button posts to its own action ("Save" and "Delete" in one
+ * form). Such a button can't have its own `name` or `value`.
+ *
+ * ```tsx
+ * <form action={this.save}>
+ *   <input name="title" />
+ *   <button>Save</button>
+ *   <button formaction={() => this.remove({ id: note.id })}>Delete</button>
+ * </form>
+ *
+ * function Button({ variant = "primary", ...rest }: ButtonAttributes & { variant?: "primary" | "ghost" }) {
+ *   return <button {...rest} class={["btn", `btn-${variant}`]} />;
+ * }
+ *
+ * <Button type="submit">Save</Button>
+ * ```
+ */
 export interface ButtonAttributes extends GlobalAttributes, FormSubmitterAttributes {
   type?: "submit" | "reset" | "button";
   name?: string;
@@ -377,11 +549,32 @@ export interface FieldsetAttributes extends GlobalAttributes {
   name?: string;
 }
 
-/** Attributes for `<form>`. */
+/**
+ * Attributes for `<form>`. `action` takes a URL or a yerd action; with an
+ * action, `method` is set for you. File forms need `enctype` for the
+ * browser's own (no JavaScript) post.
+ *
+ * ```tsx
+ * <form action={this.post} enctype="multipart/form-data">
+ *   <input name="title" />
+ *   <input type="file" name="photos" multiple accept="image/*" />
+ *   <button>Post</button>
+ * </form>
+ *
+ * <form action="/search" method="get" role="search">
+ *   <input type="search" name="q" />
+ * </form>
+ * ```
+ */
 export interface FormAttributes extends Omit<GlobalAttributes, "action"> {
   /**
    * A URL, or a yerd action. An action renders as a POST to the owning route
    * with a signed token, so `method` is set for you.
+   *
+   * ```tsx
+   * <form action={this.add}>{fields}</form>
+   * <form action={() => this.remove({ id })}><button>Delete</button></form>
+   * ```
    */
   action?: FormActionValue;
   method?: FormMethod;
@@ -413,7 +606,20 @@ export interface IframeAttributes extends GlobalAttributes {
   credentialless?: boolean;
 }
 
-/** Attributes for `<img>`. */
+/**
+ * Attributes for `<img>`, with the browser's loading hints typed (`loading`,
+ * `decoding`, `fetchpriority`, `srcset` / `sizes`). Give images a `width` and
+ * `height` so the page doesn't jump as they load.
+ *
+ * ```tsx
+ * <img src={p.photo} alt={p.name} width={320} height={240} loading="lazy" decoding="async"
+ *   srcset={`${p.photo}?w=320 320w, ${p.photo}?w=640 640w`} sizes="(max-width: 600px) 50vw, 320px" />
+ *
+ * function Avatar({ size = 40, ...rest }: ImgAttributes & { size?: number }) {
+ *   return <img width={size} height={size} loading="lazy" alt="" {...rest} />;
+ * }
+ * ```
+ */
 export interface ImgAttributes extends VoidAttributes {
   src?: string;
   alt?: string;
@@ -430,7 +636,21 @@ export interface ImgAttributes extends VoidAttributes {
   fetchpriority?: FetchPriority;
 }
 
-/** Attributes for `<input>`. */
+/**
+ * Attributes for `<input>`. Names are the HTML ones (`maxlength`,
+ * `autocomplete`, `readonly`), and `type` and `autocomplete` suggest their
+ * known values.
+ *
+ * ```tsx
+ * <input id="email" type="email" name="email" maxlength={120} required autocomplete="email" />
+ *
+ * function TextInput({ label, ...input }: InputAttributes & { label: string }) {
+ *   return <label>{label} <input type="text" {...input} /></label>;
+ * }
+ *
+ * <TextInput label="Name" name="name" required />
+ * ```
+ */
 export interface InputAttributes extends VoidAttributes, FormSubmitterAttributes {
   type?: InputType;
   name?: string;
@@ -460,7 +680,14 @@ export interface InputAttributes extends VoidAttributes, FormSubmitterAttributes
   height?: Numberish;
 }
 
-/** Attributes for `<label>`. */
+/**
+ * Attributes for `<label>`. It's `for`, the HTML name (not React's `htmlFor`).
+ *
+ * ```tsx
+ * <label for="email">Email</label>
+ * <input id="email" name="email" />
+ * ```
+ */
 export interface LabelAttributes extends GlobalAttributes {
   for?: string;
 }
@@ -469,7 +696,17 @@ export interface LiAttributes extends GlobalAttributes {
   value?: Numberish;
 }
 
-/** Attributes for `<link>`. */
+/**
+ * Attributes for `<link>`. For your own stylesheets and icons, assetUrl()
+ * and `<Stylesheet>` give the right URL in dev and production.
+ *
+ * ```tsx
+ * <head>
+ *   <link rel="preload" href="/fonts/inter.woff2" as="font" type="font/woff2" crossorigin />
+ *   <link rel="icon" href={assetUrl("src/favicon.svg")} type="image/svg+xml" />
+ * </head>
+ * ```
+ */
 export interface LinkAttributes extends VoidAttributes {
   href?: string;
   rel?: string;
@@ -506,7 +743,18 @@ export interface MapAttributes extends GlobalAttributes {
   name?: string;
 }
 
-/** Attributes for `<meta>`. */
+/**
+ * Attributes for `<meta>`. Open Graph's `property` comes from the RDFa
+ * attributes on GlobalAttributes.
+ *
+ * ```tsx
+ * <head>
+ *   <meta charset="utf-8" />
+ *   <meta name="viewport" content="width=device-width, initial-scale=1" />
+ *   <meta property="og:title" content={meta.title ?? "My app"} />
+ * </head>
+ * ```
+ */
 export interface MetaAttributes extends VoidAttributes {
   name?: string;
   content?: string;
@@ -544,7 +792,16 @@ export interface OptgroupAttributes extends GlobalAttributes {
   label?: string;
 }
 
-/** Attributes for `<option>`. */
+/**
+ * Attributes for `<option>`.
+ *
+ * ```tsx
+ * <select name="plan">
+ *   <option value="free" selected={plan === "free"}>Free</option>
+ *   <option value="pro" disabled label="Pro (soon)" />
+ * </select>
+ * ```
+ */
 export interface OptionAttributes extends GlobalAttributes {
   disabled?: boolean;
   label?: string;
@@ -563,7 +820,15 @@ export interface ProgressAttributes extends GlobalAttributes {
   max?: Numberish;
 }
 
-/** Attributes for `<script>`. */
+/**
+ * Attributes for `<script>`. Its contents are raw text; hand data to an
+ * inline script with json(), which can't close the tag.
+ *
+ * ```tsx
+ * <script type="module" src="/app.js" />
+ * <script type="application/json" id="state">{json({ user: "ada" })}</script>
+ * ```
+ */
 export interface ScriptAttributes extends GlobalAttributes {
   src?: string;
   type?: Open<"module" | "importmap" | "speculationrules" | "text/javascript" | "application/json" | "application/ld+json">;
@@ -577,7 +842,18 @@ export interface ScriptAttributes extends GlobalAttributes {
   fetchpriority?: FetchPriority;
 }
 
-/** Attributes for `<select>`. */
+/**
+ * Attributes for `<select>`. With `multiple`, read the choices in an action
+ * with `form.all(name)`.
+ *
+ * ```tsx
+ * function Select({ options, ...rest }: SelectAttributes & { options: { value: string; label: string }[] }) {
+ *   return <select {...rest}>{options.map((o) => <option value={o.value}>{o.label}</option>)}</select>;
+ * }
+ *
+ * <Select name="size" required options={[{ value: "s", label: "Small" }, { value: "m", label: "Medium" }]} />
+ * ```
+ */
 export interface SelectAttributes extends GlobalAttributes {
   autocomplete?: AutoFill;
   disabled?: boolean;
@@ -625,7 +901,13 @@ export interface TemplateAttributes extends GlobalAttributes {
   shadowrootserializable?: boolean;
 }
 
-/** Attributes for `<textarea>`. */
+/**
+ * Attributes for `<textarea>`. Its value is its children, not a `value` attribute.
+ *
+ * ```tsx
+ * <textarea name="note" rows={4} maxlength={500} placeholder="Say something" required>{note.body}</textarea>
+ * ```
+ */
 export interface TextareaAttributes extends GlobalAttributes {
   autocomplete?: AutoFill;
   cols?: Numberish;
@@ -654,7 +936,18 @@ export interface TrackAttributes extends VoidAttributes {
   srclang?: string;
 }
 
-/** HTML elements, keyed by tag name. */
+/**
+ * HTML elements, keyed by tag name. Index it to get one element's attribute
+ * type without knowing its interface name:
+ *
+ * ```tsx
+ * function Video(props: HTMLElements["video"]) {
+ *   return <video controls playsinline preload="metadata" {...props} />;
+ * }
+ *
+ * <Video src="/intro.mp4" poster="/intro.jpg" width={640} />
+ * ```
+ */
 export interface HTMLElements {
   a: AnchorAttributes;
   abbr: GlobalAttributes;
@@ -779,6 +1072,18 @@ type SVGUnits = "userSpaceOnUse" | "objectBoundingBox";
  * Attributes common to SVG elements. The usual presentation attributes are
  * declared; the long tail of kebab-case ones (`stroke-width`, `stop-color`,
  * `font-family`, ...) goes through the index signature.
+ *
+ * ```tsx
+ * function Icon({ d, ...rest }: SVGAttributes & { d: string }) {
+ *   return (
+ *     <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" stroke-width="2" {...rest}>
+ *       <path d={d} />
+ *     </svg>
+ *   );
+ * }
+ *
+ * <Icon d="M3 6h18" aria-hidden="true" />
+ * ```
  */
 export interface SVGAttributes extends GlobalAttributes {
   xmlns?: string;
@@ -926,7 +1231,22 @@ export interface SVGFilterAttributes extends SVGAttributes {
   primitiveUnits?: SVGUnits;
 }
 
-/** SVG elements, keyed by tag name. `<title>` is shared with HTML. */
+/**
+ * SVG elements, keyed by tag name. `<title>` is shared with HTML. Attribute
+ * names keep SVG's own casing (`viewBox`, `gradientUnits`, `stdDeviation`).
+ *
+ * ```tsx
+ * <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width={100} height={100}>
+ *   <defs>
+ *     <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+ *       <stop offset="0" stop-color="#4f46e5" />
+ *       <stop offset="1" stop-color="#4f46e5" stop-opacity="0" />
+ *     </linearGradient>
+ *   </defs>
+ *   <circle cx={50} cy={50} r={40} fill="url(#fade)" />
+ * </svg>
+ * ```
+ */
 export interface SVGElements {
   svg: SVGSvgAttributes;
   g: SVGAttributes;
@@ -958,17 +1278,43 @@ export interface SVGElements {
 
 // ── custom elements ──
 
-/** A custom element (any tag with a hyphen) takes global attributes plus anything else. */
+/**
+ * A custom element (any tag with a hyphen) takes global attributes plus
+ * anything else. To type one strictly, augment `JSX.IntrinsicElements`.
+ *
+ * ```tsx
+ * <my-widget size="large" any-prop="ok" class="widget" />
+ * ```
+ */
 export type CustomElementAttributes = GlobalAttributes & Record<string, unknown>;
 
-/** Every attribute also takes `null`, which (like `undefined`) renders nothing. */
+/**
+ * Every attribute also takes `null`, which (like `undefined`) renders nothing.
+ * IntrinsicElements applies it to every tag, so a conditional attribute can
+ * be written with `null`:
+ *
+ * ```tsx
+ * <a href={user ? `/u/${user.name}` : null}>Profile</a>
+ *
+ * const link: Nullable<AnchorAttributes> = { href: null, target: "_blank" };
+ * ```
+ */
 export type Nullable<T> = { [K in keyof T]: K extends "children" | "key" ? T[K] : T[K] | null };
 type NullableElements<E> = { [Tag in keyof E]: Nullable<E[Tag]> };
 
 /**
  * Every intrinsic element yerd knows about. `JSX.IntrinsicElements` extends
  * this, so apps can add their own tags by augmenting `JSX.IntrinsicElements`
- * in "@toyz/yerd/jsx-runtime".
+ * in "@toyz/yerd/jsx-runtime". Index it for one tag's props as TSX sees
+ * them (with `null` allowed):
+ *
+ * ```tsx
+ * type InputProps = IntrinsicElements["input"];
+ *
+ * function Checkbox(props: InputProps) {
+ *   return <input type="checkbox" {...props} />;
+ * }
+ * ```
  */
 export interface IntrinsicElements extends NullableElements<HTMLElements>, NullableElements<SVGElements> {
   [tag: `${string}-${string}`]: CustomElementAttributes;

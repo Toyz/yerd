@@ -70,7 +70,15 @@ function normalize(path: string): string {
 /**
  * Load a Vite manifest (`.vite/manifest.json` from the client build). After
  * this, assetUrl() returns hashed build output. `publicBase` is where the
- * client build is served from (default "/").
+ * client build is served from (default "/"). The production server the Vite
+ * plugin generates does this for you (through `app.clientBuild()`); call it
+ * yourself only with a hand-rolled production setup.
+ *
+ * ```ts
+ * useManifest(new URL("../dist/client/.vite/manifest.json", import.meta.url));
+ * // or, with the client build served under /static/:
+ * useManifest("dist/client/.vite/manifest.json", "/static/");
+ * ```
  */
 export function useManifest(file: string | URL, publicBase = "/"): void {
   manifest = JSON.parse(readFileSync(file, "utf8")) as Manifest;
@@ -79,7 +87,17 @@ export function useManifest(file: string | URL, publicBase = "/"): void {
   clientDir = dirname(dirname(file instanceof URL ? fileURLToPath(file) : file));
 }
 
-/** Forget the manifest (dev servers, tests). */
+/**
+ * Forget the manifest (dev servers, tests): assetUrl() goes back to source
+ * paths. Also clears the once-per-file dev warnings.
+ *
+ * ```ts
+ * import { afterEach } from "vitest";
+ * import { resetManifest } from "@toyz/yerd";
+ *
+ * afterEach(() => resetManifest());
+ * ```
+ */
 export function resetManifest(): void {
   manifest = undefined;
   base = "/";
@@ -90,7 +108,16 @@ export function resetManifest(): void {
 /**
  * The URL for a source asset: the hashed build file in production, the
  * source path otherwise. Files in public/ go by their path from it
- * (`assetUrl("favicon.svg")`) and are served as they are.
+ * (`assetUrl("favicon.svg")`) and are served as they are. Files Vite should
+ * fingerprint must be listed in the yerd plugin's `client` option, or the
+ * production call throws.
+ *
+ * ```tsx
+ * <head>
+ *   <link rel="icon" href={assetUrl("src/favicon.svg")} />
+ * </head>
+ * <img src={assetUrl("src/hero.jpg")} alt="" width={1200} height={600} fetchpriority="high" />
+ * ```
  */
 export function assetUrl(path: string): string {
   const key = normalize(path);
@@ -105,7 +132,24 @@ export function assetUrl(path: string): string {
   throw new Error(`${key} isn't in the Vite manifest (add it to the yerd plugin's \`client\` option) or the client build's public files`);
 }
 
-/** `<link rel="stylesheet">` for a source stylesheet, hashed in production. */
+/**
+ * `<link rel="stylesheet">` for a source stylesheet, hashed in production.
+ * `href` is a source path, as for assetUrl().
+ *
+ * ```tsx
+ * function RootLayout({ children }: LayoutProps) {
+ *   return (
+ *     <html lang="en">
+ *       <head>
+ *         <Stylesheet href="src/styles.css" />
+ *         <Scripts />
+ *       </head>
+ *       <body>{children}</body>
+ *     </html>
+ *   );
+ * }
+ * ```
+ */
 export function Stylesheet({ href }: { href: string }) {
   return raw(`<link rel="stylesheet" href="${escapeHtml(assetUrl(href))}">`);
 }

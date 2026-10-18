@@ -8,6 +8,13 @@ const NEEDS_ESCAPE = /[&<>"']/;
  * clean strings; `search` was slower than `test` here too). Only when there
  * is something to replace does it switch to a hand-written scan, copying
  * slices between replacements, which beats `replace` with a callback.
+ *
+ * JSX already escapes every string, so you need this only when you build
+ * HTML by hand, typically inside raw():
+ *
+ * ```ts
+ * const badge = raw(`<mark title="${escapeHtml(user.name)}">${escapeHtml(user.name)}</mark>`);
+ * ```
  */
 export function escapeHtml(value: string): string {
   if (!NEEDS_ESCAPE.test(value)) return value;
@@ -32,7 +39,18 @@ export function escapeHtml(value: string): string {
 
 const RAW: unique symbol = Symbol.for("yerd.raw");
 
-/** Pre-rendered HTML that the renderer writes without escaping. */
+/**
+ * Pre-rendered HTML that the renderer writes without escaping: what raw()
+ * and json() return. It's a valid Child, so it goes anywhere JSX children go.
+ *
+ * ```tsx
+ * function icon(name: string): RawHtml {
+ *   return raw(readFileSync(`icons/${name}.svg`, "utf8"));
+ * }
+ *
+ * <button>{icon("trash")} Delete</button>
+ * ```
+ */
 export interface RawHtml {
   /** Brand that marks a raw() result. */
   readonly [RAW]: true;
@@ -42,7 +60,12 @@ export interface RawHtml {
 
 /**
  * Opt out of escaping. The string is written to the page exactly as given, so
- * it must never contain unsanitized user input.
+ * it must never contain unsanitized user input. For HTML you already trust:
+ * rendered Markdown, an SVG from disk.
+ *
+ * ```tsx
+ * const article = <article>{raw(markdownToHtml(post.body))}</article>;
+ * ```
  */
 export function raw(html: string): RawHtml {
   return { [RAW]: true, html };
