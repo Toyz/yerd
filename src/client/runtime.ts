@@ -134,9 +134,12 @@ export function yerdRuntime(): void {
     if (a instanceof HTMLTextAreaElement) return;
     // Read before morphChildren moves new options out of `b`.
     const picked = b instanceof HTMLSelectElement ? Array.from(b.options, (o) => o.hasAttribute("selected")) : null;
+    // A focused select keeps the user's choice: patching its options' `selected`
+    // attributes would otherwise move the selection under them.
+    const held = a instanceof HTMLSelectElement && a === document.activeElement ? Array.from(a.options).filter((o) => o.selected) : null;
     morphChildren(a, b);
-    if (picked && a instanceof HTMLSelectElement && a !== document.activeElement) {
-      Array.from(a.options).forEach((option, i) => (option.selected = picked[i] ?? false));
+    if (picked && a instanceof HTMLSelectElement) {
+      Array.from(a.options).forEach((option, i) => (option.selected = held ? held.includes(option) : (picked[i] ?? false)));
     }
   }
 
