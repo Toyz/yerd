@@ -1,25 +1,64 @@
 /**
- * Sessions.
- *
- * Enabled with `app.sessions(...)`. Read with `@session accessor session!: Session`
- * or `currentContext().session`. Give it a shape per route, whose fields
- * become typed properties (`session.items`):
- *
- * ```ts
- * interface Cart { items?: string[]; coupon?: string }
- * @session accessor session!: Session<Cart>;
- * ```
- *
- * or app-wide, through declaration merging (what plain `Session` uses):
+ * Sessions. Off until `app.sessions(...)`; then a route reads and writes
+ * the session through `@session`, typed by a shape of your own. Values are
+ * plain properties: assign to save, change in place and it's saved too,
+ * assign `undefined` to remove.
  *
  * ```ts
- * declare module "@toyz/yerd" { interface SessionData { userId?: string; cart?: string[] } }
+ * interface CartData { cart?: string[] }
+ *
+ * @route("/cart")
+ * export class CartRoute {
+ *   @session accessor session!: Session<CartData>;
+ *
+ *   @post add() {
+ *     this.session.cart ??= [];
+ *     this.session.cart.push("socks"); // changed in place: saved
+ *     return redirect("/cart");
+ *   }
+ *
+ *   @post empty() {
+ *     this.session.cart = undefined; // removed
+ *     return redirect("/cart");
+ *   }
+ * }
  * ```
  *
- * Two built-in stores: CookieStore (default; the data lives in the cookie,
- * sealed with AES-256-GCM) and MemoryStore (data in this process, the cookie
- * holds a random id; dev, tests, single-process deploys). Bring your own by
- * implementing SessionStore.
+ * A shape class adds methods and getters (`this` is the session), and its
+ * field initializers are defaults, saved only once they change:
+ *
+ * ```ts
+ * class Cart {
+ *   items: string[] = [];
+ *   add(item: string) {
+ *     this.items.push(item);
+ *   }
+ * }
+ *
+ * @session(Cart) accessor cart!: Session<Cart>; // this.cart.add("socks")
+ * ```
+ *
+ * For keys every route shares, augment `SessionData` instead: plain
+ * `Session` and `currentContext().session` are typed by it.
+ *
+ * ```ts
+ * declare module "@toyz/yerd" {
+ *   interface SessionData { theme?: "light" | "dark" }
+ * }
+ * ```
+ *
+ * Stores: CookieStore (the default; the data lives in the cookie, sealed
+ * with AES-256-GCM, ~4KB), MemoryStore (data in this process, the cookie
+ * holds the session id; dev, tests, single-process deploys), or your own
+ * SessionStore. Id stores get ids from `sessions({ generateId })` when
+ * given, else 32 random bytes.
+ *
+ * ```ts
+ * export const app = yerd().sessions({
+ *   store: new MemoryStore(),
+ *   generateId: () => `sess_${randomUUID()}`,
+ * });
+ * ```
  *
  * Cookies are HttpOnly, SameSite=Lax, Path=/, and Secure with a `__Host-` name
  * prefix when the request came over HTTPS (the socket itself, or
@@ -30,12 +69,44 @@
 
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from "node:crypto";
 
-/** Augment this to type session keys app-wide; `Session<T>` types one route's view instead. */
+/**
+ * The app-wide session shape. Augment it for keys every route shares; plain
+ * `Session` (no type argument) and `currentContext().session` are typed by
+ * it. `Session<T>` types one route's view instead.
+ *
+ * ```ts
+ * declare module "@toyz/yerd" {
+ *   interface SessionData {
+ *     theme?: "light" | "dark";
+ *   }
+ * }
+ *
+ * @route("/theme")
+ * export class Theme {
+ *   @session accessor session!: Session; // typed by SessionData
+ *
+ *   @post toggle() {
+ *     this.session.theme = this.session.theme === "dark" ? "light" : "dark";
+ *     return redirect("/");
+ *   }
+ * }
+ * ```
+ */
 export interface SessionData {}
 
 type Data = Record<string, unknown>;
 
-/** What a SessionStore saves for one session. */
+/**
+ * What a SessionStore saves for one session. Plain JSON: a store can write it
+ * as a string and hand back the parsed object.
+ *
+ * ```ts
+ * async get(id: string): Promise<SessionRecord | undefined> {
+ *   const json = await this.redis.get(`sess:${id}`);
+ *   return json ? (JSON.parse(json) as SessionRecord) : undefined;
+ * }
+ * ```
+ */
 export interface SessionRecord {
   /** The session's values. */
   data: Data;
@@ -47,7 +118,30 @@ export interface SessionRecord {
 
 /**
  * Where session data lives. Implement it to keep sessions in Redis, a
- * database, etc. ("id" kind); methods may be sync or async.
+ * database, etc.: `kind: "id"` plus get, set and destroy, sync or async. The
+ * cookie then carries only the session id, sealed. Ids come from
+ * `sessions({ generateId })` when given, else 32 random bytes; the store
+ * just keys records by them.
+ *
+ * ```ts
+ * export class RedisStore implements SessionStore {
+ *   readonly kind = "id";
+ *   constructor(private redis: Redis) {}
+ *
+ *   async get(id: string) {
+ *     const json = await this.redis.get(`sess:${id}`);
+ *     return json ? (JSON.parse(json) as SessionRecord) : undefined;
+ *   }
+ *   async set(id: string, record: SessionRecord, ttlMs: number) {
+ *     await this.redis.set(`sess:${id}`, JSON.stringify(record), { PX: ttlMs });
+ *   }
+ *   async destroy(id: string) {
+ *     await this.redis.del(`sess:${id}`);
+ *   }
+ * }
+ *
+ * yerd().sessions({ store: new RedisStore(redis) });
+ * ```
  */
 export interface SessionStore {
   /** "cookie" stores keep the sealed record in the cookie itself; "id" stores keep an id there. */
@@ -60,7 +154,20 @@ export interface SessionStore {
   destroy(id: string): void | Promise<void>;
 }
 
-/** Data in the cookie, sealed. No server state. ~4KB limit. */
+/**
+ * Data in the cookie, sealed with AES-256-GCM under the app secret. No
+ * server state, so every instance can read every session, but the sealed
+ * cookie must stay under ~4KB (a bigger session is an error at save time):
+ * keep ids and small values here, not whole records. It's the default; name
+ * it only to be explicit. It has no ids, so `generateId` is refused with it.
+ *
+ * ```ts
+ * export const app = yerd({ secret: process.env.YERD_SECRET }).sessions({
+ *   store: new CookieStore(),
+ *   maxAge: 7 * 24 * 60 * 60 * 1000,
+ * });
+ * ```
+ */
 export class CookieStore implements SessionStore {
   readonly kind = "cookie" as const;
   /** No-op: the session manager reads the record from the cookie itself. */
@@ -83,6 +190,11 @@ export interface MemoryStoreOptions {
    * Under the Vite dev server, stores with the same name share their records
    * across app reloads, so editing a file doesn't sign everyone out. Default
    * "default"; give two stores in one app different names.
+   *
+   * ```ts
+   * const users = new MemoryStore({ name: "users" });
+   * const admin = new MemoryStore({ name: "admin" });
+   * ```
    */
   name?: string;
 }
@@ -91,8 +203,19 @@ export interface MemoryStoreOptions {
 const DEV_SERVER = Symbol.for("yerd.devAssets");
 
 /**
- * Data in this process, keyed by a hash of the cookie's random id. Expired
- * sessions are swept out lazily, on saves, at most once per `sweepInterval`.
+ * Data in this process, keyed by a hash of the session id the cookie
+ * carries. Expired sessions are swept out lazily, on saves, at most once per
+ * `sweepInterval`. For dev, tests and single-process deploys: a restart
+ * drops every session (except under the Vite dev server, where they outlive
+ * reloads), and two instances don't share them. Ids come from
+ * `sessions({ generateId })` when given, else 32 random bytes.
+ *
+ * ```ts
+ * export const app = yerd().sessions({
+ *   store: new MemoryStore({ maxSize: 10_000, sweepInterval: 60_000 }),
+ *   maxAge: 2 * 60 * 60 * 1000, // two hours idle
+ * });
+ * ```
  */
 export class MemoryStore implements SessionStore {
   readonly kind = "id" as const;
@@ -153,7 +276,17 @@ export class MemoryStore implements SessionStore {
     this.#records.delete(this.#key(id));
   }
 
-  /** How many sessions are held, expired ones not yet swept included. */
+  /**
+   * How many sessions are held, expired ones not yet swept included. Handy
+   * in tests, to see that a request did or didn't start a session.
+   *
+   * ```ts
+   * const store = new MemoryStore();
+   * const server = await yerd({ routes: [Cart], handleSignals: false }).sessions({ store }).listen(0);
+   * await fetch(`${server.url}/cart`); // only reads: no session saved
+   * expect(store.size).toBe(0);
+   * ```
+   */
   get size(): number {
     return this.#records.size;
   }
@@ -165,7 +298,18 @@ function keyFor(secret: string): Buffer {
   return Buffer.from(hkdfSync("sha256", secret, "yerd:session", "aes-256-gcm", 32));
 }
 
-/** AES-256-GCM with the first secret. Output: base64url(iv | tag | ciphertext). */
+/**
+ * Encrypt and authenticate a JSON value with AES-256-GCM under the first
+ * secret. Output: base64url(iv | tag | ciphertext). The session cookie is
+ * built with it; reach for it yourself for a small value that has to
+ * round-trip through the client untouched and unread (a "remember me"
+ * cookie, a value in a link), or in tests that need a cookie the app accepts.
+ *
+ * ```ts
+ * const secrets = [process.env.YERD_SECRET!];
+ * const token = seal(secrets, { userId: "u_1", exp: Date.now() + 3_600_000 });
+ * ```
+ */
 export function seal(secrets: readonly string[], value: unknown): string {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", keyFor(secrets[0]!), iv);
@@ -173,7 +317,17 @@ export function seal(secrets: readonly string[], value: unknown): string {
   return Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64url");
 }
 
-/** Open with any of the secrets (rotation: new first, old still accepted). Undefined if tampered or unknown. */
+/**
+ * Open a seal() value with any of the secrets (rotation: new first, old
+ * still accepted). Undefined if it was tampered with, sealed under another
+ * secret, or isn't a sealed value at all. `T` is only a cast: check what
+ * you get back, the same way you'd check any input.
+ *
+ * ```ts
+ * const opened = unseal<{ userId: string; exp: number }>(secrets, token);
+ * if (!opened || opened.exp < Date.now()) throw new HttpError(401, "Link expired");
+ * ```
+ */
 export function unseal<T>(secrets: readonly string[], sealed: string): T | undefined {
   let raw: Buffer;
   try {
@@ -206,11 +360,49 @@ type Key<D> = Extract<keyof D, string>;
  * get/set/delete. Optional as you declare them: mark a field `?` unless it
  * has a default (a field initializer on a shape class). Fields named like a
  * Session member (`get`, `id`, `flash`, ...) are left out: use get()/set()
- * for those.
+ * for those. You rarely name it; it's the property half of `Session<D>`.
+ *
+ * ```ts
+ * interface Prefs { theme?: string; id?: string }
+ *
+ * @session accessor session!: Session<Prefs>;
+ *
+ * @post save() {
+ *   this.session.theme = "dark"; // a field: a property
+ *   this.session.set("id", "p_1"); // `id` is the session's own: by name
+ * }
+ * ```
  */
 export type SessionFields<D> = Omit<D, keyof SessionApi<D>>;
 
-/** A class describing a session's shape: data fields (initializers are defaults), getters and methods. */
+/**
+ * A class describing a session's shape: data fields (initializers are
+ * defaults), getters and methods, with `this` as the session. Pass it to
+ * `@session(Shape)` or `@args(session(Shape))`; the constructor takes no
+ * arguments and the class itself is never stored, only its data fields.
+ *
+ * ```ts
+ * class Cart {
+ *   items: string[] = [];
+ *   get count() {
+ *     return this.items.length;
+ *   }
+ *   add(item: string) {
+ *     this.items.push(item);
+ *   }
+ * }
+ *
+ * @route("/cart")
+ * export class CartPage {
+ *   @session(Cart) accessor cart!: Session<Cart>;
+ *
+ *   @post add() {
+ *     this.cart.add("socks");
+ *     return redirect("/cart");
+ *   }
+ * }
+ * ```
+ */
 export type SessionShape<T extends object = object> = new () => T;
 
 /** The real instance behind a session proxy. */
@@ -499,6 +691,21 @@ export class SessionApi<D> {
  * session.cart.push("socks"); // changed in place: still saved
  * session.coupon = undefined; // same as delete("coupon")
  * ```
+ *
+ * Beyond values: `flash()` for a one-request notice, `regenerate()` on
+ * sign-in, `destroy()` on sign-out, `isNew` and `createdAt`.
+ *
+ * ```ts
+ * @post signOut() {
+ *   this.session.destroy();
+ *   this.session.flash("notice", "Signed out"); // starts a fresh session
+ *   return redirect("/");
+ * }
+ *
+ * @get home() {
+ *   return { notice: this.session.flash("notice") ?? null }; // read once, then gone
+ * }
+ * ```
  */
 // Session<any> (what bare @session resolves to) is any, so the declared type decides.
 export type Session<D extends object = SessionData> = unknown extends D ? any : SessionApi<D> & SessionFields<D>;
@@ -509,37 +716,116 @@ export const Session = SessionApi as new <D extends object = SessionData>(
   createdAt?: number,
 ) => Session<D>;
 
-/** Options for app.sessions(). */
+/**
+ * Options for app.sessions(). Every one has a default, so `sessions()` alone
+ * is a working setup: sealed cookie sessions, 14 days idle, 30 at most.
+ *
+ * ```ts
+ * export const app = yerd().sessions({
+ *   store: new MemoryStore(),
+ *   maxAge: 2 * 60 * 60 * 1000, // signed out after two idle hours
+ *   absoluteMaxAge: 24 * 60 * 60 * 1000, // and after a day, active or not
+ *   generateId: () => `sess_${randomUUID()}`,
+ * });
+ * ```
+ */
 export interface SessionOptions {
-  /** Where data lives. Default: a CookieStore. */
+  /**
+   * Where data lives. Default: a CookieStore (the data sealed in the cookie,
+   * ~4KB). Use a MemoryStore or your own SessionStore for more, or for
+   * sessions you can end from the server.
+   *
+   * ```ts
+   * app.sessions({ store: new MemoryStore({ maxSize: 10_000 }) });
+   * ```
+   */
   store?: SessionStore;
-  /** Idle lifetime in ms. Default 14 days. */
+  /**
+   * Idle lifetime in ms: a session not used for this long is gone. Default
+   * 14 days.
+   *
+   * ```ts
+   * app.sessions({ maxAge: 30 * 60 * 1000 }); // 30 idle minutes
+   * ```
+   */
   maxAge?: number;
-  /** Lifetime from creation in ms, never extended. Default 30 days. */
+  /**
+   * Lifetime from creation in ms, never extended, however active the
+   * session. Default 30 days.
+   *
+   * ```ts
+   * app.sessions({ maxAge: 60 * 60 * 1000, absoluteMaxAge: 12 * 60 * 60 * 1000 });
+   * ```
+   */
   absoluteMaxAge?: number;
-  /** Refresh the idle expiry on activity. Default true. */
+  /**
+   * Refresh the idle expiry on activity (the cookie is re-sent at most every
+   * tenth of `maxAge`). Default true. Off, a session ends `maxAge` after it
+   * was last changed, however often it's read.
+   *
+   * ```ts
+   * app.sessions({ rolling: false, maxAge: 8 * 60 * 60 * 1000 });
+   * ```
+   */
   rolling?: boolean;
   /**
    * Makes the id for a new (or regenerated) session, for stores that keep
-   * an id in the cookie (`kind: "id"`; a CookieStore has none, so it's
-   * refused there). Use it for ids your store or logs expect: a prefix, a
-   * ULID, a database sequence. Ids must be unique; the cookie is sealed so
-   * they can't be forged, but keep them unguessable anyway (a leaked store
-   * dump shouldn't name live sessions). Default: 32 random bytes, base64url.
+   * an id in the cookie (`kind: "id"`, like MemoryStore or your own
+   * SessionStore). A CookieStore has no ids, so sessions() throws when it's
+   * given with one. Use it for ids your store or logs expect: a prefix, a
+   * ULID, a database sequence. It may be async, and must return a unique,
+   * non-empty string each time (a regenerate that gets the old id back
+   * throws). The cookie is sealed so ids can't be forged, but keep them
+   * unguessable anyway: a leaked store dump shouldn't name live sessions.
+   * Default: 32 random bytes, base64url.
    *
    * ```ts
-   * app.sessions({ store: redisStore, generateId: () => `sess_${randomUUID()}` });
+   * import { randomUUID } from "node:crypto";
+   *
+   * // A format your store or logs expect.
+   * app.sessions({ store: new MemoryStore(), generateId: () => `sess_${randomUUID()}` });
+   *
+   * // From a database sequence, plus randomness so ids can't be guessed.
+   * app.sessions({
+   *   store: new PgSessionStore(db),
+   *   generateId: async () => {
+   *     const { n } = await db.one<{ n: string }>("select nextval('session_ids') as n");
+   *     return `${n}.${randomUUID()}`;
+   *   },
+   * });
    * ```
    */
   generateId?: () => string | Promise<string>;
-  /** Cookie name (without the __Host- prefix). Default "yerd_session". */
+  /**
+   * Cookie name (without the __Host- prefix, which is added over HTTPS).
+   * Default "yerd_session". Change it to run two apps on one host without
+   * their sessions colliding. An invalid name throws at the sessions() call.
+   *
+   * ```ts
+   * app.sessions({ cookieName: "shop_session" });
+   * ```
+   */
   cookieName?: string;
-  /** Force Secure on or off. Default: on when the request came over HTTPS. */
+  /**
+   * Force the Secure flag (and the `__Host-` prefix) on or off. Default: on
+   * when the request came over HTTPS. Force it on when TLS ends at a proxy
+   * you can't configure `trustProxy` for.
+   *
+   * ```ts
+   * app.sessions({ secure: process.env.NODE_ENV === "production" });
+   * ```
+   */
   secure?: boolean;
   /**
    * Believe `X-Forwarded-Proto` when deciding whether the request came over
    * HTTPS. Only turn this on behind a proxy that sets it (and strips any the
-   * client sent). Default false: the socket decides, or `secure`.
+   * client sent). Default: the app's own `trustProxy` option, itself false
+   * unless set; when off, the socket decides, or `secure`.
+   *
+   * ```ts
+   * yerd({ trustProxy: true }).sessions(); // inherits it
+   * yerd().sessions({ trustProxy: true }); // sessions only
+   * ```
    */
   trustProxy?: boolean;
 }

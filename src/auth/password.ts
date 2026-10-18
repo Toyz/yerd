@@ -25,7 +25,20 @@ function scryptHash(password: string, salt: Buffer, N: number, r: number, p: num
 
 const hasArgon2 = typeof argon2 === "function";
 
-/** Hash a password for storage. */
+/**
+ * Hash a password for storage: argon2id (scrypt where Node lacks it), salted,
+ * in PHC format, so the string carries its own parameters and verifyPassword
+ * keeps reading it after they're raised. Store the whole string.
+ *
+ * ```ts
+ * @action async signUp(_: {}, form: ActionForm) {
+ *   const passwordHash = await hashPassword(form.string("password"));
+ *   const user = await this.users.create({ name: form.string("name"), passwordHash });
+ *   await auth.login(user);
+ *   return redirect("/account");
+ * }
+ * ```
+ */
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
   if (hasArgon2) {
@@ -42,7 +55,15 @@ let dummy: Promise<string> | undefined;
 /**
  * Check a password against a stored hash. Pass `undefined` when the user
  * doesn't exist: it still runs a full hash, so response timing doesn't reveal
- * which accounts exist.
+ * which accounts exist. Comparison is constant-time. Throws on a string that
+ * isn't one of its hash formats, rather than answering false.
+ *
+ * ```ts
+ * const user = this.users.byName(form.string("name"));
+ * if (!(await verifyPassword(form.string("password"), user?.passwordHash)) || !user) {
+ *   throw new HttpError(401, "Wrong name or password");
+ * }
+ * ```
  */
 export async function verifyPassword(password: string, stored: string | undefined): Promise<boolean> {
   if (stored === undefined) {

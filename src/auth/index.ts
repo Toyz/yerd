@@ -3,15 +3,21 @@
  * kit (sessions, createAccessor, createGuard, middleware). yerd doesn't know
  * what a user is; you tell it how to load one by id.
  *
- * ```ts
+ * ```tsx
  * export const auth = createAuth<User>({
  *   load: (id) => resolve(Users).find(id),
  *   loginPath: "/login",
  * });
- * app.sessions().use(auth);
+ * export const app = yerd().sessions().use(auth);
  *
  * @route("/account", { guards: [auth.required] })
- * class Account { @auth.user accessor me!: User; ... }
+ * export class Account {
+ *   @auth.user accessor me!: User;
+ *
+ *   @get show() {
+ *     return <h1>Hello, {this.me.name}</h1>;
+ *   }
+ * }
  * ```
  *
  * Each auth keeps its user id under its own session key. One app with two
@@ -40,17 +46,54 @@ onGuardRegistryReset(() => claimedKeys.clear());
 
 /** Options for createAuth(). Only `load` is required. */
 export interface AuthOptions<User> {
-  /** Load a user by the id stored in the session; undefined if they're gone. */
+  /**
+   * Load a user by the id stored in the session; undefined (or null) if
+   * they're gone, which also drops the id from the session. Sync or async;
+   * runs once per request with someone signed in.
+   *
+   * ```ts
+   * load: (id) => resolve(Users).find(id),
+   * ```
+   */
   load: (id: string) => User | undefined | Promise<User | undefined>;
-  /** The id to store in the session. Default: `user.id`. */
+  /**
+   * The id to store in the session. Default: `String(user.id)`. Keep it
+   * small and stable: it sits in the session for as long as they're signed in.
+   *
+   * ```ts
+   * idOf: (user) => user.email,
+   * ```
+   */
   idOf?: (user: User) => string;
-  /** Roles, for auth.role(...). */
+  /**
+   * The user's role names, for auth.role(...). Without it nobody has a role,
+   * so every auth.role() guard refuses.
+   *
+   * ```ts
+   * roles: (user) => (user.admin ? ["admin", "staff"] : []),
+   * ```
+   */
   roles?: (user: User) => readonly string[];
-  /** Where browsers are sent when a page needs login. Default "/login". */
+  /**
+   * Where browsers are sent when a page needs login, with `?next=` the page
+   * they asked for. Default "/login".
+   *
+   * ```ts
+   * loginPath: "/account/sign-in",
+   * ```
+   */
   loginPath?: string;
   /**
    * The session key the user id is kept under. Default "__yerd_uid". Every
    * auth in a process needs its own: a second createAuth() without one throws.
+   *
+   * ```ts
+   * export const auth = createAuth<User>({ load: (id) => resolve(Users).find(id) });
+   * export const adminAuth = createAuth<Admin>({
+   *   load: (id) => resolve(Admins).find(id),
+   *   sessionKey: "admin_uid",
+   * });
+   * ```
    */
   sessionKey?: string;
   /**
@@ -69,7 +112,14 @@ export interface AuthOptions<User> {
   onLogin?: (user: User, session: Session) => void | Promise<void>;
   /**
    * Runs in logout(), before the session is destroyed: save what should
-   * outlive it (the cart, for next time). May be async; then `await auth.logout()`.
+   * outlive it (the cart, for next time). `user` is undefined when nobody was
+   * signed in. May be async; then `await auth.logout()`.
+   *
+   * ```ts
+   * onLogout: async (user, session) => {
+   *   if (user) await carts.save(user.id, session.get("cart") ?? []);
+   * },
+   * ```
    */
   onLogout?: (user: User | undefined, session: Session) => void | Promise<void>;
 }
@@ -77,30 +127,130 @@ export interface AuthOptions<User> {
 /**
  * What createAuth() returns: middleware, accessors and guards for one kind of
  * sign-in. Pass it to app.use(), which installs its middleware.
+ *
+ * ```tsx
+ * export const app = yerd().sessions().use(auth);
+ *
+ * @route("/account", { guards: [auth.required] })
+ * export class Account {
+ *   @auth.user accessor me!: User;
+ *
+ *   @get show() {
+ *     return <h1>Hello, {this.me.name}</h1>;
+ *   }
+ * }
+ * ```
  */
 export interface Auth<User> {
-  /** Loads the signed-in user once per request. `app.use(auth)`. */
+  /**
+   * Loads the signed-in user once per request. `app.use(auth)` installs it
+   * (passing the auth itself is the same as passing this). Needs sessions.
+   *
+   * ```ts
+   * yerd().sessions().use(auth.middleware);
+   * ```
+   */
   readonly middleware: Middleware;
-  /** The signed-in user. Use on routes behind `auth.required`; reading it with nobody signed in is a 401. */
+  /**
+   * The signed-in user. Use on routes behind `auth.required`; reading it with
+   * nobody signed in is a 401.
+   *
+   * ```ts
+   * @auth.user accessor me!: User;
+   * ```
+   */
   readonly user: AccessorDecorator<User>;
-  /** The signed-in user, or undefined. */
+  /**
+   * The signed-in user, or undefined: for pages that work signed in or out.
+   *
+   * ```tsx
+   * @auth.maybeUser accessor me: User | undefined;
+   *
+   * @get page() {
+   *   return this.me ? redirect("/account") : <LoginForm />;
+   * }
+   * ```
+   */
   readonly maybeUser: AccessorDecorator<User | undefined>;
-  /** Guard: someone must be signed in. Browsers go to loginPath?next=... (scripted requests via yx-location), APIs get 401. */
+  /**
+   * Guard: someone must be signed in. Browsers go to loginPath?next=...
+   * (scripted requests via yx-location), APIs get 401. Works anywhere a
+   * guard does: a route or group's `guards`, a decorator, `@guards(...)`.
+   *
+   * ```ts
+   * @route("/account", { guards: [auth.required] })
+   * export class Account {}
+   * ```
+   */
   readonly required: GuardRef;
-  /** Guard: the signed-in user has one of these roles (403 otherwise). */
+  /**
+   * Guard: the signed-in user has one of these roles (403 otherwise; signed
+   * out behaves like `required`). Roles come from the `roles` option.
+   *
+   * ```ts
+   * @group("/admin", { guards: [auth.role("admin")] })
+   * export class Admin {}
+   * ```
+   */
   role(...names: string[]): GuardRef;
   /**
    * Sign in: rotates the session id (a fresh session if someone else was
-   * signed in on it), stores the user, then runs onLogin (await it when that's async).
+   * signed in on it), stores the user, then runs onLogin (await it when
+   * that's async). Check the password first: login() trusts the user it's given.
+   *
+   * ```ts
+   * @action async submit(_: {}, form: ActionForm) {
+   *   const user = this.users.byName(form.string("name"));
+   *   if (!(await verifyPassword(form.string("password"), user?.passwordHash)) || !user) {
+   *     throw new HttpError(401, "Wrong name or password");
+   *   }
+   *   await auth.login(user);
+   *   return redirect(safeNext(this.next));
+   * }
+   * ```
    */
   login(user: User): void | Promise<void>;
-  /** Sign out: runs onLogout, then destroys the session (await it when onLogout is async). */
+  /**
+   * Sign out: runs onLogout, then destroys the session (await it when
+   * onLogout is async).
+   *
+   * ```ts
+   * @action async signOut() {
+   *   await auth.logout();
+   *   return redirect("/");
+   * }
+   * ```
+   */
   logout(): void | Promise<void>;
-  /** The signed-in user, for components and plain functions. */
+  /**
+   * The signed-in user, for components and plain functions. Undefined when
+   * nobody is signed in, or outside a request.
+   *
+   * ```tsx
+   * export function Greeting() {
+   *   const user = auth.current();
+   *   return user ? <span>Hi {user.name}</span> : <a href="/login">Log in</a>;
+   * }
+   * ```
+   */
   current(): User | undefined;
 }
 
-/** Only same-site paths: "/x", not "//evil.com", "/\\evil.com", "/\t/evil.com" or absolute URLs. */
+/**
+ * A `?next=` value made safe to redirect to: same-site paths ("/x") pass;
+ * "//evil.com", "/\\evil.com", "/\t/evil.com", absolute URLs and anything
+ * else become `fallback` (default "/"). Run every user-supplied return path
+ * through it, or the login page is an open redirect.
+ *
+ * ```tsx
+ * @query("next") accessor next: string | undefined;
+ *
+ * @get page() {
+ *   if (this.me) return redirect(safeNext(this.next, "/account"));
+ *   return <LoginForm />;
+ * }
+ * ```
+ */
 export function safeNext(value: string | null | undefined, fallback = "/"): string {
   return safeBack(value, fallback);
 }
@@ -116,14 +266,33 @@ function wantsPage(ctx: YerdContext): boolean {
  * user is gone is dropped from the session). Throws if another auth in the
  * process already uses the same `sessionKey`.
  *
- * ```ts
- * const auth = createAuth<User>({ load: (id) => users.get(id), roles: (u) => u.roles });
+ * ```tsx
+ * export const auth = createAuth<User>({
+ *   load: (id) => resolve(Users).find(id),
+ *   roles: (user) => user.roles,
+ * });
  *
- * @route("/login") class Login {
+ * @route("/login")
+ * export class Login {
+ *   @inject(Users) accessor users!: Users;
+ *
+ *   @get page() {
+ *     return (
+ *       <form action={this.signIn}>
+ *         <input name="email" type="email" />
+ *         <input name="password" type="password" />
+ *         <button>Sign in</button>
+ *       </form>
+ *     );
+ *   }
+ *
  *   @action async signIn(_: {}, form: ActionForm) {
- *     const user = users.byEmail(form.string("email"));
- *     if (!(await verifyPassword(form.string("password"), user?.passwordHash))) throw new HttpError(401, "Wrong email or password");
- *     auth.login(user!);
+ *     const user = this.users.byEmail(form.string("email"));
+ *     // An unknown email still costs a full hash: timing doesn't tell.
+ *     if (!(await verifyPassword(form.string("password"), user?.passwordHash)) || !user) {
+ *       throw new HttpError(401, "Wrong email or password");
+ *     }
+ *     await auth.login(user);
  *     return redirect("/account");
  *   }
  * }
