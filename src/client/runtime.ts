@@ -267,6 +267,8 @@ export function yerdRuntime(): void {
   type Fetched = { ok: boolean; status: number; type: string; url: string; text: string };
   const prefetched = new Map<string, { at: number; got: Promise<Fetched | undefined> }>();
   const PREFETCH_TTL = 15000;
+  // Pages handed to the browser's own prefetch (<link rel=prefetch>) on this page.
+  const linkPrefetched = new Set<string>();
 
   async function fetchText(url: string, headers: Record<string, string>, signal?: AbortSignal): Promise<Fetched> {
     const response = await fetch(url, { headers, signal });
@@ -327,6 +329,7 @@ export function yerdRuntime(): void {
       history.pushState({ yx: true }, "", landed.href);
     }
     page = location.pathname + location.search;
+    linkPrefetched.clear();
     showPage(html);
     if (how === "restore") {
       const scroll = (history.state as { scroll?: unknown } | null)?.scroll;
@@ -1802,7 +1805,6 @@ export function yerdRuntime(): void {
 
   // Built in: prefetch. data-yx-prefetch is the mode (intent, visible, load);
   // the URL is data-yx-prefetch-url or the link's href.
-  const linkPrefetched = new Set<string>();
   attribute("data-yx-prefetch", (el, mode) => {
     const url = el.getAttribute("data-yx-prefetch-url") ?? el.getAttribute("href");
     if (!url) return;
@@ -1821,6 +1823,8 @@ export function yerdRuntime(): void {
       const link = document.createElement("link");
       link.rel = "prefetch";
       link.href = href;
+      // Once fetched it's in the browser's cache; the tag has done its job.
+      link.onload = link.onerror = () => link.remove();
       document.head.appendChild(link);
     };
     if (mode === "load") {

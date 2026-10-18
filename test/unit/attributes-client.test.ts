@@ -106,6 +106,26 @@ describe("prefetch", () => {
     expect(document.head.querySelector('link[rel="prefetch"]')?.getAttribute("href")).toBe(new URL("/plain", location.href).href);
   });
 
+  it("takes its <link rel=prefetch> out once fetched, and asks again on another page", async () => {
+    const href = new URL("/again", location.href).href;
+    const links = () => Array.from(document.head.querySelectorAll('link[rel="prefetch"]')).filter((link) => link.getAttribute("href") === href);
+    stubFetch('<html><body><span data-yx-prefetch="load" data-yx-prefetch-url="/again">again</span></body></html>');
+    document.body.innerHTML = '<a href="/again" data-yx-prefetch="load">again</a>';
+    await flush();
+    expect(links()).toHaveLength(1);
+    links()[0]!.dispatchEvent(new Event("load"));
+    expect(links()).toHaveLength(0);
+    // Same page: already asked for, not again.
+    document.body.insertAdjacentHTML("beforeend", '<a href="/again" data-yx-prefetch="load">again</a>');
+    await flush();
+    expect(links()).toHaveLength(0);
+    await yerd.page.load("/elsewhere", true);
+    await flush();
+    expect(links()).toHaveLength(1);
+    links()[0]!.dispatchEvent(new Event("error"));
+    expect(links()).toHaveLength(0);
+  });
+
   it("answers yerd.fetch from a fresh JSON prefetch", async () => {
     const fetch = stubFetch('{"n":1}', "application/json");
     yerd.net.prefetch("/api/stats", "json");
