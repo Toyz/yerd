@@ -505,11 +505,20 @@ export function formAction(value: ActionLambda | Action<unknown> | BoundAction):
     return encodeURIComponent(value);
   });
   // Keep the page's query string when posting to the page's own route, so the
-  // action sees the same @query values (filters, sort) as the page did.
-  const samePage = url === ctx.path;
+  // action sees the same @query values (filters, sort) as the page did. The
+  // page's own URL may spell a param differently ("/u/@ada" for "/u/%40ada").
+  const samePage = url === ctx.path || decodedPath(url) === decodedPath(ctx.path);
   const holes = isBoundAction(value) ? value.holes : undefined;
   const token = ctx.signAction(holes?.length ? { c: def.className, a: info.name, p: args, h: holes } : { c: def.className, a: info.name, p: args });
   return { url: samePage ? url + ctx.url.search : url, token, ...(holes?.length ? { holes } : {}) };
+}
+
+function decodedPath(path: string): string {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
 }
 
 /**

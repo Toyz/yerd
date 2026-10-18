@@ -410,6 +410,11 @@ describe("params, query and other routes", () => {
     ["/edge/items/42?tab=a&b=2", "/edge/items/42?tab=a&b=2"],
     ["/edge/items/a%20b%2Fc", "/edge/items/a%20b%2Fc"],
     ["/edge/items/%3Cx%3E%22", "/edge/items/%3Cx%3E%22"],
+    // The page's own URL spells the param differently from encodeURIComponent: still the same page.
+    ["/edge/items/@ada?tab=x", "/edge/items/%40ada?tab=x"],
+    ["/edge/items/a,b?tab=x", "/edge/items/a%2Cb?tab=x"],
+    ["/edge/items/%3cx?tab=x", "/edge/items/%3Cx?tab=x"],
+    ["/edge/files/a/b.txt?v=2", "/edge/files/a%2Fb.txt?v=2"],
   ])("a form on %s posts to %s", async (path, expected) => {
     const html = await page(path);
     const url = /<form action="([^"]+)"/.exec(html)![1]!.replaceAll("&amp;", "&");
