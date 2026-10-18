@@ -11,8 +11,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { brotliCompress, gzip } from "node:zlib";
-import { createKey } from "../decorators/keys.js";
-import { assertPublicInstance } from "../decorators/util.js";
+import { metadataOf } from "../decorators/keys.js";
+import { createMethodDecorator, type DecoratorTarget } from "../decorators/kit.js";
 import type { Outgoing } from "../respond/coerce.js";
 import { Logger } from "../log/logger.js";
 import { parseDuration } from "../util/duration.js";
@@ -147,8 +147,27 @@ export interface SitemapEntry extends SitemapFields {
   alternates?: Array<{ hreflang: string; href: string }>;
 }
 
-/** The method a route class's @sitemap decorated. */
-export const SITEMAP = createKey<string | symbol>("sitemap");
+/** Per class: the method its own @sitemap decorated (a subclass's own one wins over its parent's). */
+const ownSitemap = new WeakMap<object, string | symbol>();
+
+const SITEMAP = createMethodDecorator("sitemap", {
+  bare: true,
+  apply(context) {
+    if (ownSitemap.has(context.metadata)) {
+      throw new TypeError(`@sitemap: ${String(context.name)} is a second @sitemap method on its class (one per route class)`);
+    }
+    ownSitemap.set(context.metadata, context.name);
+  },
+});
+
+/** The method a route class's @sitemap decorated: its own, else the nearest parent's. */
+export function sitemapMethod(target: DecoratorTarget): string | symbol | undefined {
+  for (let metadata: object | null = typeof target === "function" ? metadataOf(target) : target; metadata && metadata !== Object.prototype; metadata = Object.getPrototypeOf(metadata)) {
+    const method = ownSitemap.get(metadata);
+    if (method !== undefined) return method;
+  }
+  return undefined;
+}
 
 /**
  * Mark the route method that lists the URLs of a route with params. It runs
@@ -169,12 +188,8 @@ export const SITEMAP = createKey<string | symbol>("sitemap");
  * }
  * ```
  */
-export function sitemap(_method: Function, context: ClassMethodDecoratorContext): void {
-  assertPublicInstance(context, "@sitemap");
-  if (SITEMAP.hasOwn(context.metadata)) {
-    throw new TypeError(`@sitemap: ${String(context.name)} is a second @sitemap method on its class (one per route class)`);
-  }
-  SITEMAP.set(context.metadata, context.name);
+export function sitemap(method: Function, context: ClassMethodDecoratorContext): void {
+  SITEMAP(method, context);
 }
 
 /** Throw a TypeError naming `where` unless changefreq and priority are values sitemaps.org allows. */

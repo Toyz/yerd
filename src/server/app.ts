@@ -17,15 +17,15 @@ import {
 import { jsx, type Component } from "../jsx/jsx-runtime.js";
 import { coerce, type Outgoing } from "../respond/coerce.js";
 import { BadRequest, Forbidden, jsonBody, MethodNotAllowed, NotAcceptable, NotFound, YerdError } from "../respond/errors.js";
-import { LONG_LIVED, STREAMING, sse } from "../respond/stream.js";
-import { SITEMAP, Sitemap, type SitemapEntry, type SitemapOptions, type SitemapRoute } from "../seo/sitemap.js";
+import { LONG_LIVED, isStreaming, sse } from "../respond/stream.js";
+import { Sitemap, sitemapMethod, type SitemapEntry, type SitemapOptions, type SitemapRoute } from "../seo/sitemap.js";
 import { Channels } from "../live/channels.js";
 import { CLOCK_PATH, CUES_PATH, Cues, DEFAULT_ROOM, isPublicRoom, validRoom, type CuesOptions } from "../live/cues.js";
 import { TestClient, answer } from "./in-process.js";
 import { compilePath } from "../log/paths.js";
 import { cssBundleClasses, cssBundleHash, cssBundleText, resetCss, resetCssBundle, useCssBundle } from "../render/css.js";
 import { EventTransport, Events, eventName, handlesOf, hasEventHandlers, onsOf } from "../events/events.js";
-import { ACTIONS, ActionForm, checkActionToken, fillHoles, resolveSecrets, safeBack, verifyAction } from "../actions/action.js";
+import { ActionForm, actionNames, checkActionToken, fillHoles, resolveSecrets, safeBack, verifyAction } from "../actions/action.js";
 import { CLASS_GUARDS, METHOD_GUARDS, guardRegistry, isGuardRef, resetGuardRegistry, type GuardSpec } from "../decorators/guards.js";
 import { SessionManager, checkSessionOptions } from "../session/manager.js";
 import type { SessionOptions } from "../session/session.js";
@@ -304,8 +304,8 @@ function routeNode(byVerb: ReadonlyMap<Verb, readonly Handler[]>, pendingRuns: A
   const candidates = [...new Set([...byVerb.values()].flat())];
   const actions = new Map<string, Map<string, ActionCall>>();
   for (const owner of candidates) {
-    const names = ACTIONS.from(owner.def.metadata);
-    if (!names?.size) continue;
+    const names = actionNames(owner.def.metadata);
+    if (names.length === 0) continue;
     let byName = actions.get(owner.def.className);
     if (!byName) actions.set(owner.def.className, (byName = new Map()));
     for (const name of names) {
@@ -1087,7 +1087,7 @@ export class YerdApp {
       const methodLayouts = METHOD_LAYOUTS.entries(def.metadata);
       const classGuards = [...this.#appGuards, ...resolved.guards, ...CLASS_GUARDS.get(def.metadata)];
       // Actions run behind the class's guards plus their own method guards.
-      for (const name of ACTIONS.from(def.metadata)?.keys() ?? []) {
+      for (const name of actionNames(def.metadata)) {
         for (const spec of [...classGuards, ...METHOD_GUARDS.get(def.metadata, name)]) {
           if (typeof spec === "string") referencedGuards.push([`${def.className}.${name}`, spec]);
         }
@@ -1398,13 +1398,12 @@ export class YerdApp {
    * front of every route and say nothing about whether a page is public.
    */
   #sitemapRoute({ def, pattern, lifetime, sitemap }: MappedRoute, gets: readonly Handler[]): SitemapRoute {
-    const streaming = STREAMING.from(def.metadata);
     const html = gets.filter(
-      (h) => h.def === def && !streaming?.has(h.method) && (!h.accepts || h.accepts.some((t) => t === "text/html" || t === "text/*" || t === "*/*")),
+      (h) => h.def === def && !isStreaming(def.metadata, h.method) && (!h.accepts || h.accepts.some((t) => t === "text/html" || t === "text/*" || t === "*/*")),
     );
     const plain = html.filter((h) => !h.when);
     const page = plain.length > 0 ? plain : html;
-    const method = SITEMAP.from(def.metadata);
+    const method = sitemapMethod(def.metadata);
     return {
       className: def.className,
       pattern,

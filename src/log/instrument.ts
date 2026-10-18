@@ -29,6 +29,7 @@
 import type { Level } from "./ilogger.js";
 import { compilePath, prunePaths } from "./paths.js";
 import { activeBinding, enabledHere, withSpan } from "./span.js";
+import { createMethodDecorator } from "../decorators/kit.js";
 
 const UNSEEN = Symbol("unseen");
 
@@ -290,49 +291,61 @@ export function className(self: unknown): string {
  */
 export function instrument<This, Args extends unknown[], R, const S extends readonly string[] = []>(
   options: InstrumentOptions<This, Args, S> = {},
-) {
-  return function (method: (this: This, ...args: Args) => R, context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => R>) {
-    const names = parameterNames(method);
-    const methodName = String(context.name);
-    const skip = compileSkip((options.skip ?? []) as readonly string[], names, methodName);
-    const level = options.level ?? "debug";
-    // Target and span name for the last class seen calling: a subclass
-    // shares the method but has its own name, so they're per class, worked
-    // out on its first call rather than on every one.
-    let seen: unknown = UNSEEN;
-    let target = "";
-    let name = "";
-    return function (this: This, ...args: Args): R {
-      const cls = (this as { constructor?: unknown } | null | undefined)?.constructor;
-      if (cls !== seen) {
-        seen = cls;
-        target = options.target ?? className(this);
-        name = options.name ?? `${target}::${methodName}`;
-      }
-      // Disabled: call it directly, before building anything for the span.
-      if (!enabledHere(activeBinding(), level, target, name)) return method.apply(this, args);
-      const self = this;
-      return withSpan(
-        {
-          name,
-          target,
-          level,
-          // withSpan calls it only after its own filter check.
-          fields: () => {
-            let fields: Record<string, unknown> = {};
-            if (!options.skipAll) {
-              args.forEach((value, i) => (fields[names[i] ?? `arg${i}`] = value));
-              // A copy without the skipped fields; the arguments themselves are never touched.
-              if (skip.length) fields = prunePaths(fields, skip) as Record<string, unknown>;
-            }
-            if (options.fields) Object.assign(fields, options.fields(self, args));
-            return fields;
-          },
-          onReturn: options.ret === false ? undefined : (value) => (value === undefined ? undefined : { ret: value }),
-          err: options.err,
+): (method: (this: This, ...args: Args) => R, context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => R>) => (this: This, ...args: Args) => R {
+  return INSTRUMENT(options as InstrumentOptions<unknown, unknown[], readonly string[]>) as never;
+}
+
+/** Works on any method, static and #private ones too: it only wraps. */
+const INSTRUMENT = createMethodDecorator("instrument", {
+  anyMember: true,
+  wrap: (method, context, options: InstrumentOptions<unknown, unknown[], readonly string[]>) => instrumented(method as (...args: unknown[]) => unknown, context, options),
+});
+
+function instrumented<This, Args extends unknown[], R>(
+  method: (this: This, ...args: Args) => R,
+  context: ClassMethodDecoratorContext,
+  options: InstrumentOptions<This, Args, readonly string[]>,
+): (this: This, ...args: Args) => R {
+  const names = parameterNames(method);
+  const methodName = String(context.name);
+  const skip = compileSkip((options.skip ?? []) as readonly string[], names, methodName);
+  const level = options.level ?? "debug";
+  // Target and span name for the last class seen calling: a subclass
+  // shares the method but has its own name, so they're per class, worked
+  // out on its first call rather than on every one.
+  let seen: unknown = UNSEEN;
+  let target = "";
+  let name = "";
+  return function (this: This, ...args: Args): R {
+    const cls = (this as { constructor?: unknown } | null | undefined)?.constructor;
+    if (cls !== seen) {
+      seen = cls;
+      target = options.target ?? className(this);
+      name = options.name ?? `${target}::${methodName}`;
+    }
+    // Disabled: call it directly, before building anything for the span.
+    if (!enabledHere(activeBinding(), level, target, name)) return method.apply(this, args);
+    const self = this;
+    return withSpan(
+      {
+        name,
+        target,
+        level,
+        // withSpan calls it only after its own filter check.
+        fields: () => {
+          let fields: Record<string, unknown> = {};
+          if (!options.skipAll) {
+            args.forEach((value, i) => (fields[names[i] ?? `arg${i}`] = value));
+            // A copy without the skipped fields; the arguments themselves are never touched.
+            if (skip.length) fields = prunePaths(fields, skip) as Record<string, unknown>;
+          }
+          if (options.fields) Object.assign(fields, options.fields(self, args));
+          return fields;
         },
-        () => method.apply(self, args),
-      );
-    };
+        onReturn: options.ret === false ? undefined : (value) => (value === undefined ? undefined : { ret: value }),
+        err: options.err,
+      },
+      () => method.apply(self, args),
+    );
   };
 }

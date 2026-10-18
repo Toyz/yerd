@@ -17,8 +17,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createKey } from "../decorators/keys.js";
-import { assertPublicInstance } from "../decorators/util.js";
+import { createMethodDecorator, type DecoratorTarget } from "../decorators/kit.js";
 import { resolveRoute, routeRegistry, type RouteDef } from "../decorators/route.js";
 import { BadRequest, Forbidden, ValidationFailed } from "../respond/errors.js";
 import { Logger } from "../log/logger.js";
@@ -394,7 +393,6 @@ interface ActionInfo {
   metadata: DecoratorMetadataObject;
 }
 
-export const ACTIONS = createKey<Set<string>>("actions");
 const actionFunctions = new WeakMap<Function, ActionInfo>();
 
 const BOUND: unique symbol = Symbol.for("yerd.bound-action");
@@ -460,26 +458,37 @@ const capturing = new AsyncLocalStorage<{ fn?: Function; args?: unknown; calls: 
  * ```
  */
 export function action<M extends Action<any>>(method: M, context: ClassMethodDecoratorContext): M {
-  assertPublicInstance(context, "@action", { stringNamed: true });
-  ACTIONS.ownSet<string | symbol>(context.metadata).add(context.name);
-  const info = { name: context.name, metadata: context.metadata };
-  // Called inside an action lambda while the page renders, the action only
-  // says who it is and what it was given; otherwise it runs.
-  const wrapped = function (this: unknown, args: unknown, form?: ActionForm): unknown {
-    const box = capturing.getStore();
-    if (box) {
-      if (box.done) return undefined;
-      box.calls++;
-      box.fn = wrapped;
-      box.args = args;
-      return undefined;
-    }
-    return method.call(this, args, form);
-  };
-  Object.defineProperty(wrapped, "name", { value: method.name });
-  actionFunctions.set(method, info);
-  actionFunctions.set(wrapped, info);
-  return wrapped as unknown as M;
+  return ACTION(method, context) as M;
+}
+
+const ACTION = createMethodDecorator("action", {
+  bare: true,
+  stringNamed: true,
+  wrap(method, context) {
+    const info = { name: context.name as string, metadata: context.metadata };
+    // Called inside an action lambda while the page renders, the action only
+    // says who it is and what it was given; otherwise it runs.
+    const wrapped = function (this: unknown, args: unknown, form?: ActionForm): unknown {
+      const box = capturing.getStore();
+      if (box) {
+        if (box.done) return undefined;
+        box.calls++;
+        box.fn = wrapped;
+        box.args = args;
+        return undefined;
+      }
+      return method.call(this, args, form);
+    };
+    Object.defineProperty(wrapped, "name", { value: method.name });
+    actionFunctions.set(method, info);
+    actionFunctions.set(wrapped, info);
+    return wrapped;
+  },
+});
+
+/** A route class's @action method names, in the order they were declared. */
+export function actionNames(target: DecoratorTarget): string[] {
+  return [...ACTION.entries(target).keys()] as string[];
 }
 
 /** Stand-in form for action lambdas; the action never sees it. */

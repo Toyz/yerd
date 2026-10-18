@@ -18,12 +18,9 @@ import { YerdResponse } from "./response.js";
 import { Logger } from "../log/logger.js";
 import { maybeContext } from "../server/context.js";
 import { isAsyncIterable, isDecoratorContext } from "../decorators/util.js";
-import { createKey } from "../decorators/keys.js";
+import { createMethodDecorator, type DecoratorTarget } from "../decorators/kit.js";
 
 const streamLog = new Logger("yerd::stream");
-
-/** Handler methods decorated with @sse or @ndjson: the sitemap leaves their routes out without calling them. */
-export const STREAMING = createKey<Set<string | symbol>>("streaming");
 
 /** Marks a response as long-lived: headers are sent at once, and shutdown ends it instead of waiting. */
 export const LONG_LIVED = "x-yerd-long-lived";
@@ -383,11 +380,6 @@ function sseResponse(source: AsyncIterable<unknown>, options: SseOptions = {}): 
 type StreamMethod = (this: any, ...args: any[]) => AsyncIterable<unknown>;
 type StreamDecorator = <M extends StreamMethod>(method: M, context: ClassMethodDecoratorContext) => M;
 
-function markStreaming(context: ClassMethodDecoratorContext): void {
-  STREAMING.ownSet<string | symbol>(context.metadata).add(context.name);
-}
-
-
 /**
  * The options form's argument must be options. A function here is nearly
  * always a generator method passed uncalled (`return ndjson(this.rows)`),
@@ -406,10 +398,25 @@ function streamOptions<O>(helper: string, value: unknown): O | undefined {
   return value as O;
 }
 
-function wrapMethod(method: StreamMethod, respond: (source: AsyncIterable<unknown>) => YerdResponse): StreamMethod {
+function wrapMethod(method: Function, respond: (source: AsyncIterable<unknown>) => YerdResponse): StreamMethod {
   return function (this: unknown, ...args: unknown[]) {
-    return respond(method.apply(this, args)) as unknown as AsyncIterable<unknown>;
+    return respond((method as StreamMethod).apply(this, args)) as unknown as AsyncIterable<unknown>;
   };
+}
+
+/** The method decorator forms of ndjson() and sse(): bare or with options, wrapping a generator method. */
+const NDJSON = createMethodDecorator("ndjson", {
+  bare: true,
+  wrap: (method, _context, options?: NdjsonOptions) => wrapMethod(method, (s) => ndjsonResponse(s, options)),
+});
+const SSE = createMethodDecorator("sse", {
+  bare: true,
+  wrap: (method, _context, options?: SseOptions) => wrapMethod(method, (s) => sseResponse(s, options)),
+});
+
+/** Whether a handler method is an @sse or @ndjson stream: the sitemap leaves such routes out without calling them. */
+export function isStreaming(target: DecoratorTarget, method: string | symbol): boolean {
+  return SSE.has(target, method) || NDJSON.has(target, method);
 }
 
 /**
@@ -426,15 +433,8 @@ export function ndjson<M extends StreamMethod>(method: M, context: ClassMethodDe
 export function ndjson(options?: NdjsonOptions): StreamDecorator;
 export function ndjson(a?: unknown, b?: unknown): unknown {
   if (isAsyncIterable(a)) return ndjsonResponse(a, b as NdjsonOptions | undefined);
-  if (typeof a === "function" && isDecoratorContext(b, "method")) {
-    markStreaming(b);
-    return wrapMethod(a as StreamMethod, (s) => ndjsonResponse(s));
-  }
-  const options = streamOptions<NdjsonOptions>("ndjson", a);
-  return (method: StreamMethod, context: ClassMethodDecoratorContext) => {
-    markStreaming(context);
-    return wrapMethod(method, (s) => ndjsonResponse(s, options));
-  };
+  if (typeof a === "function" && isDecoratorContext(b, "method")) return NDJSON(a, b);
+  return NDJSON(streamOptions<NdjsonOptions>("ndjson", a));
 }
 
 /**
@@ -462,13 +462,6 @@ export function sse<M extends StreamMethod>(method: M, context: ClassMethodDecor
 export function sse(options?: SseOptions): StreamDecorator;
 export function sse(a?: unknown, b?: unknown): unknown {
   if (isAsyncIterable(a)) return sseResponse(a, b as SseOptions | undefined);
-  if (typeof a === "function" && isDecoratorContext(b, "method")) {
-    markStreaming(b);
-    return wrapMethod(a as StreamMethod, (s) => sseResponse(s));
-  }
-  const options = streamOptions<SseOptions>("sse", a);
-  return (method: StreamMethod, context: ClassMethodDecoratorContext) => {
-    markStreaming(context);
-    return wrapMethod(method, (s) => sseResponse(s, options));
-  };
+  if (typeof a === "function" && isDecoratorContext(b, "method")) return SSE(a, b);
+  return SSE(streamOptions<SseOptions>("sse", a));
 }
