@@ -1441,6 +1441,9 @@ export function yerdRuntime(): void {
     return el.getAttribute("data-yx-trigger")?.trim().split(/\s+/).join(" ");
   }
 
+  /** Events an action trigger has already answered, so a trigger further up leaves them alone. */
+  const triggered = new WeakSet<Event>();
+
   function initTriggers(): void {
     for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-yx-trigger]"))) {
       const spec = triggerOf(el)!;
@@ -1492,10 +1495,13 @@ export function yerdRuntime(): void {
         // The trigger may have been morphed away or changed since.
         if (triggerOf(el) !== spec) return;
         if (key && (e as KeyboardEvent).key !== key) return;
+        // The innermost action wins: a button's click doesn't also fire its card's.
+        // Marked rather than stopped, so the event still bubbles on to everyone else
+        // (the runtime's own listeners, the app's).
+        if (triggered.has(e)) return;
+        triggered.add(e);
         // A click on a link or a submit button would navigate or submit too.
         if (event === "click" || event === "submit" || key) e.preventDefault();
-        // The innermost action wins: a button's click doesn't also fire its card's.
-        e.stopPropagation();
         clearTimeout(timer);
         if (wait) timer = setTimeout(() => void runAction(el), wait);
         else void runAction(el);
