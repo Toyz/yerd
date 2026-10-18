@@ -79,12 +79,15 @@ export class SessionManager {
     const raw = cookies[this.#cookieName(secure)];
     const now = Date.now();
     const payload = raw ? unseal<CookiePayload>(this.secrets, raw) : undefined;
-    if (!payload || payload.e < now) return { session: new Session(undefined, undefined), payload: undefined, secure };
+    // Written as "not unexpired" so a payload or record without a usable time
+    // (sealed by something else with the app secret, a custom store's bad
+    // record) counts as expired rather than never expiring.
+    if (!payload || !(payload.e >= now)) return { session: new Session(undefined, undefined), payload: undefined, secure };
 
     let record: SessionRecord | undefined;
     if (this.#store.kind === "cookie") record = payload.r;
     else if (payload.i) record = await this.#store.get(payload.i);
-    if (!record || record.createdAt + this.#absolute < now) {
+    if (!record || !(record.createdAt + this.#absolute >= now)) {
       return { session: new Session(undefined, undefined), payload: undefined, secure };
     }
     return { session: new Session(record, payload.i), payload, secure };
