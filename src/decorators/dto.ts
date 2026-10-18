@@ -22,7 +22,20 @@ import { createKey } from "./keys.js";
 import type { FieldOutput, IsValidPipe, Pipe, PipeError, Transform, Validator } from "./request.js";
 import { email, uuid } from "./request.js";
 
-/** One problem found while validating, with a path like `address.city` or `tags[2]`. */
+/**
+ * One problem found while validating, with a path like `address.city` or
+ * `tags[2]`. A failed DTO throws a 400 HttpError whose `details.issues` lists
+ * every one; catch it to show them your own way.
+ *
+ * ```ts
+ * try {
+ *   parse(Signup, raw);
+ * } catch (error) {
+ *   if (!(error instanceof HttpError) || !error.details) throw error;
+ *   for (const { path, message } of error.details.issues as Issue[]) console.log(`${path}: ${message}`);
+ * }
+ * ```
+ */
 export interface Issue {
   /** Where the problem is: a field path, or "(root)" for the value itself. */
   path: string;
@@ -32,7 +45,17 @@ export interface Issue {
 
 const INVALID: unique symbol = Symbol("yerd.invalid");
 
-/** How to check and convert one value. Every `is.*` decorator carries one. */
+/**
+ * How to check and convert one value. Every `is.*` decorator carries one as
+ * `.spec`. Apps rarely touch it; it's how `is.array` checks its items, and it
+ * lets tests or tooling run one rule on its own.
+ *
+ * ```ts
+ * const issues: Issue[] = [];
+ * is.int().spec.parse("42", "age", issues);  // 42
+ * is.int().spec.parse("old", "age", issues); // issues: [{ path: "age", message: "Expected an integer" }]
+ * ```
+ */
 export interface Spec<T> {
   /** Whether a missing value is allowed. */
   readonly optional: boolean;
@@ -49,14 +72,33 @@ export const DTO_FIELDS = createKey<DtoField[]>("dto:fields");
 
 /**
  * A DTO class: constructible with no arguments, its fields decorated with
- * `is.*`. Field initializers act as defaults for missing values.
+ * `is.*`. Field initializers act as defaults for missing values. Use it to
+ * type helpers that take any DTO.
+ *
+ * ```ts
+ * export async function loadJson<T>(cls: DtoClass<T>, path: string): Promise<T> {
+ *   return parse(cls, JSON.parse(await readFile(path, "utf8")));
+ * }
+ *
+ * const config = await loadJson(AppConfig, "config.json"); // an AppConfig
+ * ```
  */
 export type DtoClass<T> = new () => T;
 
 /**
  * The decorator an `is.*` factory returns. If the field's declared type can't
  * hold the validated value, the return type is something TypeScript rejects at
- * the `@`.
+ * the `@`. Name it to keep a rule in a constant and reuse it, on fields or as
+ * `is.array`'s item.
+ *
+ * ```ts
+ * const tag: IsDecorator<string> = is.string({ transform: [trim, lower], validate: length(1, 30) });
+ *
+ * class Post {
+ *   @tag category!: string;
+ *   @is.array(tag, { max: 5 }) tags!: string[];
+ * }
+ * ```
  */
 export type IsDecorator<T> = (<This, V>(
   value: undefined,
@@ -71,17 +113,33 @@ export type IsDecorator<T> = (<This, V>(
  * a pipeline can change the type and validators are typed by its output.
  */
 export interface IsOptions<B, O = unknown> {
-  /** Missing (or `undefined`) is allowed and leaves the field undefined, or its initializer. */
+  /**
+   * Missing (or `undefined`) is allowed and leaves the field undefined, or
+   * its initializer. The field's type must then allow undefined; a field with
+   * an initializer doesn't need `optional` at all.
+   *
+   * ```ts
+   * @is.string({ optional: true }) nickname?: string;
+   * ```
+   */
   optional?: boolean;
   /**
    * Transform(s) run after the type check, left to right; each takes the
    * previous one's output, so the last decides the field's type:
    * `[trim, lower]`, or `[trim, toUuid]` for a branded `Uuid`. Throw to reject.
+   *
+   * ```ts
+   * @is.string({ transform: [trim, lower] }) handle!: string;
+   * ```
    */
   transform?: Pipe;
   /**
    * Validator(s) run last, on the transformed value. `false` or a string
    * rejects it. Inline functions need their parameter annotated.
+   *
+   * ```ts
+   * @is.int({ validate: [between(1, 100), (n: number) => n % 5 === 0 || "Must be a multiple of 5"] }) step!: number;
+   * ```
    */
   validate?: Validator<FieldOutput<O, B>> | readonly Validator<FieldOutput<O, B>>[];
 }
@@ -182,13 +240,45 @@ const NUMBER = /^-?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i;
 /**
  * Field decorators for DTO classes. Numbers and booleans also accept their
  * string forms (`"42"`, `"true"`, `"on"`), so the same DTO works for JSON and
- * URL-encoded form bodies.
+ * URL-encoded form bodies. Every one takes `optional`, `transform` and
+ * `validate` (see IsOptions). DTO fields are plain fields, not accessors; pass
+ * the class to `@body`, `form.parse()` or `parse()`.
+ *
+ * ```ts
+ * class Address {
+ *   @is.string({ transform: trim, validate: length(1) }) city!: string;
+ *   @is.string({ optional: true }) zip?: string;
+ * }
+ *
+ * class Signup {
+ *   @is.email() email!: string;
+ *   @is.int({ validate: between(13, 120) }) age!: number;
+ *   @is.oneOf(["free", "pro"]) plan: "free" | "pro" = "free";
+ *   @is.boolean({ optional: true }) newsletter?: boolean;
+ *   @is.object(Address, { optional: true }) address?: Address;
+ *   @is.array(is.string({ transform: trim }), { optional: true, max: 5 }) tags?: string[];
+ * }
+ * ```
  */
 export const is = {
-  /** A string, as is. No coercion from other types. */
+  /**
+   * A string, as is. No coercion from other types, and no trimming unless
+   * you add `trim`.
+   *
+   * ```ts
+   * @is.string({ transform: trim, validate: length(1, 60) }) name!: string;
+   * ```
+   */
   string: primitive<string>((v) => (typeof v === "string" ? v : INVALID), "a string"),
 
-  /** A safe integer, or a string of digits with an optional leading minus (surrounding spaces allowed, like is.number). */
+  /**
+   * A safe integer, or a string of digits with an optional leading minus
+   * (surrounding spaces allowed, like is.number).
+   *
+   * ```ts
+   * @is.int({ validate: between(1, 99) }) qty!: number;
+   * ```
+   */
   int: primitive<number>((v) => {
     if (typeof v === "number") return Number.isSafeInteger(v) ? v : INVALID;
     if (typeof v === "string" && INTEGER.test(v.trim())) {
@@ -198,7 +288,13 @@ export const is = {
     return INVALID;
   }, "an integer"),
 
-  /** A finite number, or a decimal string (exponents allowed). */
+  /**
+   * A finite number, or a decimal string (exponents allowed).
+   *
+   * ```ts
+   * @is.number({ validate: (n: number) => n > 0 || "Must be positive" }) price!: number;
+   * ```
+   */
   number: primitive<number>((v) => {
     if (typeof v === "number") return Number.isFinite(v) ? v : INVALID;
     if (typeof v === "string" && NUMBER.test(v.trim())) {
@@ -212,6 +308,10 @@ export const is = {
   /**
    * A boolean, or "true" / "1" / "on" and "false" / "0" / "off". An unchecked
    * checkbox sends nothing, so give the field a default or `optional`.
+   *
+   * ```ts
+   * @is.boolean() agree = false; // <input type="checkbox" name="agree"> sends "on" when ticked
+   * ```
    */
   boolean: primitive<boolean>((v) => {
     if (typeof v === "boolean") return v;
@@ -220,7 +320,13 @@ export const is = {
     return INVALID;
   }, "a boolean"),
 
-  /** One of these exact strings; the field type is their union. */
+  /**
+   * One of these exact strings; the field type is their union.
+   *
+   * ```ts
+   * @is.oneOf(["low", "high"], { optional: true }) priority?: "low" | "high";
+   * ```
+   */
   oneOf<const V extends string, const O extends IsOptions<V, O> = {}>(values: readonly V[], options?: O): Checked<O, V> {
     const allowed = new Set<string>(values);
     return makeDecorator({
@@ -232,7 +338,14 @@ export const is = {
     }) as unknown as Checked<O, V>;
   },
 
-  /** A nested DTO. */
+  /**
+   * A nested DTO, validated recursively; its issues get paths like
+   * `shipping.city`.
+   *
+   * ```ts
+   * @is.object(Address) shipping!: Address;
+   * ```
+   */
   object<T, const O extends IsOptions<T, O> = {}>(dto: DtoClass<T>, options?: O): Checked<O, T> {
     return makeDecorator({
       optional: options?.optional ?? false,
@@ -245,7 +358,11 @@ export const is = {
 
   /**
    * An array whose items match another `is.*` spec. A lone value (a form field
-   * sent once) counts as a one-item array.
+   * sent once) counts as a one-item array. `min` and `max` bound the count.
+   *
+   * ```ts
+   * @is.array(is.int(), { min: 1, max: 10 }) seats!: number[];
+   * ```
    */
   array<T, const O extends IsOptions<T[], O> & { min?: number; max?: number } = {}>(
     item: IsDecorator<T>,
@@ -289,7 +406,14 @@ export const is = {
     }) as unknown as Checked<O, File>;
   },
 
-  /** Several uploaded files under one name (one file counts as a list of one). */
+  /**
+   * Several uploaded files under one name (one file counts as a list of
+   * one). Takes `types` and `maxSize` like is.file(), plus `min` and `max`.
+   *
+   * ```ts
+   * @is.files({ types: ["image/*"], max: 5, optional: true }) photos?: File[];
+   * ```
+   */
   files<const O extends IsOptions<File[], O> & FileRules & { min?: number; max?: number } = {}>(options?: O): Checked<O, File[]> {
     return makeDecorator({
       optional: options?.optional ?? false,
@@ -325,7 +449,14 @@ export const is = {
     }, options?.version !== undefined ? `a version ${options.version} UUID` : "a UUID")(options as never) as unknown as Checked<O, string>;
   },
 
-  /** An email address, trimmed (see the `email` validator for how loose the check is). */
+  /**
+   * An email address, trimmed (see the `email` validator for how loose the
+   * check is). Not lowercased; add `transform: lower` if you compare them.
+   *
+   * ```ts
+   * @is.email({ transform: lower }) email!: string;
+   * ```
+   */
   email<const O extends IsOptions<string, O> = {}>(options?: O): Checked<O, string> {
     const check = email();
     return primitive<string>((v) => {
@@ -338,6 +469,11 @@ export const is = {
   /**
    * An absolute URL, normalized (`new URL(v).href`). Only http and https
    * unless `protocols` says otherwise, so a `javascript:` link can't sneak in.
+   *
+   * ```ts
+   * @is.url({ optional: true }) website?: string;
+   * @is.url({ protocols: ["https", "mailto"] }) contact!: string;
+   * ```
    */
   url<const O extends IsOptions<string, O> & { protocols?: readonly string[] } = {}>(options?: O): Checked<O, string> {
     const protocols = (options?.protocols ?? ["http", "https"]).map((p) => p.replace(/:$/, "").toLowerCase() + ":");
@@ -351,7 +487,12 @@ export const is = {
   /**
    * A date: an ISO 8601 string (`2026-10-17`, `2026-10-17T09:30:00Z`) or a
    * Date, as a Date. A date-only string is midnight UTC. Impossible dates
-   * (`2026-02-30`) are rejected rather than rolled over.
+   * (`2026-02-30`) are rejected rather than rolled over. Pairs with
+   * `<input type="date">`, which sends the date-only form.
+   *
+   * ```ts
+   * @is.date() due!: Date;
+   * ```
    */
   date<const O extends IsOptions<Date, O> = {}>(options?: O): Checked<O, Date> {
     return primitive<Date>((v) => {
@@ -369,7 +510,19 @@ export const is = {
     }, "an ISO 8601 date")(options as never) as unknown as Checked<O, Date>;
   },
 
-  /** Anything a function can turn `unknown` into. Throw (an HttpError or any Error) to reject. */
+  /**
+   * Anything a function can turn `unknown` into. Throw (an HttpError or any
+   * Error) to reject; the error's message becomes the issue. The field type
+   * is the function's return type.
+   *
+   * ```ts
+   * @is.custom((v) => {
+   *   if (typeof v !== "string" || !/^[A-Z]{3}$/.test(v)) throw new Error("Expected a currency code");
+   *   return v;
+   * })
+   * currency!: string;
+   * ```
+   */
   custom<T, const O extends IsOptions<T, O> = {}>(parse: (value: unknown) => T, options?: O): Checked<O, T> {
     return makeDecorator({
       optional: options?.optional ?? false,
@@ -424,7 +577,18 @@ function parseDto<T>(dto: DtoClass<T>, raw: unknown, path: string, issues: Issue
 
 /**
  * Validate `raw` against a DTO class. Returns an instance, or throws a 400
- * HttpError whose `details` lists every issue.
+ * HttpError whose `details.issues` lists every issue. Inside a request
+ * `@body(Dto)` and `form.parse(Dto)` do this for you; use parse() for
+ * anything else: queue messages, config files, webhook payloads.
+ *
+ * ```ts
+ * class EmailJob {
+ *   @is.email() to!: string;
+ *   @is.string() template!: string;
+ * }
+ *
+ * const job = parse(EmailJob, JSON.parse(message)); // throws a 400 HttpError listing every issue
+ * ```
  */
 export function parse<T>(dto: DtoClass<T>, raw: unknown): T {
   const issues: Issue[] = [];
@@ -433,7 +597,19 @@ export function parse<T>(dto: DtoClass<T>, raw: unknown): T {
   return result;
 }
 
-/** A transform that validates into a DTO, for use in any `transform` option. */
+/**
+ * A transform that validates into a DTO, for use in any `transform` option:
+ * a JSON query parameter, or a body that may be absent (`@body(Dto)` alone
+ * makes it required).
+ *
+ * ```ts
+ * @route("/issues")
+ * export class Issues {
+ *   @query("filter", { transform: [JSON.parse, dto(Filter)] }) accessor filter: Filter | undefined;
+ *   @body({ transform: dto(Signup) }) accessor signup!: Promise<Signup | undefined>;
+ * }
+ * ```
+ */
 export function dto<T>(cls: DtoClass<T>): Transform<unknown, T> {
   return (raw) => parse(cls, raw);
 }

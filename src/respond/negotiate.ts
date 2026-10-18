@@ -56,7 +56,15 @@ interface Range {
 /**
  * Parse an Accept header into media ranges with their q-values, in header
  * order (not sorted). q is clamped to 0-1; a malformed q counts as 0. A
- * missing header gives an empty list.
+ * missing header gives an empty list. `@accepts` and negotiate() cover the
+ * usual cases; this is for deciding something else by Accept yourself.
+ *
+ * ```ts
+ * parseAccept("application/json, text/*;q=0.5");
+ * // [{ type: "application", subtype: "json", q: 1 }, { type: "text", subtype: "*", q: 0.5 }]
+ *
+ * const wantsCsv = parseAccept(ctx.headers.accept).some((r) => r.subtype === "csv" && r.q > 0);
+ * ```
  */
 export function parseAccept(header: string | undefined): Range[] {
   if (!header) return [];
@@ -138,11 +146,32 @@ export function choose(variants: readonly (readonly string[])[], accept: string 
 
 const NEGOTIATED: unique symbol = Symbol.for("yerd.negotiated");
 
-/** negotiate()'s argument: a producer per type, keyed by shorthand or mime type. The first key is the default. */
-/** negotiate()'s variants: a producer per media type, the first being the default. */
+/**
+ * negotiate()'s argument: a producer per media type, keyed by shorthand or
+ * mime type. The first key is the default. Name the type to build the
+ * variants up before negotiating.
+ *
+ * ```tsx
+ * @get async list() {
+ *   const todos = await this.db.todos.all();
+ *   const variants: Variants = { html: () => <TodoList todos={todos} />, json: () => todos };
+ *   if (this.csv) variants.csv = () => toCsv(todos);
+ *   return negotiate(variants);
+ * }
+ * ```
+ */
 export type Variants = { [K in MediaType]?: () => unknown };
 
-/** What negotiate() returns; the response pipeline picks and runs one variant. */
+/**
+ * What negotiate() returns; the response pipeline picks and runs one variant.
+ * Name it as the return type of a helper that several handlers share.
+ *
+ * ```tsx
+ * function todoResponse(todo: Todo): Negotiated {
+ *   return negotiate({ html: () => <h1>{todo.title}</h1>, json: () => todo });
+ * }
+ * ```
+ */
 export interface Negotiated {
   /** Brand that marks a negotiate() result. */
   readonly [NEGOTIATED]: true;
@@ -153,9 +182,10 @@ export interface Negotiated {
 /**
  * Return different representations from one handler; the Accept header picks.
  * The first key is the default. Keys are shorthands ("html", "json", "ndjson",
- * "text", "csv", "xml") or full mime types. Only the chosen function runs.
+ * "text", "csv", "xml", "sse") or full mime types. Only the chosen function
+ * runs. Negotiated responses get `Vary: Accept`.
  *
- * ```ts
+ * ```tsx
  * @get show() {
  *   return negotiate({ html: () => <TodoPage todos={todos} />, json: () => ({ todos }) });
  * }

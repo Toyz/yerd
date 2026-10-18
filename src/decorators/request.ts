@@ -5,15 +5,50 @@ import { formFields, withFiles, type FormFields } from "../server/body.js";
 import { dto, parse, type DtoClass } from "./dto.js";
 import { shapeSession, type Session, type SessionApi, type SessionShape } from "../session/session.js";
 
-/** Turns one value into another. Throw an HttpError to reject the request. */
+/**
+ * Turns one value into another. Throw an HttpError to reject the request.
+ * Transforms are plain functions, so writing your own is writing a function;
+ * put it in any `transform` option, alone or in a pipeline.
+ *
+ * ```ts
+ * export const slug: Transform<string, string> = (raw) => {
+ *   if (!/^[a-z0-9-]+$/.test(raw)) throw new HttpError(400, `Not a slug: ${raw}`);
+ *   return raw;
+ * };
+ *
+ * @route("/posts/:slug")
+ * export class PostBySlug {
+ *   @param("slug", { transform: [trim, lower, slug] }) accessor slug!: string;
+ * }
+ * ```
+ */
 export type Transform<I = string, O = unknown> = (value: I) => O;
 
-/** A single transform, or a pipeline run left to right. */
+/**
+ * A single transform, or a pipeline run left to right, each step taking the
+ * previous one's output. The last step decides the field's type, and a step
+ * that can't take what the one before it made is a compile error.
+ *
+ * ```ts
+ * @query("sort", { transform: [trim, lower, oneOf("asc", "desc")] }) accessor sort: "asc" | "desc" = "asc";
+ * // Doesn't compile: toInt makes a number, and trim only takes a string.
+ * @query("n", { transform: [toInt, trim] }) accessor n = 0;
+ * ```
+ */
 // The tuple member matters: it makes TypeScript infer array literals as tuples,
 // so each step can be checked against the one before it.
 export type Pipe = Transform<any, any> | readonly [] | readonly [Transform<any, any>, ...Transform<any, any>[]];
 
-/** The value a pipe produces from a `Raw` input (a string, unless noted). An empty pipe leaves it `Raw`. */
+/**
+ * The value a pipe produces from a `Raw` input (a string, unless noted). An
+ * empty pipe leaves it `Raw`. Mostly for typing helpers that wrap the field
+ * decorators; the decorators apply it for you.
+ *
+ * ```ts
+ * const sortPipe = [trim, lower, oneOf("asc", "desc")] as const;
+ * type Sort = PipeOutput<typeof sortPipe>; // "asc" | "desc"
+ * ```
+ */
 export type PipeOutput<T, Raw = string> = T extends readonly []
   ? Raw
   : T extends readonly [...unknown[], (value: never) => infer O]
@@ -28,14 +63,32 @@ type ValidPipe<T, In> = T extends readonly []
     ? ValidPipe<Rest, O>
     : false;
 
-/** True when every transform accepts the previous one's output, starting from `Raw`. */
+/**
+ * True when every transform accepts the previous one's output, starting from
+ * `Raw`. The field decorators use it to reject a broken pipeline at the `@`;
+ * reach for it when writing your own decorator factory that takes a pipe.
+ *
+ * ```ts
+ * type Fits = IsValidPipe<[typeof trim, typeof toInt]>;   // true
+ * type Breaks = IsValidPipe<[typeof toInt, typeof trim]>; // false: trim can't take a number
+ * ```
+ */
 export type IsValidPipe<T, Raw = string> = T extends readonly unknown[]
   ? ValidPipe<T, Raw>
   : T extends (value: Raw) => unknown
     ? true
     : false;
 
-/** What a decorator factory returns for a pipe whose steps don't line up. Not callable, so `@` fails. */
+/**
+ * What a decorator factory returns for a pipe whose steps don't line up. Not
+ * callable, so `@` fails, and the error names the problem. You never write
+ * this type; you meet it in a compile error.
+ *
+ * ```ts
+ * // error: ... "transform pipeline error": "each transform must accept the previous one's output"
+ * @query("n", { transform: [toInt, trim] }) accessor n = 0;
+ * ```
+ */
 export interface PipeError {
   /** The key and value are the error message TypeScript shows. */
   "transform pipeline error": "each transform must accept the previous one's output";
@@ -45,38 +98,96 @@ export interface PipeError {
 /**
  * Checks a value without changing it. Return `true` (or nothing) to accept,
  * `false` to reject with a generic 400, or a string to reject with that message.
- * Throwing an HttpError also works.
+ * Throwing an HttpError also works. Validators see the transformed value and
+ * run in order; the first to reject wins.
+ *
+ * ```ts
+ * const even: Validator<number> = (n) => n % 2 === 0 || "Must be even";
+ *
+ * @query("size", { transform: toInt, validate: [between(2, 64), even] }) accessor size = 8;
+ * ```
  */
 export type Validator<T> = (value: T) => boolean | string | void;
 
-/** The value an options object produces: its pipeline's output, or the raw value. */
+/**
+ * The value an options object produces: its pipeline's output, or the raw
+ * value. Type-level only, for typing helpers around the field decorators.
+ *
+ * ```ts
+ * type Page = FieldOutput<{ transform: typeof toInt }>; // number
+ * type Raw = FieldOutput<{}>;                           // string
+ * ```
+ */
 export type FieldOutput<O, Raw = string> = O extends { transform: infer T } ? PipeOutput<T, Raw> : Raw;
 
 /**
- * Options for @param. `O` is the options object itself (inferred whole, which
+ * Options for @param, and the base of the options for @query, @header,
+ * @cookie and @field. `O` is the options object itself (inferred whole, which
  * is what keeps inference working for pipelines like `[trim, oneOf("a", "b")]`),
  * so validators are typed by the pipeline's output.
+ *
+ * ```ts
+ * @param("id", { transform: toInt, validate: (n: number) => n > 0 || "ids start at 1" }) accessor id!: number;
+ * ```
  */
 export interface FieldOptions<O = unknown> {
-  /** Transform or pipeline applied to the raw string. Skipped when the value is missing. */
+  /**
+   * Transform or pipeline applied to the raw string. Skipped when the value is missing.
+   *
+   * ```ts
+   * @param("id", { transform: [trim, toInt] }) accessor id!: number;
+   * ```
+   */
   transform?: Pipe;
   /**
    * Validator(s) run on the transformed value, in order. Inline functions need
    * their parameter annotated: `validate: (n: number) => n > 0`.
+   *
+   * ```ts
+   * @param("code", { validate: [length(1, 12), matches(/^\d+$/)] }) accessor code!: string;
+   * ```
    */
   validate?: Validator<FieldOutput<O>> | readonly Validator<FieldOutput<O>>[];
 }
 
-/** Options for @query and @header. */
+/**
+ * Options for @query, @header, @cookie and @field: FieldOptions plus
+ * `required`. Without it, a missing value leaves the field's initializer (or
+ * undefined).
+ *
+ * ```ts
+ * @query("q", { transform: trim, required: true }) accessor q!: string; // 400 without ?q=
+ * @query("page", { transform: toInt }) accessor page = 1;               // 1 without ?page=
+ * ```
+ */
 export interface OptionalFieldOptions<O = unknown> extends FieldOptions<O> {
-  /** Missing value means 400 instead of the field's initializer. */
+  /**
+   * Missing value means 400 instead of the field's initializer. Also drops
+   * `undefined` from the value's type.
+   *
+   * ```ts
+   * @header("x-api-key", { required: true }) accessor apiKey!: string;
+   * ```
+   */
   required?: boolean;
 }
 
 /**
  * The decorator a field factory returns. Checks run when it's applied: a
  * pipeline whose steps don't line up, or a field whose type can't hold the
- * value, make the return type something TypeScript rejects at the `@`.
+ * value, make the return type something TypeScript rejects at the `@`. You
+ * meet it when wrapping a factory in your own (the inferred return type keeps
+ * every check) or in a compile error.
+ *
+ * ```ts
+ * export function pageQuery() {
+ *   return query("page", { transform: toInt, validate: between(1, 500) });
+ * }
+ *
+ * @pageQuery() accessor page = 1;
+ * // Doesn't compile: the pipeline makes a number, which a string field can't hold.
+ * @query("n", { transform: toInt }) accessor n = "x";
+ * ```
  */
 export type FieldDecorator<O, Out, Raw = string> = (<This, V>(
   target: ClassAccessorDecoratorTarget<This, V>,
@@ -144,7 +255,22 @@ export function param<const O extends FieldOptions<O> = {}>(
   return paramAccessor(name, options as AnyOptions | undefined) as unknown as FieldDecorator<O, FieldOutput<O>>;
 }
 
-/** All path parameters. */
+/**
+ * All path parameters, as a fresh object of strings (URL-decoded, no
+ * transforms). Handy for splat routes and generic handlers; for one param,
+ * `@param` checks the name at boot and can transform it.
+ *
+ * ```ts
+ * @route("/files/*path")
+ * export class Files {
+ *   @params accessor all!: Record<string, string>;
+ *
+ *   @get show() {
+ *     return this.all; // /files/a/b.txt -> { path: "a/b.txt" }
+ *   }
+ * }
+ * ```
+ */
 export const params = createAccessor((ctx): Record<string, string> => ({ ...ctx.params }), { name: "params" });
 
 const queryAccessor = createAccessor<unknown, [name: string, options?: AnyOptions]>(
@@ -181,7 +307,19 @@ const headerAccessor = createAccessor<unknown, [name: string, options?: AnyOptio
   { name: "header" },
 );
 
-/** A request header. Repeated headers are joined with ", ". Same options as @query. */
+/**
+ * A request header, by case-insensitive name. Repeated headers are joined
+ * with ", ". Same options as @query: missing means the field's initializer
+ * (or undefined), or a 400 with `required: true`.
+ *
+ * ```ts
+ * @route("/api/reports")
+ * export class Reports {
+ *   @header("accept-language") accessor lang: string | undefined;
+ *   @header("x-api-key", { required: true }) accessor apiKey!: string;
+ * }
+ * ```
+ */
 export function header<const O extends OptionalFieldOptions<O> = {}>(
   name: string,
   options?: O,
@@ -191,11 +329,29 @@ export function header<const O extends OptionalFieldOptions<O> = {}>(
 
 /** Options for @body. The pipeline starts from the parsed body (`unknown`). */
 export interface BodyOptions<O = unknown> {
-  /** Transform or pipeline applied to the parsed body, e.g. a schema parser. */
+  /**
+   * Transform or pipeline applied to the parsed body, e.g. a schema parser.
+   *
+   * ```ts
+   * @body({ transform: parseCsv }) accessor rows!: Promise<Row[] | undefined>;
+   * ```
+   */
   transform?: Pipe;
-  /** Validator(s) run on the transformed body. Inline functions annotate their parameter. */
+  /**
+   * Validator(s) run on the transformed body. Inline functions annotate their parameter.
+   *
+   * ```ts
+   * @body({ validate: (b: unknown) => typeof b === "string" || "Send text/plain" }) accessor note!: Promise<unknown>;
+   * ```
+   */
   validate?: Validator<FieldOutput<O, unknown>> | readonly Validator<FieldOutput<O, unknown>>[];
-  /** No body means 400 instead of `undefined`. */
+  /**
+   * No body means 400 instead of `undefined`.
+   *
+   * ```ts
+   * @body({ required: true }) accessor payload!: Promise<unknown>;
+   * ```
+   */
   required?: boolean;
 }
 
@@ -220,11 +376,12 @@ type BodyValue<A> = A extends DtoClass<infer T> ? T : Optional<A, FieldOutput<A,
  * Pass a DTO class to validate into it (required, 400 with every issue on
  * failure), or options for anything else. Raw bodies are JSON as parsed,
  * URL-encoded forms as an object of strings (repeated keys become arrays),
- * text/* as a string, anything else as a Uint8Array.
+ * multipart forms likewise with their files next to the fields, text/* as a
+ * string, anything else as a Uint8Array.
  *
  * ```ts
  * @body(Signup) accessor signup!: Promise<Signup>;
- * @args(body(Signup)) create(signup: Signup) { ... }
+ * @post @args(body(Signup)) create(signup: Signup) { return { email: signup.email }; }
  * @body({ transform: parseCsv }) accessor rows!: Promise<Row[] | undefined>;
  * ```
  */
@@ -282,13 +439,39 @@ export function field<const O extends OptionalFieldOptions<O> = {}>(
 
 // ── uploads ──
 
-/** Options for @file and @files. */
+/**
+ * Options for @file and @files. An empty file input counts as no file.
+ *
+ * ```ts
+ * @file("avatar", { required: true, types: ["image/png", "image/jpeg"], maxSize: 2_000_000 }) accessor avatar!: Promise<File>;
+ * @files("extras", { types: ["image/*"] }) accessor extras!: Promise<File[]>;
+ * ```
+ */
 export interface FileOptions {
-  /** A 400 when no file was uploaded under the name. */
+  /**
+   * A 400 when no file was uploaded under the name. On @file it also narrows
+   * the type to `Promise<File>`.
+   *
+   * ```ts
+   * @file("resume", { required: true }) accessor resume!: Promise<File>;
+   * ```
+   */
   required?: boolean;
-  /** Largest file accepted, in bytes (413 beyond). The request's `bodyLimit` still caps the whole body. */
+  /**
+   * Largest file accepted, in bytes (413 beyond). The request's `bodyLimit` still caps the whole body.
+   *
+   * ```ts
+   * @file("doc", { maxSize: 5 * 1024 * 1024 }) accessor doc!: Promise<File | undefined>;
+   * ```
+   */
   maxSize?: number;
-  /** Accepted mime types; `image/*` style wildcards allowed (415 otherwise). */
+  /**
+   * Accepted mime types; `image/*` style wildcards allowed (415 otherwise).
+   *
+   * ```ts
+   * @files("photos", { types: ["image/*", "application/pdf"] }) accessor photos!: Promise<File[]>;
+   * ```
+   */
   types?: string[];
 }
 
@@ -442,7 +625,19 @@ const cookieAccessor = createAccessor<unknown, [name: string, options?: AnyOptio
   { name: "cookie" },
 );
 
-/** A request cookie. Same options as @query. */
+/**
+ * A request cookie. Same options as @query: missing means the field's
+ * initializer (or undefined), or a 400 with `required: true`. To set or
+ * delete cookies, use `res(..., { cookies })` or `ctx.setCookie()`.
+ *
+ * ```ts
+ * @route("/prefs")
+ * export class Prefs {
+ *   @cookie("theme") accessor theme = "light";
+ *   @cookie("visits", { transform: toInt }) accessor visits = 0;
+ * }
+ * ```
+ */
 export function cookie<const O extends OptionalFieldOptions<O> = {}>(
   name: string,
   options?: O,
@@ -450,10 +645,41 @@ export function cookie<const O extends OptionalFieldOptions<O> = {}>(
   return cookieAccessor(name, options as AnyOptions | undefined) as unknown as FieldDecorator<O, Optional<O, FieldOutput<O>>>;
 }
 
-/** Aborts when the client disconnects or the server shuts down. */
+/**
+ * The request's AbortSignal: aborts when the client disconnects or the server
+ * shuts down. Pass it to anything slow (fetch, a queue wait, a subscription)
+ * so the work stops when nobody is waiting for it.
+ *
+ * ```ts
+ * @route("/slow")
+ * export class Slow {
+ *   @signal accessor stop!: AbortSignal;
+ *
+ *   @get async page() {
+ *     const r = await fetch("https://example.com", { signal: this.stop });
+ *     return r.text();
+ *   }
+ * }
+ * ```
+ */
 export const signal = createAccessor((ctx): AbortSignal => ctx.signal, { name: "signal" });
 
-/** The raw Node request. */
+/**
+ * The raw node:http `IncomingMessage`, for what the other accessors don't
+ * cover (the socket, the HTTP version). Don't read its body stream yourself:
+ * use @body, @field or `ctx.lines()`.
+ *
+ * ```ts
+ * @route("/whoami")
+ * export class WhoAmI {
+ *   @request accessor req!: IncomingMessage;
+ *
+ *   @get show() {
+ *     return { ip: this.req.socket.remoteAddress, http: this.req.httpVersion };
+ *   }
+ * }
+ * ```
+ */
 export const request = createAccessor((ctx) => ctx.request, { name: "request" });
 
 // Built-in transforms. Plain functions, so users write their own the same way.
@@ -477,7 +703,16 @@ export const toInt: Transform<string, number> = (input) => {
   return n;
 };
 
-/** Parse any number `Number()` accepts (decimals, exponents). Blank or NaN is a 400. */
+/**
+ * Parse a decimal number: optional minus, digits with an optional fraction,
+ * optional exponent, surrounding spaces allowed (`"3.5"`, `"-.5"`, `"1e3"`).
+ * Anything else is a 400, including blanks, hex (`"0x10"`), `"Infinity"` and
+ * values that overflow to Infinity.
+ *
+ * ```ts
+ * @query("lat", { transform: toNumber, validate: between(-90, 90) }) accessor lat = 0;
+ * ```
+ */
 export const toNumber: Transform<string, number> = (raw) => {
   // Decimal notation only: Number() would also take "Infinity", "0x10" and "1e999".
   const n = Number(raw);
@@ -489,7 +724,12 @@ export const toNumber: Transform<string, number> = (raw) => {
 
 /**
  * Parse "true", "1" or "" (a bare `?flag`) as true and "false" or "0" as
- * false; anything else is a 400. Case-sensitive.
+ * false; anything else is a 400. Case-sensitive. A missing parameter
+ * leaves the field's initializer, so default flags to `false`.
+ *
+ * ```ts
+ * @query("verbose", { transform: toBool }) accessor verbose = false; // ?verbose, ?verbose=1, ?verbose=true
+ * ```
  */
 export const toBool: Transform<string, boolean> = (raw) => {
   if (raw === "true" || raw === "1" || raw === "") return true;
@@ -500,13 +740,31 @@ export const toBool: Transform<string, boolean> = (raw) => {
 /**
  * Strip leading and trailing whitespace. Put it first in a pipeline:
  * `{ transform: [trim, lower, oneOf("asc", "desc")] }`.
+ *
+ * ```ts
+ * @field("name", { transform: trim, validate: length(1, 60), required: true }) accessor name!: Promise<string>;
+ * ```
  */
 export const trim: Transform<string, string> = (raw) => raw.trim();
 
-/** Lower-case the value. */
+/**
+ * Lower-case the value. Usually after `trim`, for case-insensitive values
+ * like tags, emails and sort keys.
+ *
+ * ```ts
+ * @query("tag", { transform: [trim, lower] }) accessor tag: string | undefined;
+ * ```
+ */
 export const lower: Transform<string, string> = (raw) => raw.toLowerCase();
 
-/** Only these exact values; the output type is their union. */
+/**
+ * Only these exact values (a 400 otherwise); the output type is their union,
+ * so the field can be typed as that union.
+ *
+ * ```ts
+ * @query("view", { transform: oneOf("list", "grid") }) accessor view: "list" | "grid" = "list";
+ * ```
+ */
 export function oneOf<const V extends string>(...values: V[]): Transform<string, V> {
   const allowed = new Set<string>(values);
   return (raw) => {
@@ -517,12 +775,34 @@ export function oneOf<const V extends string>(...values: V[]): Transform<string,
 
 // Built-in validators.
 
-/** Numbers within [min, max], inclusive. */
+/**
+ * Numbers within [min, max], inclusive. Rejects with "Must be from 1 to 10
+ * (got 12)". Works on accessors after a number transform, and in DTOs.
+ *
+ * ```ts
+ * @query("page", { transform: toInt, validate: between(1, 500) }) accessor page = 1;
+ *
+ * class Review {
+ *   @is.int({ validate: between(1, 10) }) rating!: number;
+ * }
+ * ```
+ */
 export function between(min: number, max: number): Validator<number> {
   return (n) => (n >= min && n <= max) || `Must be from ${min} to ${max} (got ${n})`;
 }
 
-/** String or array length within [min, max], inclusive. `max` defaults to unlimited. */
+/**
+ * String or array length within [min, max], inclusive. `max` defaults to
+ * unlimited, so `length(1)` means "not empty". Put `trim` before it so blank
+ * input doesn't count.
+ *
+ * ```ts
+ * class Listing {
+ *   @is.string({ transform: trim, validate: length(1, 140) }) title!: string;
+ *   @is.array(is.string(), { validate: length(0, 5) }) tags: string[] = [];
+ * }
+ * ```
+ */
 export function length(min: number, max = Infinity): Validator<string | readonly unknown[]> {
   return (value) => {
     if (value.length >= min && value.length <= max) return true;
@@ -540,7 +820,14 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * A UUID (any case), optionally of one version: `uuid()`, `uuid(4)`, `uuid(7)`.
- * For params and queries: `@param("id", { validate: uuid() })`; DTOs have `is.uuid()`.
+ * For params and queries; DTOs have `is.uuid()`, which also lowercases.
+ *
+ * ```ts
+ * @route("/orders/:id")
+ * export class Order {
+ *   @param("id", { validate: uuid(4) }) accessor id!: string;
+ * }
+ * ```
  */
 export function uuid(version?: number): Validator<string> {
   return (value) => {
@@ -550,12 +837,27 @@ export function uuid(version?: number): Validator<string> {
   };
 }
 
-/** A plausible email address (one @, a dot in the domain, no spaces, at most 254 characters). */
+/**
+ * A plausible email address (one @, a dot in the domain, no spaces, at most
+ * 254 characters). Loose on purpose: sending mail to it is the only real
+ * check. For params, queries and fields; DTOs have `is.email()`.
+ *
+ * ```ts
+ * @query("notify", { transform: trim, validate: email() }) accessor notify: string | undefined;
+ * ```
+ */
 export function email(): Validator<string> {
   return (value) => (value.length <= 254 && EMAIL.test(value)) || "Expected an email address";
 }
 
-/** String matching a regular expression. */
+/**
+ * String matching a regular expression, rejecting with `message` (or a
+ * generic one). Anchor the pattern (`^...$`) to match the whole value.
+ *
+ * ```ts
+ * @query("ref", { validate: matches(/^[A-Z]{3}-\d{4}$/, "Expected a code like ABC-1234") }) accessor ref: string | undefined;
+ * ```
+ */
 export function matches(pattern: RegExp, message?: string): Validator<string> {
   return (value) => {
     pattern.lastIndex = 0;

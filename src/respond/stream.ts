@@ -75,11 +75,21 @@ async function* withHeartbeat<T>(source: AsyncIterable<T>, ms: number, beat: str
 
 /** Options for ndjson(). */
 export interface NdjsonOptions {
-  /** Write an empty line every N ms while the source is quiet (readers skip blank lines). 0 disables. Default 0. */
+  /**
+   * Write an empty line every N ms while the source is quiet (readers skip blank lines). 0 disables. Default 0.
+   *
+   * ```ts
+   * @get @ndjson({ heartbeat: 15_000 }) feed() { return this.channels.subscribe(orders, this.stop); }
+   * ```
+   */
   heartbeat?: number;
   /**
    * If the source throws after streaming has started, write one last line
    * `{"error": message}` before closing. Default true; false just closes.
+   *
+   * ```ts
+   * return ndjson(rows, { errorLine: false }); // the client sees a cut-off stream, no error line
+   * ```
    */
   errorLine?: boolean;
 }
@@ -101,17 +111,61 @@ function ndjsonResponse(source: AsyncIterable<unknown>, options: NdjsonOptions =
 
 const EVENT: unique symbol = Symbol.for("yerd.sse.event");
 
-/** The fields of one Server-Sent Event, for event(). */
+/**
+ * The fields of one Server-Sent Event, for event(). Name the type when a
+ * helper builds events for several streams.
+ *
+ * ```ts
+ * export function progress(done: number, total: number): SseEventInit {
+ *   return { event: "progress", data: { done, total } };
+ * }
+ *
+ * yield event(progress(1, 3));
+ * ```
+ */
 export interface SseEventInit {
-  /** Payload. Strings are sent as-is; anything else as JSON. */
+  /**
+   * Payload. Strings are sent as-is; anything else as JSON. Multi-line
+   * strings become several `data:` lines, which EventSource joins back.
+   *
+   * ```ts
+   * yield event({ data: { online: 3 } }); // data: {"online":3}
+   * ```
+   */
   data?: unknown;
-  /** Event name (`addEventListener(name)` on the client). */
+  /**
+   * Event name (`addEventListener(name)` on the client). Without one the
+   * client's `onmessage` gets it.
+   *
+   * ```ts
+   * yield event({ event: "user", data: { name: "ada" } }); // source.addEventListener("user", ...)
+   * ```
+   */
   event?: string;
-  /** Last-Event-ID for reconnects. */
+  /**
+   * Last-Event-ID for reconnects: the browser sends the last one it saw in a
+   * `Last-Event-ID` header when it reconnects, so the stream can resume.
+   *
+   * ```ts
+   * yield event({ event: "done", id: "3", data: "finished" });
+   * ```
+   */
   id?: string;
-  /** Reconnect delay hint for the client, in ms. */
+  /**
+   * Reconnect delay hint for the client, in ms.
+   *
+   * ```ts
+   * yield event({ retry: 10_000 });
+   * ```
+   */
   retry?: number;
-  /** A comment line; ignored by EventSource. */
+  /**
+   * A comment line; ignored by EventSource. Useful for debugging with curl.
+   *
+   * ```ts
+   * yield event({ comment: "cache warmed" });
+   * ```
+   */
   comment?: string;
 }
 
@@ -121,7 +175,20 @@ export interface SseEvent extends SseEventInit {
   readonly [EVENT]: true;
 }
 
-/** A named or id'd event. Anything else yielded from an SSE stream is sent as plain `data`. */
+/**
+ * A named or id'd event. Anything else yielded from an SSE stream is sent as
+ * plain `data`.
+ *
+ * ```ts
+ * @route("/events")
+ * export class Events {
+ *   @get @sse async *feed() {
+ *     yield "hello";                                                  // data: hello
+ *     yield event({ event: "user", id: "7", data: { name: "ada" } }); // event: user, id: 7
+ *   }
+ * }
+ * ```
+ */
 export function event(init: SseEventInit): SseEvent {
   return { ...init, [EVENT]: true };
 }
@@ -152,11 +219,29 @@ export function formatEvent(item: unknown): string {
 
 /** Options for sse(). */
 export interface SseOptions {
-  /** Send a comment every N ms while the source is quiet, so proxies keep the connection. 0 disables. Default 15000. */
+  /**
+   * Send a comment every N ms while the source is quiet, so proxies keep the connection. 0 disables. Default 15000.
+   *
+   * ```ts
+   * @get @sse({ heartbeat: 30_000 }) feed() { return this.channels.subscribe(news, this.stop); }
+   * ```
+   */
   heartbeat?: number;
-  /** Reconnect delay hint sent once at the start, in ms. */
+  /**
+   * Reconnect delay hint sent once at the start, in ms.
+   *
+   * ```ts
+   * @get @sse({ retry: 5_000 }) async *ticks() { yield "tick"; }
+   * ```
+   */
   retry?: number;
-  /** If the source throws, send `event: error` with the message before closing. Default true. */
+  /**
+   * If the source throws, send `event: error` with the message before closing. Default true.
+   *
+   * ```ts
+   * return sse(updates(this.stop), { errorEvent: false }); // just close on failure
+   * ```
+   */
   errorEvent?: boolean;
 }
 
@@ -197,9 +282,9 @@ function wrapMethod(method: StreamMethod, respond: (source: AsyncIterable<unknow
  * Newline-delimited JSON (`application/x-ndjson`), one JSON value per line.
  *
  * ```ts
- * return ndjson(source);                                    // respond with a stream
- * @get @ndjson async *rows() { yield { id: 1 }; }             // decorate a generator method
- * @get @ndjson({ heartbeat: 10_000 }) async *feed() { ... }   // ...with options
+ * return ndjson(source);                                          // respond with a stream
+ * @get @ndjson async *rows() { yield { id: 1 }; }                   // decorate a generator method
+ * @get @ndjson({ heartbeat: 10_000 }) feed() { return this.channels.subscribe(orders, this.stop); } // ...with options
  * ```
  */
 export function ndjson(source: AsyncIterable<unknown>, options?: NdjsonOptions): YerdResponse;
@@ -212,8 +297,24 @@ export function ndjson(a?: unknown, b?: unknown): unknown {
 }
 
 /**
- * Server-Sent Events. Same three forms as ndjson(). Yield plain values for
- * `data`, or `event({ event, id, data })` for named events.
+ * Server-Sent Events (`text/event-stream`, read in the browser with
+ * EventSource). Same three forms as ndjson(): decorate a generator method,
+ * decorate with options, or return `sse(source, options)`. Yield plain values
+ * for `data`, or `event({ event, id, data })` for named events. Pass the
+ * request's `@signal` to anything the source waits on, so a disconnect ends
+ * it straight away.
+ *
+ * ```ts
+ * @route("/news/events")
+ * export class NewsEvents {
+ *   @inject(Channels) accessor channels!: Channels;
+ *   @signal accessor stop!: AbortSignal;
+ *
+ *   @get feed() {
+ *     return sse(this.channels.subscribe(news, this.stop), { retry: 5_000 });
+ *   }
+ * }
+ * ```
  */
 export function sse(source: AsyncIterable<unknown>, options?: SseOptions): YerdResponse;
 export function sse<M extends StreamMethod>(method: M, context: ClassMethodDecoratorContext): M;

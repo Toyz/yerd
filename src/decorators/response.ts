@@ -1,7 +1,7 @@
 /**
  * Response defaults and error handlers, declared on handler methods.
  *
- * ```ts
+ * ```tsx
  * @route("/todos")
  * class Todos {
  *   @post @status(201) @setHeader("cache-control", "no-store")
@@ -43,7 +43,22 @@ function defaultsFor(context: ClassMethodDecoratorContext): ResponseDefaults {
 /**
  * The status for this handler's result when it would otherwise be the
  * default 200 (or 204 for nothing). An explicit `res(..., { status })` or a
- * returned number still wins.
+ * returned number still wins. It doesn't apply when the handler throws: an
+ * error keeps its own status. For a status decided at run time, use
+ * `ctx.status(code)`.
+ *
+ * ```ts
+ * @route("/comments")
+ * export class Comments {
+ *   @post @status(201) create() {
+ *     return { id: 7 }; // 201, JSON
+ *   }
+ *
+ *   @post @status(202) queue() {
+ *     return { queued: true };
+ *   }
+ * }
+ * ```
  */
 export function status(code: number) {
   if (!Number.isInteger(code) || code < 200 || code > 599) throw new TypeError(`@status(${code}): not a response status (200-599)`);
@@ -52,7 +67,25 @@ export function status(code: number) {
   };
 }
 
-/** A header on this handler's responses (a header the result sets itself wins). */
+/**
+ * A header on this handler's responses (a header the result sets itself
+ * wins; `Vary` values add up instead). Checked when the decorator runs, so a
+ * bad name or value fails at startup. Not sent when the handler throws; use
+ * `ctx.setHeader()` for headers that must go out on errors too.
+ *
+ * ```ts
+ * @route("/comments")
+ * export class Comments {
+ *   @get @setHeader("cache-control", "public, max-age=60") list() {
+ *     return [{ id: 7 }];
+ *   }
+ *
+ *   @post @status(201) @setHeader("cache-control", "no-store") create() {
+ *     return { id: 8 };
+ *   }
+ * }
+ * ```
+ */
 export function setHeader(name: string, value: string) {
   checkHeader(name, value, `@setHeader(${JSON.stringify(name)}): the value`);
   return (_method: Function, context: ClassMethodDecoratorContext): void => {
@@ -66,7 +99,34 @@ export function setHeader(name: string, value: string) {
  * in the route's layouts. The response keeps the error's status (an
  * HttpError's, else 500) unless the method returns `res(..., { status })` or
  * a number. Return undefined to pass the error on (to `app.onError`, then the
- * error page). With no classes it handles every error.
+ * error page). With no classes it handles every error. Methods are tried in
+ * the order written.
+ *
+ * ```tsx
+ * class NotFound extends Error {
+ *   constructor(readonly what: string) {
+ *     super(`${what} not found`);
+ *   }
+ * }
+ *
+ * @route("/pets/:name")
+ * export class Pet {
+ *   @get show(): never {
+ *     throw new NotFound("cat");
+ *   }
+ *
+ *   @catches(NotFound)
+ *   missing(error: NotFound) {
+ *     return res(<p>No {error.what} here.</p>, { status: 404 });
+ *   }
+ *
+ *   @catches()
+ *   anythingElse(error: unknown) {
+ *     if (error instanceof TypeError) return "try again later";
+ *     return undefined; // not mine: pass it on
+ *   }
+ * }
+ * ```
  */
 export function catches(...types: Function[]) {
   return (_method: Function, context: ClassMethodDecoratorContext): void => {

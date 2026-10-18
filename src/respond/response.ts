@@ -23,15 +23,32 @@ export function checkHeader(name: string, value: string, where = `Header ${name}
 /**
  * An explicit response: status, headers and a body that is itself coerced.
  * Header names are lowercased here, so `Content-Type` replaces the default
- * `content-type` instead of going out next to it.
+ * `content-type` instead of going out next to it. You get one from res(),
+ * redirect(), ndjson() and sse(); its fields are handy in tests.
+ *
+ * ```ts
+ * const r = redirect("/login");
+ * assert.equal(r.status, 303);
+ * assert.equal(r.headers.location, "/login");
+ * ```
  */
 export class YerdResponse {
-  /** Response headers, names lowercased. */
+  /**
+   * Response headers, names lowercased whatever case they were given in.
+   *
+   * ```ts
+   * res("id,name\n", { headers: { "Content-Type": "text/csv" } }).headers["content-type"]; // "text/csv"
+   * ```
+   */
   readonly headers: HeaderInit;
 
   /**
    * Usually built with res() or redirect(). Throws a TypeError for a status
    * outside 200-599 or a header Node would refuse (see checkHeader).
+   *
+   * ```ts
+   * new YerdResponse(202, { "retry-after": "30" }, { queued: true }); // same as res({ queued: true }, { status: 202, headers: { "retry-after": "30" } })
+   * ```
    */
   constructor(
     readonly status: number,
@@ -57,19 +74,48 @@ export class YerdResponse {
 
 /** Options for res(). */
 export interface ResponseInit {
-  /** Default 200. Must be 200-599. */
+  /**
+   * Default 200. Must be 200-599.
+   *
+   * ```ts
+   * return res({ id: 2 }, { status: 201 });
+   * ```
+   */
   status?: number;
-  /** Extra headers; they replace the defaults coercion would set (names are case-insensitive). */
+  /**
+   * Extra headers; they replace the defaults coercion would set (names are case-insensitive).
+   *
+   * ```ts
+   * return res(csv, { headers: { "content-type": "text/csv", "content-disposition": "attachment; filename=export.csv" } });
+   * ```
+   */
   headers?: HeaderInit;
   /**
    * Layout(s) for a JSX body, outermost first, innermost in the chain (inside
    * the app's, groups' and the route's). Chosen at return time, so a handler
    * can pick its chrome per result. One already in the chain isn't repeated.
+   *
+   * ```tsx
+   * return res(<UserTable users={users} />, { layout: AdminLayout });
+   * ```
    */
   layout?: Component<LayoutProps> | Component<LayoutProps>[];
-  /** false: `layout` is the whole chain, nothing inherited. */
+  /**
+   * false: `layout` is the whole chain, nothing inherited.
+   *
+   * ```tsx
+   * return res(<Receipt order={order} />, { layout: PrintLayout, inherit: false });
+   * ```
+   */
   inherit?: boolean;
-  /** Cookies to set: `[{ name: "theme", value: "dark", maxAge: 31536000 }]`. */
+  /**
+   * Cookies to set, with the same options as `ctx.setCookie` (`maxAge` in
+   * seconds, `path`, `secure`, `sameSite`...).
+   *
+   * ```ts
+   * return res(null, { cookies: [{ name: "theme", value: "dark", maxAge: 60 * 60 * 24 * 365 }] });
+   * ```
+   */
   cookies?: Array<{ name: string; value: string } & CookieOptions>;
 }
 
@@ -95,7 +141,10 @@ export function res(body?: unknown, init: ResponseInit = {}): YerdResponse {
  * which are percent-encoded as UTF-8; so check user-supplied targets.
  *
  * ```ts
- * @post save() { ...; return redirect("/todos"); }
+ * @post async save() {
+ *   await this.db.todos.add({ title: await this.title });
+ *   return redirect("/todos");
+ * }
  * ```
  */
 export function redirect(location: string, status: 301 | 302 | 303 | 307 | 308 = 303): YerdResponse {
@@ -105,13 +154,51 @@ export function redirect(location: string, status: 301 | 302 | 303 | 307 | 308 =
 }
 
 /**
- * Throw to send a status. `message` is shown to the client when `expose` is
+ * Throw to send a status, from anywhere in a request: a handler, a guard, a
+ * transform, a service. `message` is shown to the client when `expose` is
  * true. With `details`, the response is JSON: `{ error: message, ...details }`.
+ * A failed DTO throws one with `details.issues`. `@catches(HttpError)` or
+ * `app.onError` can turn it into a page of your own.
+ *
+ * ```tsx
+ * @route("/links/:id")
+ * export class LinkPage {
+ *   @inject(Db) accessor db!: Db;
+ *   @param("id") accessor id!: string;
+ *
+ *   @get async show() {
+ *     const link = await this.db.links.get(this.id);
+ *     if (!link) throw new HttpError(404, "No such link");
+ *     return link;
+ *   }
+ *
+ *   @catches(HttpError)
+ *   failed(error: HttpError) {
+ *     if (error.status === 404) return res(<p>That link is gone.</p>, { status: 404 });
+ *     return undefined; // anything else: the default handling
+ *   }
+ * }
+ * ```
  */
 export class HttpError extends Error {
-  /** Whether `message` (and `details`) reach the client. Default: true below 500, false for 5xx. */
+  /**
+   * Whether `message` (and `details`) reach the client. Default: true below
+   * 500, false for 5xx, so server-side messages stay private unless you opt in.
+   *
+   * ```ts
+   * throw new HttpError(503, "Search is reindexing, try again in a minute", { expose: true });
+   * ```
+   */
   readonly expose: boolean;
-  /** Extra fields merged into the JSON error body when exposed. */
+  /**
+   * Extra fields merged into the JSON error body when exposed. Read it in a
+   * catch to get at a failed DTO's issues.
+   *
+   * ```ts
+   * throw new HttpError(409, "Username taken", { details: { field: "username" } });
+   * // -> 409 {"error":"Username taken","field":"username"}
+   * ```
+   */
   readonly details: Record<string, unknown> | undefined;
 
   /**
