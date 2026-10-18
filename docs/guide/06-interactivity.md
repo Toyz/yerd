@@ -4,7 +4,7 @@ This page covers how yerd pages update in place, with no client code and no API 
 
 ## The client runtime
 
-Put [Scripts](api:yerd.Scripts) once in your root layout's `<head>`. It loads yerd's runtime from `/_yerd/runtime.js` (about 8 KB compressed), which the server serves for you.
+Put [Scripts](api:yerd.Scripts) once in your root layout's `<head>`. It loads yerd's runtime from `/_yerd/runtime.js` (about 8 KB compressed), which the server serves for you. [Local](api:yerd.Local), drag and drop, and `sync` / cues live in small extra files beside it that a page loads only when it uses them (`<Scripts />` preloads them for you).
 
 ```tsx
 import { Scripts, type LayoutProps } from "@toyz/yerd";

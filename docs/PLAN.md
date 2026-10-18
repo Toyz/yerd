@@ -732,7 +732,8 @@ yerd/
     attributes/
       attribute.ts        attribute(), the built-in prefetch attribute, client source
     client/
-      runtime.ts          the browser runtime (one self-contained function, served at /_yerd/runtime.js)
+      runtime.ts          the browser runtime's core (one self-contained function, served at /_yerd/runtime.js)
+      runtime-*.ts        its chunks (cues, dnd, local), loaded when a page needs them
     live/
       channels.ts         Channels, channel<T>(), ChannelBackend, MemoryBackend
     session/

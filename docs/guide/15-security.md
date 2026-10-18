@@ -147,7 +147,7 @@ When the secret changed, the server was redeployed, or a token expired, the clie
 
 ## Client-side code
 
-- **CSP.** [Local](api:yerd.Local) handlers are compiled in the browser, which needs `'unsafe-eval'` under a strict Content-Security-Policy. Without `Local`, the runtime is a plain module script from your own origin (`script-src 'self'`).
+- **CSP.** [Local](api:yerd.Local) handlers are compiled in the browser, which needs `'unsafe-eval'` under a strict Content-Security-Policy. Without `Local`, the runtime is a plain module script from your own origin (`script-src 'self'`), and so are the chunks it imports from `/_yerd/`.
 - **Shipped as source.** `Local` handlers and the client halves of [custom attributes](06-interactivity.md#custom-attributes) are sent to the browser as their source text. They can't see server variables, and anything you write in them is public.
 
 ## Checklist

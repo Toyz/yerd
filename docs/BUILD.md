@@ -123,7 +123,8 @@ dist/
 ```
 
 The yerd client runtime isn't a build output: the server generates
-`/_yerd/runtime.js` from its own source at run time.
+`/_yerd/runtime.js` (and its chunks, `/_yerd/runtime-<name>.js`) from its own
+source at run time.
 
 - **Client environment.** Built today from the `client` option. Planned: the
   plugin finds every `@island` module (from the

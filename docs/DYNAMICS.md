@@ -4,8 +4,9 @@ Server-rendered yerd pages get interactivity without a bundler, without a
 client framework, and without the user writing a separate front end. The JS
 that runs in the browser is one of:
 
-1. a small runtime we hand-write (`src/client/runtime.ts`, one self-contained
-   function served as `/_yerd/runtime.js`), compiled like everything else
+1. a small runtime we hand-write (`src/client/runtime.ts`, a self-contained
+   core served as `/_yerd/runtime.js`, plus chunks it loads when a page needs
+   them), compiled like everything else
 2. code the user already wrote inside their TSX, which tsc already compiled,
    which we pull back out at runtime
 3. the user's own component modules, served to the browser exactly as tsc
@@ -710,16 +711,89 @@ engine's help.
 
 ## Client runtime layout
 
-Today the client is one file: `src/client/runtime.ts` exports `yerdRuntime()`,
-a single self-contained function whose source (`fn.toString()`, in an IIFE) is
-served at `/_yerd/runtime.js` with `cache-control: no-cache`, followed by the
-custom attributes' client halves. Because it ships as source it must be
-compiled at ES2017 or later (`runtimeSource()` refuses a build with async
-lowered to helpers). The published package serves it minified instead:
-`npm run build` runs `scripts/minify-runtime.ts` after tsc, which minifies that
-same script with esbuild (a dev dependency) and writes it into
-`dist/src/client/runtime-min.js`; `runtimeSource()` prefers it when it's
-there. A checkout, the tests and the examples serve the unminified source.
+Today the client is a core and three chunks, each one self-contained
+function in `src/client/`, shipped as its source (`fn.toString()`):
+
+```
+runtime.ts        yerdRuntime(): the core, at /_yerd/runtime.js
+runtime-cues.ts   yerdCues(): `sync` and cues, at /_yerd/runtime-cues.js
+runtime-dnd.ts    yerdDnd(): drop targets, file drops, dropTo, at /_yerd/runtime-dnd.js
+runtime-local.ts  yerdLocal(): <Local> state and handlers, at /_yerd/runtime-local.js
+hooks.ts          types only: what the core hands a chunk, and what it hands back
+```
+
+The core is everything else: morphing, actions and triggers, boosting,
+prefetch, live refresh, custom attributes, and the server clock (so
+`yerd.clock.now()` and `yerd.clock.sync()` work on any page; `sync` and cues
+are timed on it). `runtimeSource({ chunks: "split" })` is what the server
+serves: the core in an IIFE that's passed its own directory
+(`new URL(".", import.meta.url)`) and an `import()` callback, followed by the
+custom attributes' client halves. Both live in that string rather than in the
+function, because a function body can't say `import.meta`, and Vite's SSR
+transform (dev, and the tests) rewrites `import()` in source it loads.
+`chunkSource(name)` is a chunk as a module, `export default` its function.
+All four are served with `cache-control: no-cache` and an ETag, compressed
+once; an unknown chunk name is a 404.
+
+Loading. The core imports a chunk the first time the page has an element that
+needs it: `[data-yx-sync], [data-yx-cue]` for cues,
+`[data-yx-trigger^="drop"], [data-yx-drop-to]` for dnd,
+`yerd-local[data-yx-local]` for local (a `[draggable=true]` element alone
+doesn't count: starting its drag is the core's job, and without a target
+there's nothing to drop on). It looks at the first scan, after every
+apply, boost and refresh (the `onPage` hooks, on `yx:applied`), and at
+elements added any other way (the custom attributes' MutationObserver). Each
+chunk is imported once, from beside the core, so an app behind a path prefix
+or a CDN that rewrites `/_yerd/` gets its chunks from the same place; a
+failed import is tried again on the next change. A started chunk gets the
+core's hooks (`onPage`, `attribute`, `notify`, `runAction`, `serverNow`,
+`clockReady`, `stream`, `reconcile`, the drag state and drop helpers; see
+`RuntimeHooks`), passed as an argument rather than put on `window`, so
+`window.yerd` is the same public API as before.
+
+Preloading. The renderer notes which chunks a page's elements need as it
+writes them (`<Local>`, a drop trigger or `dropTo`, `sync` or `cue`) and, when
+the buffer is flushed or the render ends, puts a
+`<link rel="modulepreload">` for each right after `<Scripts />`, so the
+chunks download with the core instead of after it. A page with none of them
+gets no hint and downloads only the core. Elements rendered after the head
+has gone out (a page that awaited an async component first) can't be hinted;
+the core still loads their chunks itself, one round trip later.
+
+Input that arrives first. Nothing meant for a chunk is lost while it loads:
+
+- local: the core reads the `data-yx-on-*` event types in the page's scopes,
+  listens for those (capturing, on the document) and keeps each event inside
+  a scope, with its field's value and checked state at the time. Once the
+  chunk has wired the scopes, its `replay()` runs the handlers for each event
+  in order (from the target up, as bubbling would; currentTarget set; the
+  field's old value put back for the handler and the live one restored
+  after, unless a handler or binding changed it). Bindings aren't applied
+  until then: the server's values are the right ones until a handler runs.
+- dnd: a drag has to be set up during its dragstart, so the core does that
+  (the dragged element, `data-yx-dragging`, the data Firefox needs). Before
+  the chunk, the core allows a drag over anything that looks like a drop
+  target and holds the drop, reading its files then (a DataTransfer is
+  empty after the event); the chunk's `drop()` judges and posts it. A drag
+  that starts before the chunk and drops after it simply works: the chunk
+  reads the same drag state.
+- cues: no input to keep; the chunk connects the elements when it starts.
+
+Because they ship as source, all four must be compiled at ES2017 or later
+(`runtimePieces()` refuses a build with async lowered to helpers). The
+published package serves them minified: `npm run build` runs
+`scripts/minify-runtime.ts` after tsc, which minifies each function with
+esbuild (a dev dependency) and writes them into
+`dist/src/client/runtime-min.js`, which `runtimeSource()` and `chunkSource()`
+prefer. A checkout, the tests and the examples serve the unminified source.
+Minified, the core is about 24 KB (8 KB brotli), and the chunks 3-5 KB each
+(1.2-1.9 KB brotli).
+
+Tests run the runtime with `new Function(runtimeSource())()`: the default,
+`chunks: "inline"`, is the whole runtime as one classic script, every chunk
+started with the core. Tests of the split runtime call the core's source with
+a base URL and their own import callback instead.
+
 `<Scripts />` writes the `<script type="module">` tag.
 There is no `@toyz/yerd/client` export yet; it arrives with islands.
 
