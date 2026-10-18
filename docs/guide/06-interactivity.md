@@ -301,6 +301,42 @@ Boosted links use the runtime's own cache (entries live 15 seconds and are used 
 > [!WARNING]
 > Prefetches are real GET requests, sent before anyone clicks. GET handlers must not change anything. Prefetch requests carry a `yx-prefetch: 1` header if you need to tell them apart.
 
+## Local state: no server at all
+
+Some interactivity never needs the server: a toggle, a tab strip, a counter for a form you haven't submitted. [`Local`](api:yerd.Local) gives a piece of the page its own state that lives in the browser. No request, no build step.
+
+```tsx
+import { Local, not } from "@toyz/yerd";
+
+export function Details() {
+  return (
+    <Local state={{ open: false, likes: 0 }}>
+      {(s) => (
+        <div>
+          <button onClick={() => (s.open = !s.open)} aria-expanded={s.open}>
+            Details
+          </button>
+          <p hidden={not(s.open)}>Only shown when open.</p>
+          <button class={{ liked: s.likes }} onClick={() => s.likes++}>
+            Like ({s.likes})
+          </button>
+        </div>
+      )}
+    </Local>
+  );
+}
+```
+
+- Reading a field (`s.likes`, `s.user.name`) renders its value on the server and keeps that spot in step in the browser: text, attributes (`hidden`, `aria-*`, `value`, `checked`) and class flags (`class={{ liked: s.likes }}`). [`not`](api:yerd.not) inverts a boolean.
+- Handlers inside a `Local` run in the browser against the state; after each one the bindings refresh. Pushing to an array or editing a nested object just works.
+- `s` is typed from `state`, so `s.likes++` and `hidden={s.open}` are checked by the compiler.
+- Each `Local` has its own copy, so the same component can appear many times.
+
+> [!WARNING]
+> Handlers are sent to the browser as their source, so they can use the state (by the render prop's parameter name) and their event argument, nothing else from the server: no imports, no outer variables. A binding is a direct field read: `{s.count * 2}` renders the starting value but won't update, so compute it in the handler into another field. Compiling handlers needs `'unsafe-eval'` if you run a strict Content-Security-Policy.
+
+Local state is gone on reload. For state that should last, keep it on the server: a field in the session (per visitor) or your database, changed through an action.
+
 ## Custom attributes
 
 [attribute](api:yerd.attribute) defines your own attribute with an optional server half (`render`: what the prop renders as) and client half (`client`: runs in the browser for each element that has it).
