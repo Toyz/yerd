@@ -547,3 +547,60 @@ test("scoped css: the rules arrive with the page and style the element", async (
     expect(await page.locator("head style[data-yx-css]").count()).toBeGreaterThanOrEqual(2);
   }
 });
+
+test("rave: two tabs dance on one beat, and a cue plays on both at the same moment", async ({ browser, baseURL }) => {
+  const [one, two] = await Promise.all([browser.newContext({ baseURL }).then((c) => c.newPage()), browser.newContext({ baseURL }).then((c) => c.newPage())]);
+  await Promise.all([one.goto("/rave"), two.goto("/rave")]);
+  await expect(one.getByRole("heading", { name: "Gnome rave" })).toBeVisible();
+
+  // Same machine: the measured offset is about nothing, over a quick round trip.
+  const clock = await one.evaluate(() => (window as unknown as { yerd: { clock(): Promise<{ offset: number; rtt: number }> } }).yerd.clock());
+  expect(Math.abs(clock.offset)).toBeLessThan(250);
+  expect(clock.rtt).toBeLessThan(1000);
+
+  // `sync`: each page's first gnome is at the same point of its beat, read against the server's clock.
+  const phase = (page: Page) =>
+    page.evaluate(() => {
+      const yerd = (window as unknown as { yerd: { now(): number } }).yerd;
+      const animation = document.querySelector("[data-yx-sync] svg")!.parentElement!.getAnimations()[0]!;
+      const period = 1400;
+      return (((Number(animation.currentTime) - yerd.now()) % period) + period) % period;
+    });
+  await expect.poll(async () => Math.min(await phase(one), 1400 - (await phase(one)))).toBeLessThan(40);
+  await expect.poll(async () => Math.min(await phase(two), 1400 - (await phase(two)))).toBeLessThan(40);
+
+  // A cue: wait on both pages, press the horn on one.
+  const heard = (page: Page) =>
+    page.evaluate(
+      () =>
+        new Promise<{ name: string; late: number; drift: number }>((resolve) => {
+          document.addEventListener(
+            "yx:cue",
+            (event) => {
+              const { name, at, late } = (event as CustomEvent<{ name: string; at: number; late: number }>).detail;
+              resolve({ name, late, drift: (window as unknown as { yerd: { now(): number } }).yerd.now() - at });
+            },
+            { once: true },
+          );
+        }),
+    );
+  // Both streams connected before the press.
+  await expect.poll(() => one.evaluate(() => fetch("/_yerd/clock").then(() => true))).toBe(true);
+  const waiting = Promise.all([heard(one), heard(two)]);
+  await one.getByRole("button", { name: "Airhorn" }).click();
+  const [a, b] = await waiting;
+  for (const got of [a, b]) {
+    expect(got.name).toBe("airhorn");
+    expect(got.late).toBe(0);
+    expect(Math.abs(got.drift)).toBeLessThan(100);
+  }
+  await expect(two.locator("[horn]")).toHaveText("@a guest hit the horn");
+  await expect(two.locator('[data-yx-cued="airhorn"]').first()).toBeAttached();
+  // It comes off when the cue's 1.2s are up.
+  await expect(two.locator("[data-yx-cued]")).toHaveCount(0, { timeout: 3000 });
+
+  // Two tabs listening: the count says so (polled every 5s, or on reload).
+  await one.reload();
+  await expect(one.locator("#ravers")).toContainText(/[2-9] tabs raving/);
+  await Promise.all([one.context().close(), two.context().close()]);
+});

@@ -222,6 +222,136 @@ const liveHook = <div data-yx-live="/todos/events" hidden></div>;
 
 You can transform messages on the way out with a generator: `for await (const change of this.channels.subscribe(...)) yield { ...change, at: Date.now() };`.
 
+## Server-synced animation
+
+Two pieces make every open page animate together: `sync` keeps looping CSS animations on the same beat everywhere, and [Cues](api:yerd.Cues) plays one-off moments (an airhorn, a countdown, confetti) on every page at the same instant.
+
+Both run on the server's clock. The client runtime asks `/_yerd/clock` for the time a few times, keeps the quickest answer, and works out how far its own clock is from the server's. It measures once per page, when the first `sync` or `cue` element shows up, then again every few minutes and whenever the tab comes back into view. On a normal connection pages agree to within a few milliseconds.
+
+### sync: one beat everywhere
+
+Put `sync` on an element and its infinite CSS animations, and those of everything inside it, are lined up as if they all started at the same moment. Two windows side by side show the same frame.
+
+```tsx
+import { css, keyframes } from "@toyz/yerd";
+
+const bob = keyframes`50% { transform: translateY(-12px); }`;
+const dancer = css`
+  animation: ${bob} 700ms ease-in-out infinite;
+  &:nth-child(odd) { animation-delay: -350ms; }
+`;
+
+<div class="crowd" sync>
+  {gnomes.map((g) => <img class={dancer} src={g.photo} alt={g.name} />)}
+</div>
+```
+
+- `animation-delay` still works, as an offset from the shared beat, so a row can be staggered.
+- Only infinite animations are moved. One-off animations play as they would without `sync`; for those, use a cue.
+- Elements added later, a class change that starts a new animation, and a re-measured clock are all handled.
+
+### Cues: one moment, every screen
+
+Inject `Cues` and `play()` a cue by name. Elements with `cue="name"` play it.
+
+```tsx
+import { Cues, action, css, get, inject, keyframes, route } from "@toyz/yerd";
+
+const wobble = keyframes`25% { transform: rotate(-12deg) scale(1.3); } 75% { transform: rotate(10deg); }`;
+const gnome = css`&[data-yx-cued] { animation: ${wobble} 600ms ease-out; }`;
+
+@route("/rave")
+export class Rave {
+  @inject(Cues) accessor cues!: Cues;
+
+  @action async airhorn() {
+    await this.cues.play("airhorn", { room: "rave", lasts: 1200, cooldown: 700 });
+  }
+
+  @get page() {
+    return (
+      <main>
+        <img class={gnome} src="/gnome.png" alt="" cue="airhorn" cueRoom="rave" />
+        <audio src="/airhorn.mp3" cue="airhorn" cueRoom="rave" />
+        <button action={this.airhorn}>Airhorn</button>
+      </main>
+    );
+  }
+}
+```
+
+When a cue plays, each element that names it:
+
+1. Gets `data-yx-cued="<name>"`. The attribute is taken off and put back, so a CSS animation keyed off it starts over each time.
+2. Plays, if it's an `<audio>` or `<video>`, from where everyone else is.
+3. Dispatches a `yx:cue` event that bubbles, with `{ name, room, data, at, late }`. Call `preventDefault()` on it to play the cue your own way, and steps 1 and 2 are skipped.
+
+`cue` takes several names, space-separated or as an array: `cue={["airhorn", "drop"]}`.
+
+| `play()` option | What it does |
+| --- | --- |
+| `room` | Which pages hear it. Pages listen to the rooms their `cueRoom` props name, or `"main"` when there's none. Default `"main"`. |
+| `in` | How far ahead to schedule it, in ms. The lead gives the message time to reach every page, so they start together. Default 250. |
+| `lasts` | How long it runs, in ms. A page that connects while it's running starts it partway. `data-yx-cued` comes off when it ends. |
+| `cooldown` | Ignore plays of the same cue for this long, in ms. A button the whole room mashes plays once per window. `play()` returns undefined for an ignored play. |
+| `key` | What `cooldown` counts by, instead of the name. For example `` `airhorn:${user.id}` `` gives each person their own cooldown. |
+| `data` | Anything JSON can carry. Listeners get it as `detail.data`. |
+
+Sequences are several cues on one timeline:
+
+```ts
+@action async drop() {
+  const counting = await this.cues.play("countdown", { lasts: 2500, cooldown: 7000 });
+  if (counting) await this.cues.play("drop", { in: 2750, lasts: 4000 });
+}
+```
+
+### Late, slow and hidden pages
+
+A cue says when it plays on the server's clock, so it doesn't matter when the message arrives:
+
+- **Early:** the page waits for the moment.
+- **Late:** a slow link, a tab that was in the background, or a page opened while a cue with `lasts` was running. The page plays the cue at once, `late` ms in. CSS animations are moved forward by that much, and audio and video seek to it.
+- **Past the end of `lasts`:** the cue is skipped.
+- **Seen twice:** a reconnect replays the cues that are still running, and each cue plays only once.
+
+### Sound
+
+Browsers block audio until the visitor has interacted with the page. An `<audio cue>` on a page nobody has clicked stays quiet; the animation still plays. For sound made in code (Web Audio), listen for `yx:cue` and start your `AudioContext` on the first click. The kitchen sink's `horn` attribute does this.
+
+```ts
+export const horn = attribute<boolean>("horn", {
+  render: (on) => (on ? { horn: "" } : {}),
+  client(el) {
+    let audio: AudioContext | undefined;
+    const unlock = () => void (audio ??= new AudioContext()).resume();
+    document.addEventListener("pointerdown", unlock);
+    const play = (event: Event) => {
+      const { late } = (event as CustomEvent<{ late: number }>).detail;
+      if (!audio || audio.state !== "running" || late > 400) return; // half a second late is just noise
+      const tone = audio.createOscillator();
+      tone.connect(audio.destination);
+      tone.start();
+      tone.stop(audio.currentTime + 0.5);
+    };
+    el.addEventListener("yx:cue", play);
+    return () => {
+      document.removeEventListener("pointerdown", unlock);
+      el.removeEventListener("yx:cue", play);
+    };
+  },
+});
+```
+
+The same clock is available to your own client code: `yerd.now()` is the server's time, and `yerd.clock()` measures it and resolves with `{ now, offset, rtt }`.
+
+### Rooms, instances and counts
+
+- **Rooms aren't private.** Any page can listen to any room by name, so don't put anything secret in `data`. A room name is 1 to 128 characters with no control characters.
+- **Instances:** cues go out through [Channels](api:yerd.Channels). With a shared [ChannelBackend](api:yerd.ChannelBackend), pages on every instance hear every cue. `cooldown` is counted per process.
+- **Counts:** `cues.watching(room)` is how many pages are listening through this process right now. The kitchen sink shows it as "tabs raving".
+- **Testing:** `cues.listen(rooms, signal)` is the same feed the runtime reads, so a test can play a cue and check that it arrived.
+
 ## Disconnects and the "pass the signal" rule
 
 When a client goes away, the request's signal aborts (inject it with [@signal](api:yerd.signal)) and yerd calls `return()` on your generator, so its `finally` blocks run. Graceful shutdown ends streams the same way.
@@ -260,7 +390,7 @@ export class Clock {
 On `SIGINT` or `SIGTERM`, or when you call `close()` on the [RunningServer](api:yerd.RunningServer) that `app.listen()` returned, yerd shuts down in order:
 
 1. Stops accepting connections.
-2. Aborts every `@sse` and `@ndjson` stream, so their generators finish.
+2. Aborts every `@sse` and `@ndjson` stream, and the runtime's cue streams, so their generators finish.
 3. Waits for in-flight requests, up to `shutdownTimeout` (10 seconds by default), then cuts what's left.
 4. Stops background work and disposes services (see [services](08-services.md)).
 

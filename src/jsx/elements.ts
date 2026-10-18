@@ -254,9 +254,9 @@ export interface CustomAttributes {
 
 /**
  * Attributes every HTML element accepts: the standard global attributes,
- * `aria-*` and `data-*`, yerd's `action` / `trigger` / `dropTo`, and your
- * CustomAttributes. Spread it into a wrapper component's props to pass
- * attributes through:
+ * `aria-*` and `data-*`, yerd's `action` / `trigger` / `dropTo` / `sync` /
+ * `cue`, and your CustomAttributes. Spread it into a wrapper component's
+ * props to pass attributes through:
  *
  * ```tsx
  * function Panel({ heading, children, ...rest }: GlobalAttributes & { heading: string }) {
@@ -315,6 +315,44 @@ export interface GlobalAttributes extends CustomAttributes {
    * ```
    */
   dropTo?: string;
+  /**
+   * Keep this element's looping CSS animations (and its children's) in step
+   * on every screen: each page lines them up against the server's clock, as
+   * if they all started at the same moment. `animation-delay` still works,
+   * as an offset (stagger a row with it). Only infinite animations are
+   * moved; for one-off moments, use `cue`.
+   *
+   * ```tsx
+   * const bob = keyframes`50% { transform: translateY(-12px); }`;
+   * const dancer = css`animation: ${bob} 600ms ease-in-out infinite;`;
+   *
+   * <div class={dancer} sync>gnome</div> // bobs in time with everyone else's
+   * ```
+   */
+  sync?: boolean;
+  /**
+   * Play when the server plays this cue (`cues.play(name)`), at the same
+   * moment as every other page. The element gets `data-yx-cued="<name>"`
+   * (restarting a CSS animation keyed off it), an `<audio>` / `<video>`
+   * plays, and a `yx:cue` event bubbles from it. Several names: a
+   * space-separated string or an array. See Cues.
+   *
+   * ```tsx
+   * const shake = css`&[data-yx-cued] { animation: ${wobble} 400ms; }`;
+   *
+   * <img class={shake} src="/gnome.png" cue="airhorn" />
+   * <audio src="/airhorn.mp3" cue="airhorn" />
+   * ```
+   */
+  cue?: string | readonly string[];
+  /**
+   * The room `cue` listens to. Default `"main"`, where cues go without a `room`.
+   *
+   * ```tsx
+   * <div class={confetti} cue="goal" cueRoom={`match:${matchId}`} />
+   * ```
+   */
+  cueRoom?: string;
   /**
    * Not an attribute: the JSX key. On an element it renders as `data-key`,
    * which the runtime uses to match elements when it morphs a list.

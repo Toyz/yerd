@@ -39,6 +39,7 @@ Demo accounts (also listed on `/login`):
 | `/features` | the feature tour | `RootLayout` > `ShopShell` |
 | `/oops` | a deliberate crash: the error page shows the stack in development only | `RootLayout` > `ErrorPage` |
 | `/chat` | live chat; staff can mute | `RootLayout` > `ShopShell` |
+| `/rave` | gnome rave: dancing in step on every screen (`sync`), an airhorn and a beat drop played everywhere at once (`Cues`) | `RootLayout` > `ShopShell` |
 | `/about` | prerendered, with `<Dynamic>` parts | `RootLayout` > `MarketingLayout` (`@layout(RootLayout, MarketingLayout)`) |
 | `/login`, `/signup` | auth | `RootLayout` > `AuthLayout` (group) |
 | `/admin` | dashboard: live sales, polled pulse, lazy panel | `RootLayout` > `AdminLayout` (group, staff only) |
@@ -150,7 +151,10 @@ on the `Chat` service used with `@guards("notMuted")`, and method-level guards:
 **Live**: `channel<T>()` for sales, chat and the board; `@sse` (chat, board,
 the ticker with named `event()`s) and `sse()` as a function (the dashboard);
 `data-yx-live` refreshes the chat, board and dashboard; `@ndjson` streams
-`/api/products.ndjson`.
+`/api/products.ndjson`. The rave runs on the server's clock: `sync` keeps
+the gnomes on one beat in every tab, and `Cues` plays the airhorn (with a
+`cooldown`) and a countdown-then-drop (two cues, one timeline) on every page
+at the same moment; the `horn` attribute turns `yx:cue` events into Web Audio.
 
 **Interactivity** (no client code anywhere):
 
@@ -224,10 +228,10 @@ curl -H 'x-api-key: let-me-in' -H 'content-type: application/json' \
 | `src/users.ts` | `UserRepo`, demo accounts, `createAuth(...)` |
 | `src/viewer.ts` | the scoped `Viewer` |
 | `src/chat.ts`, `src/board.ts` | chat (with the `notMuted` guard) and the kanban board |
-| `src/attributes.tsx` | `money`, `ago` and `ticker` custom attributes |
+| `src/attributes.tsx` | `money`, `ago`, `ticker` and `horn` custom attributes |
 | `src/layouts.tsx` | root, shop, marketing, admin, auth and receipt layouts; error page |
 | `src/components.tsx` | product cards, grid, sentinel, hearts, toast |
-| `src/routes/*.tsx` | shop, products, cart, orders, chat, admin, board, auth, pages, media, tour (lookbook, features), API |
+| `src/routes/*.tsx` | shop, products, cart, orders, chat, rave, admin, board, auth, pages, media, tour (lookbook, features), API |
 | `src/styles.css` | the stylesheet |
 | `src/hero.svg` | the hero image |
 | `public/humans.txt` | a file served as is from `public/` |

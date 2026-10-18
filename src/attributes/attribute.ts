@@ -127,6 +127,32 @@ export interface YerdClient {
   fetch(url: string, init?: RequestInit): Promise<Response>;
   /** Register a client attribute at runtime. */
   attribute(name: string, setup: ClientSetup): void;
+  /**
+   * The server's time now, in ms (its `Date.now()`), as best this page can
+   * tell: what `sync` and cues are timed by. Until the clock has been
+   * measured (see clock()), it's this page's own.
+   *
+   * ```ts
+   * client(el, _value, yerd) {
+   *   const tick = setInterval(() => (el.textContent = new Date(yerd.now()).toLocaleTimeString()), 1000);
+   *   return () => clearInterval(tick);
+   * }
+   * ```
+   */
+  now(): number;
+  /**
+   * Measure the server's clock (once per page; later calls share it) and
+   * resolve with its time, this page's offset from it, and the round trip
+   * the measurement was made over, in ms.
+   *
+   * ```ts
+   * client(el, value, yerd) {
+   *   const at = Number(value); // a server timestamp
+   *   void yerd.clock().then(({ now }) => setTimeout(() => el.classList.add("go"), at - now));
+   * }
+   * ```
+   */
+  clock(): Promise<{ now: number; offset: number; rtt: number }>;
 }
 
 /**
@@ -190,6 +216,8 @@ const VALID_NAME = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 /** User attributes; reset by the Vite plugin on reload. Built-ins live apart, so a reset keeps them. */
 const registry = new Map<string, AttributeDef<any>>();
 const builtins = new Map<string, AttributeDef<any>>();
+/** Props the renderer handles itself (server-timed animation), so a custom attribute by that name would never run. */
+const RESERVED = new Set(["sync", "cue"]);
 let version = 0;
 
 /** Server-side lookup used by the renderer: the def for a prop name, if it's a custom attribute. */
@@ -227,7 +255,7 @@ export function customAttribute(name: string): AttributeDef<any> | undefined {
  */
 export function attribute<V = string>(name: string, options: AttributeOptions<V>): AttributeDef<V> {
   if (!VALID_NAME.test(name)) throw new TypeError(`Custom attribute names are lowercase words joined by dashes; got ${JSON.stringify(name)}`);
-  if (builtins.has(name)) throw new TypeError(`"${name}" is a built-in yerd attribute`);
+  if (builtins.has(name) || RESERVED.has(name)) throw new TypeError(`"${name}" is a built-in yerd attribute`);
   if (registry.has(name)) throw new TypeError(`Custom attribute "${name}" is defined twice`);
   const def: AttributeDef<V> = { name, render: options.render, client: options.client };
   registry.set(name, def);

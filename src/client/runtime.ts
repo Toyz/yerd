@@ -46,6 +46,11 @@
  * - [data-yx-defer]     a prerendered <Dynamic> skeleton: filled from the server after load
  * - [data-yx-disabled]  set on the buttons a pending submit disabled (and will re-enable)
  * - [data-yx-prefetch]  warm a page or JSON response before it's needed (the `prefetch` prop)
+ * - [data-yx-sync]      keep the element's looping CSS animations in step with every
+ *                       other page, against the server's clock (/_yerd/clock)
+ * - [data-yx-cue]       play when the server plays one of these cues (/_yerd/cues,
+ *                       rooms from data-yx-cue-room): sets data-yx-cued, plays
+ *                       <audio>/<video>, dispatches a cancelable "yx:cue"
  * - <yerd-local>        client-side state from <Local>: data-yx-on-* handlers
  *                       run against it, data-yx-text / data-yx-bind follow it
  *
@@ -1568,8 +1573,55 @@ export function yerdRuntime(): void {
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initLocals);
   else initLocals();
 
+  // ── server clock ──
+  // `sync` animations and cues are timed on the server's clock. How far this
+  // page's clock is from it is measured against /_yerd/clock: a few round
+  // trips, keeping the quickest (its midpoint is the best guess at when the
+  // server read its clock). Measured on first use, then every few minutes
+  // and whenever the tab comes back into view.
+  const clock = { offset: 0, rtt: Infinity, ready: undefined as Promise<void> | undefined };
+  const localNow = (): number => performance.timeOrigin + performance.now();
+  const serverNow = (): number => localNow() + clock.offset;
+  async function measureClock(): Promise<void> {
+    let best: { offset: number; rtt: number } | undefined;
+    for (let i = 0; i < 4; i++) {
+      try {
+        const t0 = localNow();
+        const response = await fetch("/_yerd/clock", { cache: "no-store" });
+        const t1 = localNow();
+        const now = ((await response.json()) as { now?: unknown }).now;
+        if (typeof now !== "number" || !Number.isFinite(now)) break;
+        if (!best || t1 - t0 < best.rtt) best = { offset: now - (t0 + t1) / 2, rtt: t1 - t0 };
+      } catch {
+        break;
+      }
+    }
+    if (!best) return;
+    const first = clock.rtt === Infinity;
+    const moved = Math.abs(best.offset - clock.offset);
+    clock.offset = best.offset;
+    clock.rtt = best.rtt;
+    // A re-measure that lands within a few ms isn't worth a visible jump.
+    if (first || moved > 8) document.dispatchEvent(new CustomEvent("yx:clock", { detail: { offset: clock.offset, rtt: clock.rtt } }));
+  }
+  function clockReady(): Promise<void> {
+    if (!clock.ready) {
+      clock.ready = measureClock();
+      const again = () => {
+        if (document.visibilityState === "visible") void measureClock();
+      };
+      setInterval(again, 300000);
+      document.addEventListener("visibilitychange", again);
+    }
+    return clock.ready;
+  }
+  /** The server's clock: measured once, then shared by `sync`, cues and yerd.clock(). */
+  function serverClock(): Promise<{ now: number; offset: number; rtt: number }> {
+    return clockReady().then(() => ({ now: serverNow(), offset: clock.offset, rtt: clock.rtt }));
+  }
+
   // Before any attribute connects: client halves receive it.
-  const api = { morph, apply, refresh, load, prefetch, fetch: cachedFetch, attribute, auto };
+  const api = { morph, apply, refresh, load, prefetch, fetch: cachedFetch, attribute, auto, now: serverNow, clock: serverClock };
   (window as Window & { yerd?: unknown }).yerd = api;
 
   // Built in: prefetch. data-yx-prefetch is the mode (intent, visible, load);
@@ -1633,6 +1685,170 @@ export function yerdRuntime(): void {
     };
   });
 
+  // Built in: sync. Infinite CSS animations on (and in) the element are lined
+  // up as if they'd all started at the server's time zero, so every screen
+  // shows the same frame. Done when it connects, when an animation starts
+  // inside it (a class change), and when the clock is re-measured.
+  const syncing = new Set<Element>();
+  function align(el: Element): void {
+    if (typeof el.getAnimations !== "function") return;
+    const now = serverNow();
+    for (const animation of el.getAnimations({ subtree: true })) {
+      const timing = animation.effect?.getComputedTiming();
+      const duration = Number(timing?.duration);
+      if (!timing || timing.iterations !== Infinity || !(duration > 0)) continue;
+      const delay = Number(timing.delay) || 0;
+      // Two iterations, so an `alternate` one runs the same way everywhere too.
+      const period = 2 * duration;
+      animation.currentTime = delay + ((((now - delay) % period) + period) % period);
+    }
+  }
+  const aligning = new Set<Element>();
+  document.addEventListener("animationstart", (event) => {
+    const host = (event.target as Element).closest?.("[data-yx-sync]");
+    if (!host || !syncing.has(host) || aligning.has(host)) return;
+    aligning.add(host);
+    requestAnimationFrame(() => {
+      aligning.delete(host);
+      align(host);
+    });
+  });
+  document.addEventListener("yx:clock", () => {
+    for (const el of syncing) align(el);
+  });
+  attribute("data-yx-sync", (el) => {
+    syncing.add(el);
+    align(el);
+    void clockReady().then(() => {
+      if (syncing.has(el)) align(el);
+    });
+    return () => void syncing.delete(el);
+  });
+
+  // Built in: cue. Elements naming cues listen to their rooms through one
+  // EventSource on /_yerd/cues, open while any are on the page. Each cue says
+  // when it plays on the server's clock: it's played then, or straight away
+  // and partway through if that's already passed (a late arrival, a slow link).
+  type CueMessage = { id: string; name: string; room: string; at: number; lasts?: number; data?: unknown };
+  const cueing = new Set<Element>();
+  // Cue id -> when it's over (server time): a reconnect replays what's still running, and each plays once.
+  const heard = new Map<string, number>();
+  const cueRuns = new WeakMap<Element, number>();
+  let cueSource: EventSource | undefined;
+  let cueRooms = "";
+  let cueQueued = false;
+  const roomOf = (el: Element): string => el.getAttribute("data-yx-cue-room") || "main";
+
+  function playCue(cue: CueMessage): void {
+    const behind = serverNow() - cue.at;
+    // Within a frame is on time (a timer firing a little late): no seeking for that.
+    const late = behind < 16 ? 0 : behind;
+    if (cue.lasts !== undefined && late >= cue.lasts) return;
+    for (const el of Array.from(cueing)) {
+      if (!el.isConnected || roomOf(el) !== cue.room) continue;
+      if (!(el.getAttribute("data-yx-cue") ?? "").split(/\s+/).includes(cue.name)) continue;
+      const detail = { name: cue.name, room: cue.room, data: cue.data, at: cue.at, late };
+      // preventDefault(): the listener plays it its own way.
+      if (!el.dispatchEvent(new CustomEvent("yx:cue", { bubbles: true, cancelable: true, detail }))) continue;
+      const animated = typeof el.getAnimations === "function";
+      const before = new Set(animated ? el.getAnimations({ subtree: true }) : []);
+      el.removeAttribute("data-yx-cued");
+      // Flush styles between the two, so an animation keyed off the attribute starts over.
+      void (el as HTMLElement).offsetWidth;
+      el.setAttribute("data-yx-cued", cue.name);
+      if (late > 0 && animated) {
+        for (const animation of el.getAnimations({ subtree: true })) {
+          if (!before.has(animation)) animation.currentTime = (Number(animation.currentTime) || 0) + late;
+        }
+      }
+      if (el instanceof HTMLMediaElement) {
+        try {
+          el.currentTime = late / 1000;
+        } catch {
+          // Not seekable yet: from the start.
+        }
+        // Browsers refuse sound until the visitor has interacted with the page.
+        void el.play()?.catch(() => {});
+      }
+      const run = (cueRuns.get(el) ?? 0) + 1;
+      cueRuns.set(el, run);
+      if (cue.lasts !== undefined) {
+        setTimeout(() => {
+          if (cueRuns.get(el) === run) el.removeAttribute("data-yx-cued");
+        }, cue.lasts - late);
+      }
+    }
+  }
+
+  function hear(cue: CueMessage): void {
+    if (!cue || typeof cue.id !== "string" || typeof cue.name !== "string" || typeof cue.room !== "string" || typeof cue.at !== "number" || heard.has(cue.id)) return;
+    heard.set(cue.id, cue.at + (cue.lasts ?? 0));
+    if (heard.size > 256) {
+      const old = serverNow() - 60000;
+      for (const [id, end] of heard) if (end < old) heard.delete(id);
+    }
+    void clockReady().then(() => {
+      const wait = cue.at - serverNow();
+      if (wait > 0) setTimeout(() => playCue(cue), wait);
+      else playCue(cue);
+    });
+  }
+
+  function openCues(rooms: string[], delay: number): void {
+    const source = new EventSource("/_yerd/cues?" + rooms.map((room) => "room=" + encodeURIComponent(room)).join("&"));
+    source.onmessage = (event: MessageEvent<string>) => {
+      try {
+        hear(JSON.parse(event.data) as CueMessage);
+      } catch {
+        // Not a cue.
+      }
+    };
+    source.onopen = () => {
+      delay = 1000;
+    };
+    source.onerror = () => {
+      // CLOSED (2): the browser won't retry this one itself (a restarting server, say).
+      if (source.readyState !== 2) return;
+      setTimeout(() => {
+        if (cueSource === source) openCues(rooms, Math.min(delay * 2, 30000));
+      }, delay);
+    };
+    cueSource = source;
+  }
+
+  function connectCues(): void {
+    cueQueued = false;
+    const rooms = Array.from(new Set(Array.from(cueing, roomOf))).sort();
+    const key = rooms.join("\n");
+    if (key === cueRooms && (cueSource || rooms.length === 0)) return;
+    cueSource?.close();
+    cueSource = undefined;
+    cueRooms = key;
+    if (rooms.length === 0) return;
+    void clockReady();
+    openCues(rooms, 1000);
+  }
+  function queueCues(): void {
+    if (cueQueued) return;
+    cueQueued = true;
+    queueMicrotask(connectCues);
+  }
+  attribute("data-yx-cue", (el) => {
+    cueing.add(el);
+    queueCues();
+    return {
+      update: queueCues,
+      disconnect: () => {
+        cueing.delete(el);
+        queueCues();
+      },
+    };
+  });
+  // A room changed on its own (a morph): listen to the new one.
+  attribute("data-yx-cue-room", () => {
+    queueCues();
+    return { update: queueCues, disconnect: queueCues };
+  });
 }
 
 let source: string | undefined;

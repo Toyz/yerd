@@ -19,8 +19,9 @@ import {
 import { jsx, type Component } from "../jsx/jsx-runtime.js";
 import { coerce, type Outgoing } from "../respond/coerce.js";
 import { HttpError } from "../respond/response.js";
-import { LONG_LIVED } from "../respond/stream.js";
+import { LONG_LIVED, sse } from "../respond/stream.js";
 import { Channels } from "../live/channels.js";
+import { CLOCK_PATH, CUES_PATH, Cues, DEFAULT_ROOM, validRoom } from "../live/cues.js";
 import { TestClient, answer } from "./in-process.js";
 import { compilePath } from "../log/paths.js";
 import { cssBundleClasses, cssBundleHash, cssBundleText, resetCss, resetCssBundle, useCssBundle } from "../render/css.js";
@@ -393,7 +394,8 @@ export class YerdApp {
   readonly #pending: Promise<void>[] = [];
   readonly #configure: Array<(services: ServiceCollection) => void> = [];
   readonly #singletonRoutes = new Map<RouteDef, object>();
-  readonly #streams = new Set<RequestContext>();
+  /** Long-lived responses to end at shutdown: stream routes' request contexts, and the runtime's cue streams. */
+  readonly #streams = new Set<{ abort(reason: unknown): void }>();
   #router: Router<HandlerGroup> | undefined;
   #container: Container | undefined;
   #secrets: string[] = [];
@@ -816,6 +818,12 @@ export class YerdApp {
       lifetime: "singleton",
       impl: Channels,
       create: (c) => c.construct(Channels, undefined, "singleton"),
+    });
+    container.register({
+      key: Cues,
+      lifetime: "singleton",
+      impl: Cues,
+      create: (c) => c.construct(Cues, undefined, "singleton"),
     });
     container.register({
       key: Events,
@@ -1279,6 +1287,12 @@ export class YerdApp {
     if (url.pathname === RUNTIME_PATH && (method === "GET" || method === "HEAD")) {
       return send(res, runtimeResponse(req), method === "HEAD", undefined);
     }
+    // The server's clock, for pages lining up `sync` animations and cues.
+    if (url.pathname === CLOCK_PATH && (method === "GET" || method === "HEAD")) {
+      const body = JSON.stringify({ now: Date.now() });
+      return send(res, { status: 200, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }, body }, method === "HEAD", undefined);
+    }
+    if (url.pathname === CUES_PATH && method === "GET") return this.#serveCues(req, res, target.search);
 
     // Prerendered at build time: the file, not the handler. The runtime's own
     // requests go to the handler: `yx-dynamic` fills <Dynamic> parts, and a
@@ -1456,6 +1470,28 @@ export class YerdApp {
           requestLog.error("failed to dispose request services", { error });
         }
       }
+    }
+  }
+
+  /** The runtime's cue stream: `GET /_yerd/cues?room=a&room=b` (no room: the default one). */
+  async #serveCues(req: IncomingMessage, res: ServerResponse, search: string): Promise<void> {
+    const asked = new URLSearchParams(search).getAll("room");
+    const rooms = asked.length ? [...new Set(asked)] : [DEFAULT_ROOM];
+    if (rooms.length > 32 || !rooms.every(validRoom)) return send(res, errorResponse(400), false, undefined);
+    const abort = new AbortController();
+    const gone = () => {
+      if (!res.writableFinished) abort.abort(new Error("client disconnected"));
+    };
+    if (res.destroyed) gone();
+    else res.once("close", gone);
+    const stream = { abort: (reason: unknown) => abort.abort(reason) };
+    this.#streams.add(stream);
+    try {
+      const out = sse(this.#container!.get(Cues).listen(rooms, abort.signal), { retry: 2000 });
+      await send(res, { status: out.status, headers: out.headers, body: out.body as AsyncIterable<string> }, false, abort.signal);
+    } finally {
+      this.#streams.delete(stream);
+      res.off("close", gone);
     }
   }
 

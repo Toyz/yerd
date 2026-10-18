@@ -9,7 +9,7 @@ import { LogoutRoute } from "./routes/auth.js";
 declare module "@toyz/yerd" {
   interface PageMeta {
     /** Which nav item is active. */
-    area?: "shop" | "catalog" | "lookbook" | "chat" | "cart" | "orders" | "about" | "features" | "dashboard" | "products" | "admin-orders" | "board" | "event-log";
+    area?: "shop" | "catalog" | "lookbook" | "chat" | "cart" | "orders" | "about" | "features" | "dashboard" | "products" | "admin-orders" | "board" | "event-log" | "rave";
     /** The page's absolute URL, for <link rel="canonical"> and og:url. */
     url?: string;
     /** Set on the image of a product page, for og:image. */
@@ -120,6 +120,7 @@ export function ShopShell({ children, meta }: LayoutProps) {
           {nav("/products", "Catalog", "catalog")}
           {nav("/lookbook", "Lookbook", "lookbook")}
           {nav("/chat", "Chat", "chat")}
+          {nav("/rave", "Rave", "rave")}
           {viewer.me ? nav("/orders", "My orders", "orders") : null}
           {nav("/features", "Features", "features")}
           {nav("/about", "About", "about")}
