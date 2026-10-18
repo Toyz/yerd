@@ -1923,6 +1923,9 @@ async function primeStream(out: Outgoing): Promise<Outgoing> {
   return { ...out, body: { [Symbol.asyncIterator]: () => primed } };
 }
 
+/** What a wait in send() settles with when the response was aborted instead. */
+const STOPPED: unique symbol = Symbol("stopped");
+
 async function send(res: ServerResponse, out: Outgoing, headOnly: boolean, signal: AbortSignal | undefined): Promise<void> {
   // Copied rather than reused: handlers may hand back a headers object they share.
   const headers: Record<string, string | string[]> = { "x-content-type-options": "nosniff" };
@@ -1965,31 +1968,39 @@ async function send(res: ServerResponse, out: Outgoing, headOnly: boolean, signa
   }
 
   // Client gone or server shutting down: stop pulling and let the source's
-  // finally blocks run.
-  const stopped = new Promise<"stopped">((resolve) => {
-    if (signal?.aborted) resolve("stopped");
-    signal?.addEventListener("abort", () => resolve("stopped"), { once: true });
-  });
+  // finally blocks run. One abort listener serves the whole response, and
+  // each wait (the next chunk, a drain) gets a promise of its own that the
+  // listener settles. Racing every chunk against one promise that settles
+  // only on abort would leave a reaction on it per chunk, for as long as
+  // the connection lives.
+  let wake: (() => void) | undefined;
+  const onAbort = () => wake?.();
+  signal?.addEventListener("abort", onAbort, { once: true });
+  const until = <T>(work: () => Promise<T>): Promise<T | typeof STOPPED> => {
+    if (!signal) return work();
+    if (signal.aborted) return Promise.resolve(STOPPED);
+    return new Promise((resolve, reject) => {
+      wake = () => resolve(STOPPED);
+      work().then(resolve, reject);
+    });
+  };
+  const pull = () => iterator.next();
+  const drain = () => once(res, "drain");
 
   try {
-    let next = first ?? (await Promise.race([iterator.next(), stopped]));
-    while (next !== "stopped" && !next.done) {
-      if (!res.write(next.value)) {
-        const drained = await Promise.race([once(res, "drain").then(() => "drained" as const), stopped]);
-        if (drained === "stopped") break;
-      }
-      next = await Promise.race([iterator.next(), stopped]);
+    let next = first ?? (await until(pull));
+    while (next !== STOPPED && !next.done) {
+      if (!res.write(next.value) && (await until(drain)) === STOPPED) break;
+      next = await until(pull);
     }
-    if (signal?.aborted) {
-      void iterator.return?.();
-      res.end();
-    } else {
-      res.end();
-    }
+    if (signal?.aborted) void iterator.return?.();
+    res.end();
   } catch (error) {
     // Headers are already out; the best we can do is log and cut the response.
     requestLog.error("response failed after headers were sent", { error });
     res.destroy(error as Error);
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 
