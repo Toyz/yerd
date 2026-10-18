@@ -1,6 +1,7 @@
 import { get, header, layout, post, prerender, redirect, route, session, type Session } from "@toyz/yerd";
 import { safeNext } from "@toyz/yerd/auth";
 import { MarketingLayout, RootLayout } from "../layouts.js";
+import type { Prefs } from "../viewer.js";
 
 /**
  * Not in the Shop group: root layout + marketing layout, named in one
@@ -51,11 +52,11 @@ export class About {
 /** Light or dark: a session value, flipped by a plain POST, then back to the page it came from. */
 @route("/theme")
 export class Theme {
-  @session accessor session!: Session;
+  @session accessor prefs!: Session<Prefs>;
   @header("referer") accessor referer: string | undefined;
 
   @post toggle() {
-    this.session.theme = this.session.theme === "dark" ? "light" : "dark";
+    this.prefs.theme = this.prefs.theme === "dark" ? "light" : "dark";
     return redirect(this.#back());
   }
 

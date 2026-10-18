@@ -114,7 +114,7 @@ const FEATURES: Array<[string, Feature[]]> = [
     { name: "auth.role", href: "/admin", how: "Customers get a 403 here; staff get in." },
     { name: "Session shape with methods and defaults", href: "/cart", how: "@session(Cart): lines, count, total, add, setQty, remove." },
     { name: "onLogin / onLogout: a cart that follows the user", href: "/login?next=/cart", how: "Add things as a guest, log in as di / saved-my-cart: the saved cart and yours merge (My orders shows it too)." },
-    { name: "Session value as a property", href: "/", how: "session.theme, flipped by the Dark/Light button." },
+    { name: "Session value as a property", href: "/", how: "prefs.theme on a Session<Prefs>, flipped by the Dark/Light button; the sign-in hooks use session.as(Cart)." },
     { name: "Flash messages", href: "/login", how: "A wrong password comes back as a flash." },
     { name: "createGuard", href: "/api/products", how: "Writes need x-api-key or a staff session." },
     { name: "Named @guard on a service", href: "/chat", how: "Muted users can't post (the notMuted guard lives on the Chat service)." },

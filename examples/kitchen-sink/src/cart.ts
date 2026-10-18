@@ -18,6 +18,10 @@ export interface CartLine {
  */
 export class Cart {
   lines: CartLine[] = [];
+  /** How many saved items the last sign-in brought back; the cart page says so once. */
+  welcomeBack?: number;
+  /** Where the shipping estimate is for (a country code). */
+  shipTo?: string;
 
   get count(): number {
     return this.lines.reduce((sum, line) => sum + line.qty, 0);

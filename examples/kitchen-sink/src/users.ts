@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { instrument, is, length, logger, lower, matches, onBoot, resolve, service, trim, type Logger } from "@toyz/yerd";
 import { createAuth, hashPassword } from "@toyz/yerd/auth";
+import { Cart } from "./cart.js";
 import { Carts } from "./carts.js";
 
 export type Role = "admin" | "staff" | "customer";
@@ -68,8 +69,9 @@ export class UserRepo {
  *
  * The hooks carry the cart across sign-in: onLogin runs after login() has
  * rotated the session and merges the guest's cart into the user's saved one;
- * onLogout runs before logout() destroys the session and saves it. Both use
- * the cart's session key (`lines`, typed on SessionData in viewer.ts).
+ * onLogout runs before logout() destroys the session and saves it. The hooks
+ * get the plain session; `session.as(Cart)` is the same typed view routes get
+ * from `@session(Cart)`.
  */
 export const auth = createAuth<User>({
   load: (id) => resolve(UserRepo).get(id),
@@ -77,15 +79,15 @@ export const auth = createAuth<User>({
   loginPath: "/login",
   onLogin(user, session) {
     const carts = resolve(Carts);
+    const cart = session.as(Cart);
     const saved = carts.load(user);
-    const merged = carts.merge(saved, session.lines ?? []);
-    session.lines = merged;
-    carts.save(user.id, merged);
+    cart.lines = carts.merge(saved, cart.lines);
+    carts.save(user.id, cart.lines);
     const kept = saved.reduce((sum, line) => sum + line.qty, 0);
     // Not a flash (that's gone after the next request, wherever it lands): kept until the cart page shows it.
-    if (kept > 0) session.cartWelcome = kept;
+    if (kept > 0) cart.welcomeBack = kept;
   },
   onLogout(user, session) {
-    if (user) resolve(Carts).save(user.id, session.lines ?? []);
+    if (user) resolve(Carts).save(user.id, session.as(Cart).lines);
   },
 });

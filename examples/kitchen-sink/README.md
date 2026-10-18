@@ -141,8 +141,8 @@ the compiler checks).
 `@auth.user` / `@auth.maybeUser`, `auth.current()`, `safeNext`. The cart is a
 session shape: `@session(Cart) accessor cart!: Session<Cart>` with a default
 `lines = []`, `count` / `total` getters and `add` / `setQty` / `remove` /
-`empty` methods. Typed views (`Session<AuthSession>`), an app-wide key
-(`session.theme`, via `SessionData`), and flash messages after redirects.
+`empty` methods. Typed views (`Session<AuthSession>`, `Session<Prefs>` for the theme), the
+sign-in hooks reaching the cart with `session.as(Cart)`, and flash messages after redirects.
 Guards: `createGuard` (`readOnlyMode`, `apiWriter`), a named `@guard("notMuted")`
 on the `Chat` service used with `@guards("notMuted")`, and method-level guards:
 `@post @auth.required checkout()`, `@action @auth.role("staff") mute()`.

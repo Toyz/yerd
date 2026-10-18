@@ -1,19 +1,11 @@
 import { currentContext, inject, scoped, service, session, type Session } from "@toyz/yerd";
-import { Cart, type CartLine } from "./cart.js";
+import { Cart } from "./cart.js";
 import { Carts } from "./carts.js";
 import { auth, type User } from "./users.js";
 
-declare module "@toyz/yerd" {
-  /** App-wide session keys: plain `Session` (and `ctx.session`) are typed by these. */
-  interface SessionData {
-    theme?: "light" | "dark";
-    /** The Cart shape's data, read by the sign-in hooks (users.ts). */
-    lines?: CartLine[];
-    /** How many saved items a sign-in brought back; the cart page says so once. */
-    cartWelcome?: number;
-    /** Where the cart's shipping estimate is for (a country code). */
-    shipTo?: string;
-  }
+/** The visitor's preferences, kept in their session. */
+export interface Prefs {
+  theme?: "light" | "dark";
 }
 
 /**
@@ -27,7 +19,7 @@ declare module "@toyz/yerd" {
 export class Viewer {
   @auth.maybeUser accessor me: User | undefined;
   @session(Cart) accessor cart!: Session<Cart>;
-  @session accessor session!: Session;
+  @session accessor prefs!: Session<Prefs>;
   @inject(Carts) accessor carts!: Carts;
 
   /** Call after changing the cart: a signed-in user's cart is saved too, so it survives never signing out. */
@@ -41,7 +33,7 @@ export class Viewer {
 
   /** A prerendered page has no visitor (and reading the session would fail the build): it gets the default. */
   get theme(): "light" | "dark" {
-    return currentContext().prerendering ? "light" : (this.session.theme ?? "light");
+    return currentContext().prerendering ? "light" : (this.prefs.theme ?? "light");
   }
 
   /** Items in the cart; 0 while prerendering. */

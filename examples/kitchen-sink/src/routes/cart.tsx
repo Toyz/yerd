@@ -101,7 +101,7 @@ export class CartPage {
   }
 
   get country() {
-    return this.viewer.session.shipTo ?? "US";
+    return this.cart.shipTo ?? "US";
   }
 
   /** Ask whoever answers QuoteShipping (the Shipping service) and wait for the number. */
@@ -118,8 +118,8 @@ export class CartPage {
   @get async page() {
     const error = this.cart.flash("error") as string | undefined;
     // Set by the sign-in hook when it merged a saved cart; shown once.
-    const kept = this.viewer.session.cartWelcome;
-    if (kept) this.viewer.session.cartWelcome = undefined;
+    const kept = this.cart.welcomeBack;
+    if (kept) this.cart.welcomeBack = undefined;
     return (
       <>
         <h1 class="page-title">Your cart</h1>
@@ -205,7 +205,7 @@ export class CartPage {
       if (!(error instanceof HttpError)) throw error;
       throw new HttpError(error.status, error.message, { details: { issues: [{ path: "country", message: error.message }] } });
     }
-    this.viewer.session.shipTo = country;
+    this.cart.shipTo = country;
     return this.shipping();
   }
 
