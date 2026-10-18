@@ -1,10 +1,10 @@
 # Events
 
-The event bus: announce that something happened, react in the background, ask another service for an answer, and spread events across instances.
+Placing an order announces `OrderPlaced`, and the receipt goes out from a service the checkout has never heard of.
 
 ## Why events
 
-Instead of a checkout that sends the receipt, takes stock and updates the dashboard itself (and waits on a slow mail server), emit one `OrderPlaced` event and let a service for each reaction listen. The reactions run after the response, and a new one doesn't touch checkout.
+A checkout that sends the receipt, updates the warehouse and the dashboard itself waits on all of them, and changes every time a reaction is added. Instead it emits one event, and a service per reaction listens.
 
 | You want | Use |
 | --- | --- |
@@ -17,110 +17,80 @@ Inject [`Events`](api:yerd.Events) anywhere. It works in one process with no set
 ## An event is a class
 
 ```ts
-// src/events.ts
-import { named } from "@toyz/yerd";
-
+// src/orders.ts
+/**
+ * Announced after checkout. Handlers run after the response, so it carries
+ * what they need (no "current user" by then). Plain data: events travel as JSON.
+ */
 @named("order.placed")
 export class OrderPlaced {
   constructor(
-    readonly orderId: string,
-    readonly userId: string,
-    readonly totalCents: number,
+    readonly orderId: number,
+    readonly email: string,
+    readonly total: number,
   ) {}
 }
 ```
 
 - [`@named`](api:yerd.named) gives a stable name for the wire and logs; the class name is the fallback, which minifiers may change. Two classes with one name throw when the second loads.
 - Keep fields plain data: events are [copied through JSON](#events-travel-as-json).
-- Include everything a handler needs. Handlers run after the request, so send the user's id, not "the current user".
+- Include everything a handler needs: the email to send to, not "the current user".
 
 ## Recipe: background work after checkout
 
-The checkout emits; three services react.
+The checkout emits once the order is placed; `Receipts` reacts.
 
 ```tsx
 // src/routes/checkout.tsx
-import { Events, Unauthorized, action, get, inject, redirect, route, session, type Session } from "@toyz/yerd";
-import { OrderPlaced } from "../events.js";
-import { Orders, Payments } from "../orders.js";
-
-@route("/checkout")
-export class Checkout {
+@route("/checkout", { group: Account, meta: { title: "Check out" } })
+export class CheckoutPage {
   @inject(Events) accessor events!: Events;
-  @inject(Orders) accessor orders!: Orders;
-  @inject(Payments) accessor payments!: Payments;
-  @session accessor session!: Session<{ userId?: string }>;
+  // ...
 
-  @get page() {
-    return (
-      <form action={this.place}>
-        <button>Place order</button>
-      </form>
-    );
-  }
-
-  @action async place() {
-    const userId = this.session.userId;
-    if (!userId) throw new Unauthorized("Sign in first");
-    const order = this.orders.place(userId);
-    this.events.emit(new OrderPlaced(order.id, userId, order.totalCents));
-    // If the card is declined, this throws: the request fails and the event is dropped.
-    await this.payments.charge(order);
+  @action async place(_: {}, form: ActionForm) {
+    // ...details = form.parse(CheckoutForm)
+    const order = await this.orders.place(this.me, details, this.cart.lines);
+    // Inside a request, the event goes out once this action has returned; a throw drops it.
+    this.events.emit(new OrderPlaced(order.id, order.email, order.total));
+    this.cart.empty();
     return redirect(`/orders/${order.id}`);
   }
 }
 ```
 
 ```ts
-// src/reactions.ts
-import { Channels, channel, inject, on, service } from "@toyz/yerd";
-import { OrderPlaced } from "./events.js";
-import { Mailer, Stock } from "./orders.js";
-
-export const salesChannel = channel<{ totalCents: number }>("sales");
-
+// src/receipts.ts
 @service
 export class Receipts {
-  @inject(Mailer) accessor mailer!: Mailer;
+  @logger accessor log!: Logger;
 
-  @on(OrderPlaced) async send(event: OrderPlaced) {
-    await this.mailer.send(event.userId, `Thanks for order ${event.orderId}`);
-  }
-}
-
-@service
-export class Warehouse {
-  @inject(Stock) accessor stock!: Stock;
-
-  // The stock service is flaky: try again after 2s, 4s and 8s before giving up.
-  @on(OrderPlaced, { retries: 3, backoff: "2s" }) async reserve(event: OrderPlaced) {
-    await this.stock.reserve(event.orderId);
-  }
-}
-
-@service
-export class SalesTicker {
-  @inject(Channels) accessor channels!: Channels;
-
-  // Every open dashboard refreshes (see data-yx-live).
-  @on(OrderPlaced) async tick(event: OrderPlaced) {
-    await this.channels.publish(salesChannel, { totalCents: event.totalCents });
+  @on(OrderPlaced) send(event: OrderPlaced) {
+    // A real shop hands this to a mail service; this one writes it to the log.
+    this.log.info("receipt sent", { order: event.orderId, to: event.email, total: formatPrice(event.total) });
   }
 }
 ```
 
 ```ts
-// src/main.ts
-/// <reference types="vite/client" />
-import { yerd } from "@toyz/yerd";
-import "./reactions.js"; // nothing injects these services, so nothing else would import them
-
-export default yerd()
-  .sessions()
-  .discover(import.meta.glob("./routes/**/*.{ts,tsx}", { eager: true }));
+// src/app.ts
+// Nothing injects the receipt handler, so nothing else would import it.
+import "./receipts.js";
 ```
 
-The user is redirected once the order is saved and charged. The three reactions run afterwards, independently: one failing doesn't stop the others.
+```answer
+POST /checkout
+_yx=(the form's token)&name=Ada+Lovelace&email=ada%40example.com&address=12+St+James%27s+Square%2C+London
+>>>
+303 See Other
+location: /orders/1001
+```
+
+```text
+14:54:58.784  INFO receipt sent order=1001 to=ada@example.com total=$24.00 (Receipts)
+14:54:58.784  INFO request{method=POST path=/checkout} status=303 1.58ms
+```
+
+The customer is redirected without waiting on the receipt. A second reaction (a warehouse, a sales dashboard) is another service with an `@on(OrderPlaced)`; checkout doesn't change.
 
 ## When an event goes out
 
@@ -130,7 +100,7 @@ The user is redirected once the order is saved and charged. The three reactions 
 | `emit()` outside a request (`@every`, an `@on` handler, a hosted service, a script) | at once |
 | `emitNow()` anywhere | at once; returns a promise that settles once the event is handed to the transport |
 
-So emit, then do the risky part: if the charge throws, nobody hears about an order that never happened.
+So an action can emit before its last risky step: if that step throws, nobody hears about an order that never happened.
 
 > [!NOTE]
 > If the handler throws, its events are dropped even when [`@catches`](api:yerd.catches) or `app.onError` turns the error into a page. A handler that *returns* an error response (`res(..., { status: 422 })`) still sends them.
@@ -139,7 +109,7 @@ So emit, then do the risky part: if the charge throws, nobody hears about an ord
 
 [`@on(EventClass, options)`](api:yerd.on) marks a singleton service's method as a handler.
 
-- **Background.** It runs after the response. A throw is logged at `error` (target `yerd::events`) with the handler's name.
+- **Background.** Whoever emitted never waits on it. A throw is logged at `error` (target `yerd::events`) with the handler's name.
 - **Own DI scope** per delivery, like a request, but with no current request: no `currentContext()`, `@session` or `auth.current()`.
 - **Singletons only.** On a scoped or transient service it's a boot error.
 - **Unordered.** If B must run after A, have A emit a second event.
@@ -150,11 +120,18 @@ So emit, then do the risky part: if the charge throws, nobody hears about an ord
 | `backoff` | `"1s"` | the wait before the first retry, doubling after each (`"500ms"`, `"2s"`, or ms) |
 | `every` | `false` | deliver to every instance instead of one (see [below](#several-instances-and-other-apps)) |
 
+```ts
+// The stock service is flaky: try again after 2s, 4s and 8s before giving up.
+@on(OrderPlaced, { retries: 3, backoff: "2s" }) async reserve(event: OrderPlaced) {
+  await this.warehouse.reserve(event.orderId);
+}
+```
+
 Each retry logs a warning, the last failure an error; shutdown cancels pending retries. A retry runs from the top, so make handlers safe to repeat.
 
 ### Register your handlers
 
-A `@service` registers when its module is imported, and a service with only `@on` handlers is never injected. Import it from your entry (as above) or keep handlers in a folder `discover()` loads. With `yerd({ services: [...] })`, list them there. In development, an event that reaches no handler warns once:
+A `@service` registers when its module is imported, and a service with only `@on` handlers is never injected. Import it from your app (as the shop's `app.ts` does) or keep handlers in a folder `discover()` loads. With `yerd({ services: [...] })`, list them there. In development, an event that reaches no handler warns once:
 
 ```text
 WARN nothing handles order.placed: is the module with its @on handlers imported? A @service registers when its module loads (yerd::events)
@@ -162,14 +139,12 @@ WARN nothing handles order.placed: is the module with its @on handlers imported?
 
 ### Events travel as JSON
 
-Each handler gets its own copy via `JSON.stringify`/`JSON.parse`, even in memory, so handlers can't change each other's objects and development matches a real transport.
+Each handler gets its own copy via `JSON.stringify`/`JSON.parse`, even in memory.
 
 - The copy is an instance of the event's class, built without running the constructor: getters and methods work, and constructor-set fields keep their values.
 - A `Date` arrives as a string, `Map`/`Set` as `{}`, and functions and `undefined` fields disappear. Rebuild them in a static `fromJSON`:
 
 ```ts
-import { named } from "@toyz/yerd";
-
 @named("invoice.due")
 export class InvoiceDue {
   constructor(
@@ -184,6 +159,9 @@ export class InvoiceDue {
 }
 ```
 
+> [!TAKE]
+> Events are copied even when nothing leaves the process. Handlers can't change each other's objects, and what works in development works over a broker. You give up passing live objects (a connection, a callback): pass ids and look them up.
+
 > [!WARNING]
 > An event JSON can't serialize (a `BigInt`, a circular reference) is refused at `emit()` with a TypeError naming it.
 
@@ -193,12 +171,10 @@ A call extends [`Call<Result>`](api:yerd.Call); exactly one [`@handles`](api:yer
 
 ### Recipe: a typed shipping quote
 
-The cart asks for a shipping price without knowing who works it out.
+The cart could ask for a shipping price without knowing who works it out (the shop doesn't ship yet).
 
 ```ts
 // src/shipping.ts
-import { Call, YerdError, handles, named, service } from "@toyz/yerd";
-
 @named("shipping.quote")
 export class QuoteShipping extends Call<number> {
   constructor(
@@ -223,43 +199,22 @@ export class Shipping {
 
 ```tsx
 // src/routes/cart.tsx
-import { ActionForm, Events, YerdError, Region, action, get, inject, route } from "@toyz/yerd";
-import { QuoteShipping } from "../shipping.js";
+@inject(Events) accessor events!: Events;
 
-@route("/cart")
-export class CartPage {
-  @inject(Events) accessor events!: Events;
+async shipping(country: string) {
+  const cents = await this.events.call(new QuoteShipping(1200, country), { timeout: "3s" }); // a number
+  return <Region id="shipping">Shipping to {country}: <Price cents={cents} /></Region>;
+}
 
-  @get async page() {
-    return <main>{await this.estimate("US")}</main>;
-  }
-
-  async estimate(country: string) {
-    const cents = await this.events.call(new QuoteShipping(1200, country), { timeout: "3s" }); // number
-    return (
-      <Region id="shipping">
-        <form action={this.ship}>
-          <select name="country" data-yx-submit>
-            <option value="US" selected={country === "US"}>United States</option>
-            <option value="PT" selected={country === "PT"}>Portugal</option>
-            <option value="AQ" selected={country === "AQ"}>Antarctica</option>
-          </select>
-          <span data-yx-error="country"></span>
-        </form>
-        <p>Shipping: ${(cents / 100).toFixed(2)}</p>
-      </Region>
-    );
-  }
-
-  @action async ship(_: {}, form: ActionForm) {
-    const country = form.string("country");
-    try {
-      return await this.estimate(country);
-    } catch (error) {
-      if (!(error instanceof YerdError)) throw error;
-      // The handler's 422 arrives as a YerdError; as an issue for "country" it lands in that field's box.
-      throw new YerdError(error.status, error.message, { details: { issues: [{ path: "country", message: error.message }] } });
-    }
+// posted by a <select name="country" data-yx-submit> in a form
+@action async ship(_: {}, form: ActionForm) {
+  const country = form.string("country");
+  try {
+    return await this.shipping(country);
+  } catch (error) {
+    if (!(error instanceof YerdError)) throw error;
+    // The handler's 422 arrives as a YerdError; as an issue for "country" it lands in that field's box.
+    throw new YerdError(error.status, error.message, { details: { issues: [{ path: "country", message: error.message }] } });
   }
 }
 ```
@@ -285,11 +240,12 @@ A script can emit from [`app.scope()`](08-services.md#scripts-appscope) without 
 ```ts
 // scripts/resend-receipt.ts
 import { Events, resolve } from "@toyz/yerd";
-import { app } from "../src/app.js";
-import { OrderPlaced } from "../src/events.js";
+import { createApp } from "../src/app.js";
+import { OrderPlaced } from "../src/orders.js";
 
+const app = createApp();
 await app.scope(() => {
-  resolve(Events).emit(new OrderPlaced("o-1001", "ada", 4200));
+  resolve(Events).emit(new OrderPlaced(1001, "ada@example.com", 2400));
 });
 await app.stop(); // waits for the handlers still running
 ```
@@ -311,16 +267,9 @@ The model is consumer groups: a message goes once to each group subscribed to it
 - **`{ every: true }`** makes a group per instance, for state that lives in each process:
 
   ```ts
-  import { named, on, service } from "@toyz/yerd";
-
-  @named("product.changed")
-  export class ProductChanged {
-    constructor(readonly productId: string) {}
-  }
-
   @service
   export class PriceCache {
-    #prices = new Map<string, number>();
+    #prices = new Map<number, number>();
 
     // Every instance drops its own copy; one-of-five wouldn't be enough.
     @on(ProductChanged, { every: true }) forget(event: ProductChanged) {
@@ -336,13 +285,6 @@ A broker transport is a few lines (`Broker` stands for your client library):
 
 ```ts
 // src/transport.ts
-import { EventTransport, yerd } from "@toyz/yerd";
-
-interface Broker {
-  publish(subject: string, data: string): Promise<void>;
-  subscribe(subject: string, queue: string, onMessage: (data: string) => void): { unsubscribe(): void };
-}
-
 export function brokerTransport(broker: Broker): EventTransport {
   return {
     async publish(topic, message) {
@@ -356,9 +298,8 @@ export function brokerTransport(broker: Broker): EventTransport {
   };
 }
 
-export function withBroker(broker: Broker) {
-  return yerd().services((s) => s.value(EventTransport, brokerTransport(broker)));
-}
+// src/app.ts
+createApp().services((s) => s.value(EventTransport, brokerTransport(broker)));
 ```
 
 - Name every event and call that leaves the process with `@named`, using the same names in every app on the broker.
@@ -367,32 +308,25 @@ export function withBroker(broker: Broker) {
 
 ### Channels ride along
 
-With an `EventTransport` and no `ChannelBackend` registered, [Channels](07-streaming-and-live.md#channels) (and cues) run over the transport via [`channelBackendFrom`](api:yerd.channelBackendFrom): channel `room:42` is topic `channel:room:42`, and each subscriber is its own group, so all hear every message.
+With an `EventTransport` and no `ChannelBackend` registered, [Channels](07-streaming-and-live.md#channels) (and cues) run over the transport via [`channelBackendFrom`](api:yerd.channelBackendFrom): the shop's channel `stock:7` is topic `channel:stock:7`, and each subscriber is its own group, so every open product page hears every message.
 
 That suits brokers where groups are cheap and vanish with their last member (NATS queue groups, pub/sub fan-out). Where groups are durable (Redis Streams), register a [`ChannelBackend`](api:yerd.ChannelBackend) over plain pub/sub instead; it always wins.
 
 ## Testing events
 
-[`events.waitFor(EventClass, { where, timeout })`](api:yerd.Events.waitFor) resolves with the next matching event. Call it *before* the thing that emits:
+[`events.waitFor(EventClass, { where, timeout })`](api:yerd.Events.waitFor) resolves with the next matching event. Call it *before* the thing that emits. From the shop's suite:
 
 ```ts
-import { afterAll, expect, it } from "vitest";
-import { Events, yerd } from "@toyz/yerd";
-import { OrderPlaced } from "../src/events.js";
-import { Checkout } from "../src/routes/checkout.js";
-import { Receipts } from "../src/reactions.js";
+// test/unit/shop-example.test.tsx
+it("places the order, announces it, takes the stock and empties the cart", async () => {
+  const client = await shopperWithNotebook(); // signed in, one Field notebook in the cart
+  const placed = app.container.get(Events).waitFor(OrderPlaced, { where: (e) => e.email === "ada@example.com", timeout: "2s" });
 
-const app = yerd({ routes: [Checkout], services: [Receipts], handleSignals: false }).sessions();
-afterAll(() => app.stop());
-
-it("announces the order", async () => {
-  await app.boot();
-  const placed = app.container.get(Events).waitFor(OrderPlaced, { where: (e) => e.userId === "ada", timeout: "2s" });
-  const client = app.client();
-  // ...sign in as ada first, e.g. client.action("/login", { name: "ada", password: "..." })
-  await client.action("/checkout");
+  const res = await client.action("/checkout", { name: "Ada Lovelace", email: "ada@example.com", address: "12 St James's Square, London" });
+  // ...
   const event = await placed;
-  expect(event.totalCents).toBeGreaterThan(0);
+  expect(event.total).toBe(2400);
+  // ...
 });
 ```
 
