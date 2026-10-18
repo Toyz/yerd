@@ -16,6 +16,7 @@ import { readBody, readNdjson, type ParsedBody } from "./body.js";
 import type { RouteInfo, YerdContext } from "./context.js";
 import { parseCookies, serializeCookie, type CookieOptions } from "./cookies.js";
 import type { Outgoing } from "../respond/coerce.js";
+import { checkHeader } from "../respond/response.js";
 import type { ResponseDefaults } from "../decorators/response.js";
 import { REQUEST_SPAN, newSpanId, type Span } from "../log/span.js";
 import { HttpError } from "../respond/response.js";
@@ -164,7 +165,7 @@ export class RequestContext implements YerdContext {
   }
 
   setHeader(name: string, value: string): void {
-    if (/[\r\n\0]/.test(value)) throw new TypeError(`Header ${name} contains a line break or NUL`);
+    checkHeader(name, value);
     (this.#outHeaders ??= {})[name.toLowerCase()] = value;
   }
 

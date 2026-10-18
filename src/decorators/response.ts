@@ -14,6 +14,7 @@
  */
 
 import { createKey } from "./keys.js";
+import { checkHeader } from "../respond/response.js";
 
 export interface ResponseDefaults {
   status?: number;
@@ -53,7 +54,7 @@ export function status(code: number) {
 
 /** A header on this handler's responses (a header the result sets itself wins). */
 export function setHeader(name: string, value: string) {
-  if (/[\r\n\0]/.test(value)) throw new TypeError(`@setHeader(${JSON.stringify(name)}): the value contains a line break or NUL`);
+  checkHeader(name, value, `@setHeader(${JSON.stringify(name)}): the value`);
   return (_method: Function, context: ClassMethodDecoratorContext): void => {
     defaultsFor(context).headers[name.toLowerCase()] = value;
   };

@@ -4,6 +4,22 @@ import { serializeCookie, type CookieOptions } from "../server/cookies.js";
 
 export type HeaderInit = Record<string, string>;
 
+const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/**
+ * Throw a TypeError for a header Node would refuse: a name that isn't an
+ * HTTP token, or a value with a line break, NUL, another control character
+ * or a character above U+00FF. Node only refuses them once the response is
+ * being written, past the point where @catches, onError or the error page
+ * can answer; checked here, the mistake is an ordinary error.
+ */
+export function checkHeader(name: string, value: string, where = `Header ${name}`): void {
+  if (!TOKEN.test(name)) throw new TypeError(`${JSON.stringify(name)} isn't a valid header name`);
+  const text = String(value);
+  if (/[\r\n\0]/.test(text)) throw new TypeError(`${where} contains a line break or NUL`);
+  if (/[^\t\x20-\x7e\x80-\xff]/.test(text)) throw new TypeError(`${where} contains a control character or a character above U+00FF`);
+}
+
 /**
  * An explicit response: status, headers and a body that is itself coerced.
  * Header names are lowercased here, so `Content-Type` replaces the default
@@ -15,7 +31,7 @@ export class YerdResponse {
 
   /**
    * Usually built with res() or redirect(). Throws a TypeError for a status
-   * outside 200-599 or a header value containing CR, LF or NUL.
+   * outside 200-599 or a header Node would refuse (see checkHeader).
    */
   constructor(
     readonly status: number,
@@ -32,8 +48,7 @@ export class YerdResponse {
     const lower: HeaderInit = {};
     for (const name in headers) {
       const value = headers[name]!;
-      // Node refuses these too, but only once the status line is half written.
-      if (/[\r\n\0]/.test(value)) throw new TypeError(`Header ${name} contains a line break or NUL`);
+      checkHeader(name, value);
       lower[name.toLowerCase()] = value;
     }
     this.headers = lower;
@@ -76,14 +91,17 @@ export function res(body?: unknown, init: ResponseInit = {}): YerdResponse {
 /**
  * A redirect to `location`. The default 303 makes the browser follow up with
  * a GET, which is what you want after a form POST; use 307 / 308 to keep the
- * method. The location is sent as given, so check user-supplied targets.
+ * method. The location is sent as given, apart from non-ASCII characters,
+ * which are percent-encoded as UTF-8; so check user-supplied targets.
  *
  * ```ts
  * @post save() { ...; return redirect("/todos"); }
  * ```
  */
 export function redirect(location: string, status: 301 | 302 | 303 | 307 | 308 = 303): YerdResponse {
-  return new YerdResponse(status, { location }, null);
+  // A header carries bytes, not text: "/café" would go out as Latin-1 (and
+  // "/日本" not at all), while browsers read Location as UTF-8.
+  return new YerdResponse(status, { location: location.replace(/[^\x00-\x7f]+/g, encodeURI) }, null);
 }
 
 /**
@@ -98,7 +116,8 @@ export class HttpError extends Error {
 
   /**
    * `message` defaults to "HTTP <status>". An unexposed error is answered
-   * with the status text instead (and logged, when 5xx).
+   * with the status text instead (and logged, when 5xx). Throws a TypeError
+   * for a status outside 200-599.
    *
    * ```ts
    * throw new HttpError(404, "No such todo");
@@ -111,6 +130,12 @@ export class HttpError extends Error {
     options: { expose?: boolean; cause?: unknown; details?: Record<string, unknown> } = {},
   ) {
     super(message ?? `HTTP ${status}`, { cause: options.cause });
+    // Caught here rather than when the response is written: a 1xx would be sent
+    // as an interim response with no final one after it, and anything outside
+    // 100-999 makes Node throw past every error handler.
+    if (!Number.isInteger(status) || status < 200 || status > 599) {
+      throw new TypeError(`new HttpError(${status}): not a response status (200-599)`);
+    }
     this.name = "HttpError";
     this.expose = options.expose ?? status < 500;
     this.details = options.details;

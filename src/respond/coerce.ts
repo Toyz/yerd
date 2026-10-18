@@ -51,7 +51,11 @@ function isPlainData(value: unknown): boolean {
   return !NOT_JSON.some((type) => value instanceof type);
 }
 
-const NOT_JSON: Function[] = [Map, Set, WeakMap, WeakSet, Promise, RegExp, Error, ArrayBuffer, DataView];
+const NOT_JSON: Function[] = [
+  Map, Set, WeakMap, WeakSet, Promise, RegExp, Error, ArrayBuffer, DataView,
+  // Web platform objects, all "{}" through JSON.stringify.
+  Response, Request, Headers, Blob, FormData, URLSearchParams, WeakRef,
+];
 
 function wrapInLayouts(node: Child, layouts: readonly Component<LayoutProps>[], meta: PageMeta): Child {
   let wrapped = node;
@@ -94,7 +98,8 @@ export async function coerce(value: unknown, options: CoerceOptions): Promise<Ou
   if (typeof value === "string") return { status: 200, headers: { "content-type": TEXT }, body: value };
 
   if (typeof value === "number") {
-    if (!Number.isInteger(value) || value < 100 || value > 599) {
+    // 1xx are interim responses: sent as the answer, the client would wait for a final one.
+    if (!Number.isInteger(value) || value < 200 || value > 599) {
       throw new TypeError(`A handler returned ${value}, which isn't an HTTP status code`);
     }
     return { status: value, headers: {}, body: null, explicitStatus: true };
@@ -116,6 +121,8 @@ export async function coerce(value: unknown, options: CoerceOptions): Promise<Ou
     ? `a ${value.constructor.name} (JSON can't represent it; convert it, e.g. Object.fromEntries(map) or [...set])`
     : value instanceof Error
       ? "an Error (throw it, or throw an HttpError, instead of returning it)"
-      : Object.prototype.toString.call(value);
+      : value instanceof Response
+        ? "a fetch Response (return its body, e.g. res(await response.text(), { status: response.status }))"
+        : Object.prototype.toString.call(value);
   throw new TypeError(`A handler returned ${what}, which yerd doesn't know how to send as a response`);
 }

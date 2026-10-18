@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { STATUS_CODES, createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { once } from "node:events";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
@@ -31,7 +31,7 @@ import { RUNTIME_PATH } from "../actions/components.js";
 import { runtimeSource } from "../client/runtime.js";
 import { attributesSource, resetAttributeRegistry } from "../attributes/attribute.js";
 import { isYerdNode } from "../jsx/jsx-runtime.js";
-import { YerdResponse, isBare } from "../respond/response.js";
+import { YerdResponse, isBare, redirect } from "../respond/response.js";
 import { Router, paramNames } from "../router/trie.js";
 import { DEFAULT_BODY_LIMIT, readBody, readNdjson, type ParsedBody } from "./body.js";
 import { acceptsEncoding, createMount, serveStatic, type StaticMount, type StaticOptions } from "./static.js";
@@ -183,6 +183,11 @@ const STATUS_TEXT: Record<number, string> = {
   400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found",
   405: "Method Not Allowed", 406: "Not Acceptable", 413: "Content Too Large", 500: "Internal Server Error",
 };
+
+/** The text an unexposed error is answered with: ours (RFC 9110 names) first, then Node's list. */
+function statusText(status: number): string {
+  return STATUS_TEXT[status] ?? STATUS_CODES[status] ?? `HTTP ${status}`;
+}
 
 async function importDirectory(dir: URL): Promise<void> {
   const root = fileURLToPath(dir);
@@ -454,7 +459,7 @@ export class YerdApp {
     const accept = req.headers.accept ?? "";
     if (!this.#errorPage || !accept.includes("text/html") || req.headers["yx"] !== undefined) return plain;
     const message =
-      error instanceof HttpError && error.expose ? error.message : STATUS_TEXT[plain.status] ?? `HTTP ${plain.status}`;
+      error instanceof HttpError && error.expose ? error.message : statusText(plain.status);
     try {
       const page = await coerce(jsx(this.#errorPage, { status: plain.status, message, error } satisfies ErrorPageProps), {
         layouts: this.#layouts,
@@ -1220,7 +1225,7 @@ export class YerdApp {
       if (result === false) throw new HttpError(403, "Forbidden");
       // Returning an error (e.g. `ok || new HttpError(403)`) is the same as throwing it.
       if (result instanceof Error) throw result;
-      if (typeof result === "string") return coerce(new YerdResponse(303, { location: result }, null), { layouts: [] });
+      if (typeof result === "string") return coerce(redirect(result), { layouts: [] });
       return coerce(result, { layouts, meta: context.meta });
     }
     return undefined;
@@ -1396,12 +1401,15 @@ function checkInjections(name: string, lifetime: Lifetime, metadata: DecoratorMe
 }
 
 function errorResponse(error: unknown): Outgoing {
-  const status = typeof error === "number" ? error : error instanceof HttpError ? error.status : 500;
-  if (typeof error !== "number" && !(error instanceof HttpError && error.expose)) {
+  // A thrown number is a status only when Node can send it as a final response;
+  // `throw 1000` or `throw 100` is a crash like any other throw.
+  const code = typeof error === "number" && Number.isInteger(error) && error >= 200 && error <= 599 ? error : undefined;
+  const status = code ?? (error instanceof HttpError ? error.status : 500);
+  if (code === undefined && !(error instanceof HttpError && error.expose)) {
     if (status >= 500) requestLog.error(error instanceof Error ? error.message : "request failed", { error });
   }
   const message =
-    error instanceof HttpError && error.expose ? error.message : STATUS_TEXT[status] ?? `HTTP ${status}`;
+    error instanceof HttpError && error.expose ? error.message : statusText(status);
   if (error instanceof HttpError && error.expose && error.details) {
     return {
       status,
@@ -1437,7 +1445,8 @@ function runtimeResponse(req: IncomingMessage): Outgoing {
     vary: "accept-encoding",
   };
   const inm = req.headers["if-none-match"];
-  if (inm && inm.split(",").some((tag) => tag.trim() === asset.etag || tag.trim() === `W/${asset.etag}`)) {
+  // `*` matches any current representation (RFC 9110 13.1.2), and there always is one.
+  if (inm && inm.split(",").some((tag) => tag.trim() === "*" || tag.trim() === asset.etag || tag.trim() === `W/${asset.etag}`)) {
     return { status: 304, headers, body: null };
   }
   const accept = req.headers["accept-encoding"] ?? "";
@@ -1539,11 +1548,14 @@ async function send(res: ServerResponse, out: Outgoing, headOnly: boolean, signa
   const longLived = out.headers[LONG_LIVED] !== undefined;
   if (out.cookies?.length) headers["set-cookie"] = out.cookies;
   const { body } = out;
+  // 204 and 304 never have a body (RFC 9110 6.4.1); a Content-Length promising
+  // one would leave a keep-alive client waiting for bytes that never come.
+  const bodiless = out.status === 204 || out.status === 304;
 
   if (body === null || typeof body === "string" || body instanceof Uint8Array) {
-    if (body !== null) headers["content-length"] = String(typeof body === "string" ? Buffer.byteLength(body) : body.byteLength);
+    if (body !== null && !bodiless) headers["content-length"] = String(typeof body === "string" ? Buffer.byteLength(body) : body.byteLength);
     res.writeHead(out.status, headers);
-    res.end(headOnly || body === null ? undefined : body);
+    res.end(headOnly || bodiless || body === null ? undefined : body);
     return;
   }
 
@@ -1564,7 +1576,7 @@ async function send(res: ServerResponse, out: Outgoing, headOnly: boolean, signa
     }
     res.writeHead(out.status, headers);
   }
-  if (headOnly) {
+  if (headOnly || bodiless) {
     await iterator.return?.();
     res.end();
     return;

@@ -82,6 +82,9 @@ export function serializeCookie(name: string, value: string, options: CookieOpti
   if (options.domain) cookie += `; Domain=${attribute("domain", options.domain)}`;
   if (options.httpOnly ?? true) cookie += "; HttpOnly";
   if (options.secure) cookie += "; Secure";
-  cookie += `; SameSite=${options.sameSite ?? "Lax"}`;
+  const sameSite = options.sameSite ?? "Lax";
+  // Typed, but a value from config or JSON could carry a line break into the header.
+  if (sameSite !== "Strict" && sameSite !== "Lax" && sameSite !== "None") throw new TypeError(`Invalid cookie sameSite: ${JSON.stringify(sameSite)}`);
+  cookie += `; SameSite=${sameSite}`;
   return cookie;
 }
