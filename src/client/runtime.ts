@@ -1294,14 +1294,31 @@ export function yerdRuntime(): void {
     return dragged;
   }
 
-  function clearOver(except?: Element): void {
-    for (const over of Array.from(document.querySelectorAll("[data-yx-over]"))) if (over !== except) over.removeAttribute("data-yx-over");
+  // dragover fires on every pointer move, so a drag remembers what it looked
+  // up: the target it marked [data-yx-over] (touched only when that changes),
+  // whether the page takes files anywhere, and each target's accept list.
+  // Forgotten when the drag ends, leaves the window, or a new one comes in.
+  let over: Element | null = null;
+  let fileTargets: boolean | undefined;
+  const accepted = new Map<Element, string | null>();
+
+  function setOver(target: Element | null): void {
+    if (over && over !== target) over.removeAttribute("data-yx-over");
+    over = target;
+    // Again if a morph took it off meanwhile.
+    if (target && !target.hasAttribute("data-yx-over")) target.setAttribute("data-yx-over", "");
+  }
+
+  function forgetDrag(): void {
+    fileTargets = undefined;
+    accepted.clear();
   }
 
   function endDrag(): void {
     dragged?.removeAttribute("data-yx-dragging");
     dragged = null;
-    clearOver();
+    setOver(null);
+    forgetDrag();
   }
 
   const DROP_TARGETS = '[data-yx-trigger^="drop"], [data-yx-drop-to]';
@@ -1381,7 +1398,8 @@ export function yerdRuntime(): void {
 
   /** Is there anywhere on the page files may be dropped? Then a missed drop mustn't open the file. */
   function hasFileTargets(): boolean {
-    return document.querySelector('[data-yx-trigger^="drop:files"], [data-yx-drop-to]') !== null;
+    fileTargets ??= document.querySelector('[data-yx-trigger^="drop:files"], [data-yx-drop-to]') !== null;
+    return fileTargets;
   }
 
   /** The file input a dropTo zone fills. */
@@ -1398,7 +1416,8 @@ export function yerdRuntime(): void {
 
   /** What a zone takes: its own accept, or (for dropTo) its input's. */
   function acceptOf(target: Element): string | null {
-    return target.getAttribute("accept") ?? stagingInput(target)?.getAttribute("accept") ?? null;
+    if (!accepted.has(target)) accepted.set(target, target.getAttribute("accept") ?? stagingInput(target)?.getAttribute("accept") ?? null);
+    return accepted.get(target)!;
   }
 
   /** Show how many files a zone's input holds: data-yx-files, or none. */
@@ -1465,7 +1484,7 @@ export function yerdRuntime(): void {
   document.addEventListener("dragover", (event) => {
     const target = dropTarget(event);
     if (!target) {
-      clearOver();
+      setOver(null);
       if (!dragSource() && carriesFiles(event) && hasFileTargets()) {
         event.preventDefault();
         if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
@@ -1475,13 +1494,20 @@ export function yerdRuntime(): void {
     // Allowing the drop is what makes the browser fire "drop" at all.
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = dragSource() ? "move" : "copy";
-    clearOver(target);
-    target.setAttribute("data-yx-over", "");
+    setOver(target);
+  });
+
+  // Coming in from outside the window: a new drag (files from the desktop), with nothing remembered.
+  document.addEventListener("dragenter", (event) => {
+    if (!event.relatedTarget) forgetDrag();
   });
 
   document.addEventListener("dragleave", (event) => {
     // Leaving the window altogether (to the desktop, another app).
-    if (!event.relatedTarget && (event.clientX <= 0 || event.clientY <= 0 || event.clientX >= innerWidth || event.clientY >= innerHeight)) clearOver();
+    if (!event.relatedTarget && (event.clientX <= 0 || event.clientY <= 0 || event.clientX >= innerWidth || event.clientY >= innerHeight)) {
+      setOver(null);
+      forgetDrag();
+    }
   });
 
   document.addEventListener("drop", (event) => {
@@ -1493,7 +1519,7 @@ export function yerdRuntime(): void {
       return;
     }
     event.preventDefault();
-    target.removeAttribute("data-yx-over");
+    setOver(null);
     if (dragSource()) {
       void runAction(target);
       endDrag();

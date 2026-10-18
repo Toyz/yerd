@@ -586,6 +586,37 @@ describe("drag and drop", () => {
     expect(document.querySelector("[data-yx-over], [data-yx-dragging]")).toBeNull();
   });
 
+  it("a drag looks the page up once, not on every dragover, and touches [data-yx-over] only when the target changes", () => {
+    stubFetch();
+    show(`<div id="z" data-yx-drop-to="#in"></div><input id="in" type="file" accept="image/*"><p id="p">p</p>`);
+    const query = vi.spyOn(document, "querySelector");
+    const queryAll = vi.spyOn(document, "querySelectorAll");
+    const set = vi.spyOn(Element.prototype, "setAttribute");
+    const transfer = files([]);
+    drag("dragenter", $("p"), transfer, { relatedTarget: null });
+    for (let i = 0; i < 5; i++) drag("dragover", $("z"), transfer);
+    expect($("z").hasAttribute("data-yx-over")).toBe(true);
+    for (let i = 0; i < 5; i++) drag("dragover", $("p"), transfer);
+    expect($("z").hasAttribute("data-yx-over")).toBe(false);
+    // The zone's input (for its accept list) and whether the page takes files anywhere: once each.
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(queryAll).not.toHaveBeenCalled();
+    expect(set.mock.calls.filter(([name]) => name === "data-yx-over")).toHaveLength(1);
+    drag("drop", $("p"), transfer);
+  });
+
+  it("a mark a morph took off mid-drag is put back", () => {
+    stubFetch();
+    show(`<div id="t" data-yx-action="/b" data-yx-token="T" data-yx-trigger="drop"></div><i id="c" draggable="true">c</i>`);
+    drag("dragstart", $("c"));
+    drag("dragover", $("t"));
+    $("t").removeAttribute("data-yx-over");
+    drag("dragover", $("t"));
+    expect($("t").hasAttribute("data-yx-over")).toBe(true);
+    drag("dragend", $("c"));
+    expect($("t").hasAttribute("data-yx-over")).toBe(false);
+  });
+
   it.each([
     ["image/*", "a.png", "image/png", true],
     ["image/*", "a.pdf", "application/pdf", false],
