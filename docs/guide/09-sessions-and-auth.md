@@ -435,34 +435,7 @@ export function Greeting() {
 
 ## Guards
 
-A guard is a gate in front of handlers. [createGuard](api:yerd.createGuard) makes one you can use as a decorator or in a `guards` list.
-
-```tsx
-import { Forbidden, createGuard, get, route } from "@toyz/yerd";
-
-export const businessHours = createGuard("businessHours", () => {
-  const hour = new Date().getHours();
-  return (hour >= 9 && hour < 17) || new Forbidden("Come back during business hours");
-});
-
-@route("/support")
-@businessHours
-export class Support {
-  @get page() {
-    return "We're here";
-  }
-}
-```
-
-| A guard returns | Result |
-| --- | --- |
-| `true` or nothing | continue |
-| a string | 303 redirect there |
-| `false` | 403 |
-| an `Error` (returned or thrown) | that error's response |
-| anything else | becomes the response, like a handler's return value |
-
-Named guards live on services, so they can inject things. Declare one with [guard](api:yerd.guard) and refer to it by name.
+[createGuard](api:yerd.createGuard), what a guard may return, and the order guards run in are covered in [routing](02-routing.md#guards). Named guards live on services, so they can inject things: declare one with [guard](api:yerd.guard) and refer to it by name.
 
 ```ts
 import { guard, guards, inject, post, route, service, type YerdContext } from "@toyz/yerd";
@@ -486,7 +459,6 @@ export class Beta {
 }
 ```
 
-- Order: `app.guard(...)`, groups (outer to inner), the route's `guards` option, class decorators, method decorators. The first that doesn't continue decides.
 - [guards](api:yerd.guards) applies names or guard values to a class or method.
 - An unknown guard name is a boot error.
 - Actions run behind their class's guards plus their own, so `auth.required` on a group covers every page and action in it.
