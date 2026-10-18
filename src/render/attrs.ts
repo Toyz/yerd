@@ -211,22 +211,26 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
       // Both given: one attribute, in prop order.
       if (classDone) continue;
       classDone = true;
-      // Class flags bound to <Local> state: `{ active: s.selected }`.
-      if (value && typeof value === "object" && !Array.isArray(value) && !isRawHtml(value)) {
-        const flags = value as Record<string, unknown>;
-        if (Object.values(flags).some(isBinding)) {
-          const plain: Record<string, unknown> = {};
-          for (const flag of Object.keys(flags)) {
-            const v = flags[flag];
-            if (isBinding(v)) {
-              const b = v as Binding;
-              (binds ??= []).push(`class.${flag}:${b.negate ? "!" : ""}${b.path}`);
-              plain[flag] = b.value;
-            } else plain[flag] = v;
-          }
-          value = plain;
+      // Class flags bound to <Local> state: `{ active: s.selected }`, also inside an
+      // array (`["card", { active: s.selected }]`). A binding is a (truthy) proxy, so
+      // each one becomes its initial value plus a `class.<flag>` binding.
+      const unbind = (item: unknown): unknown => {
+        if (Array.isArray(item)) return item.map(unbind);
+        if (!item || typeof item !== "object" || isRawHtml(item)) return item;
+        const flags = item as Record<string, unknown>;
+        if (!Object.values(flags).some(isBinding)) return item;
+        const plain: Record<string, unknown> = {};
+        for (const flag of Object.keys(flags)) {
+          const v = flags[flag];
+          if (isBinding(v)) {
+            const b = v as Binding;
+            (binds ??= []).push(`class.${flag}:${b.negate ? "!" : ""}${b.path}`);
+            plain[flag] = b.value;
+          } else plain[flag] = v;
         }
-      }
+        return plain;
+      };
+      value = unbind(value);
       const other = name === "class" ? props.className : props.class;
       value = other ? appendClasses(classNames(value as ClassValue), other as ClassValue) : classNames(value as ClassValue);
       if (value === "") continue;

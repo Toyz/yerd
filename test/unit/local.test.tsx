@@ -41,6 +41,14 @@ describe("<Local> on the server", () => {
     expect(html).toContain('data-yx-bind="value:user.name"');
   });
 
+  it("binds class flags inside a class array too", async () => {
+    const html = await renderToString(
+      <Local state={{ fav: false, big: true }}>{(s) => <button class={["heart", { on: s.fav }, [{ big: s.big, off: not(s.fav) }]]}>x</button>}</Local>,
+    );
+    // A binding is a truthy proxy: unhandled, "on" would render although fav is false.
+    expect(html).toContain('<button class="heart big off" data-yx-bind="class.on:fav;class.big:big;class.off:!fav">');
+  });
+
   it("drops handlers outside <Local>, as before", async () => {
     expect(await renderToString(<button onClick={() => 1}>x</button>)).toBe("<button>x</button>");
   });

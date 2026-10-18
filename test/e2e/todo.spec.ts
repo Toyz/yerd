@@ -472,7 +472,7 @@ test("import: a .txt file becomes todos, in place, with JavaScript", async ({ pa
   // is.file({ types }) turns other files away, with the message next to the form.
   await page.getByLabel("Todo file").setInputFiles(todoFile("not really a png", "photo.png", "image/png"));
   await page.getByRole("button", { name: "Import" }).click();
-  await expect(page.locator(".extra .form-error")).toHaveText("File type image/png isn't accepted (text/plain)");
+  await expect(page.locator(".extra .form-error")).toHaveText("Todo file: File type image/png isn't accepted (text/plain)");
   await expect(page.locator(".todo")).toHaveCount(3);
   await stillSamePage(page);
 });
