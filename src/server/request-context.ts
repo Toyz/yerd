@@ -38,6 +38,14 @@ export function splitTarget(target: string): { path: string; search: string } {
   return q === -1 ? { path: target, search: "" } : { path: target.slice(0, q), search: target.slice(q) };
 }
 
+/** `existing` plus the names in `added` it doesn't list yet (case-insensitive). */
+function mergeVary(existing: string | undefined, added: string): string {
+  if (!existing) return added;
+  const have = existing.toLowerCase().split(/\s*,\s*/);
+  const extra = added.split(/\s*,\s*/).filter((name) => name && !have.includes(name.toLowerCase()));
+  return extra.length === 0 ? existing : `${existing}, ${extra.join(", ")}`;
+}
+
 export class RequestContext implements YerdContext {
   readonly path: string;
   /** DI for this request; read by currentServices() so one async context serves both. */
@@ -193,9 +201,16 @@ export class RequestContext implements YerdContext {
     // doesn't get them; headers and cookies set on the context do apply.
     const defaults = failed ? undefined : this.declared;
     if (defaults) {
-      for (const name in defaults.headers) if (!(name in out.headers)) out.headers[name] = defaults.headers[name]!;
+      for (const name in defaults.headers) {
+        if (name === "vary") out.headers.vary = mergeVary(out.headers.vary, defaults.headers.vary!);
+        else if (!(name in out.headers)) out.headers[name] = defaults.headers[name]!;
+      }
     }
-    if (this.#outHeaders) Object.assign(out.headers, this.#outHeaders);
+    // Vary adds up: replacing the `accept` or `user-agent` that negotiation and
+    // variants put there would let a cache serve one variant to everyone.
+    for (const name in this.#outHeaders) {
+      out.headers[name] = name === "vary" ? mergeVary(out.headers.vary, this.#outHeaders.vary!) : this.#outHeaders[name]!;
+    }
     if (this.#outCookies) out.cookies = [...(out.cookies ?? []), ...this.#outCookies];
     if (!failed && !out.explicitStatus && (out.status === 200 || out.status === 204)) {
       const code = this.#status ?? defaults?.status;

@@ -108,7 +108,7 @@ export class Comments {
 ```
 
 - [`@status`](api:yerd.status) only replaces the default 200 (or 204 for an empty result). A status from `res()` or a returned number wins.
-- [`@setHeader`](api:yerd.setHeader) adds a header unless the result already set the same one.
+- [`@setHeader`](api:yerd.setHeader) adds a header unless the result already set the same one. `Vary` is the exception for both: values add up, so the `Accept` or `User-Agent` that negotiation and variants rely on is never lost.
 - Neither applies when the handler throws: an error response keeps its own status and headers. Headers you set with `ctx.setHeader()` do go out on errors.
 
 ## Setting things from inside a handler
@@ -133,7 +133,7 @@ export class Hello {
 
 | Method | What it does |
 | --- | --- |
-| `ctx.setHeader(name, value)` | Sets a response header, replacing one the result set. |
+| `ctx.setHeader(name, value)` | Sets a response header, replacing one the result set (`Vary` is added to instead). |
 | `ctx.setCookie(name, value, options?)` | Adds a `Set-Cookie`. |
 | `ctx.deleteCookie(name, options?)` | Expires a cookie. Pass the same `path` / `domain` it was set with. |
 | `ctx.status(code)` | Like `@status`, decided at run time. |

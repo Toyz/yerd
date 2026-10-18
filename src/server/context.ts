@@ -62,7 +62,7 @@ export interface YerdContext {
    * a well-formed incoming `x-request-id`, else generated.
    */
   readonly requestId: string;
-  /** Set a response header (replaces one the result set). */
+  /** Set a response header (replaces one the result set; Vary is added to instead). */
   setHeader(name: string, value: string): void;
   /** Add a Set-Cookie to the response. Defaults: Path=/, HttpOnly, SameSite=Lax. */
   setCookie(name: string, value: string, options?: CookieOptions): void;
