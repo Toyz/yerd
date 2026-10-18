@@ -1711,7 +1711,14 @@ export class YerdApp {
     const loaded = context.loadedSession;
     if (this.#sessions && loaded && options.commit) {
       try {
-        await this.#sessions.commit(loaded, out);
+        const rebound = await this.#sessions.commit(loaded, out);
+        // An action that started (or rotated) the session: the page's other
+        // forms carry tokens for no session, or the old one. The runtime
+        // fetches the page again quietly so they're bound before the next
+        // click, instead of that click coming back stale.
+        if (rebound && context.req.headers["yx"] !== undefined && out.status < 400 && out.headers["yx-location"] === undefined) {
+          out = { ...out, headers: { ...out.headers, "yx-rebind": "1" } };
+        }
       } catch (error) {
         out = errorResponse(error);
       }

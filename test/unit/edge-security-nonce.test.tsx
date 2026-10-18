@@ -272,3 +272,34 @@ describe("HEAD and error pages", () => {
     expect(store.size).toBe(0);
   });
 });
+
+describe("yx-rebind: the page's other tokens after an action starts or rotates the session", () => {
+  it("is sent when a scripted action starts the session", async () => {
+    const client = app().client();
+    const r = await client.action("/cart");
+    expect(r.status).toBe(200);
+    expect(r.headers.getSetCookie().length).toBe(1);
+    expect(r.headers.get("yx-rebind")).toBe("1");
+  });
+
+  it("isn't sent once the session exists and its nonce stays", async () => {
+    const client = app().client();
+    await client.action("/cart");
+    const again = await client.action("/cart");
+    expect(again.status).toBe(200);
+    expect(again.headers.get("yx-rebind")).toBeNull();
+  });
+
+  it("is sent when signing in rotates the nonce", async () => {
+    const client = app().client();
+    await client.action("/cart");
+    const r = await client.action("/login");
+    expect(r.headers.get("yx-rebind")).toBe("1");
+  });
+
+  it("isn't sent to a plain form post (it gets a whole new page anyway) or an action that changes nothing", async () => {
+    const client = app().client();
+    expect((await client.action("/cart", {}, { script: false })).headers.get("yx-rebind")).toBeNull();
+    expect((await app().client().action("/form")).headers.get("yx-rebind")).toBeNull();
+  });
+});

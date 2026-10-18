@@ -619,13 +619,38 @@ export function yerdRuntime(
       return false;
     }
     if (errorBox) errorBox.textContent = "";
-    if (response.status === 204) await refresh();
-    else {
+    // The action started or rotated the session (see rebind()): the whole page
+    // is fetched again anyway, so a refresh for no matched Region would be a
+    // second trip.
+    const rebinding = response.headers.get("yx-rebind") !== null;
+    if (response.status === 204) {
+      if (!rebinding) await refresh();
+    } else {
       const text = await response.text();
       if (signal?.aborted) return false;
-      if (apply(text) === 0) await refresh();
+      if (apply(text) === 0 && !rebinding) await refresh();
     }
+    if (rebinding) void rebind();
     return true;
+  }
+
+  /**
+   * The page's action tokens were signed before the visitor's session began
+   * (or before it was rotated by signing in), so they don't match it any
+   * more: fetch the page again and morph it in, quietly. Morphing keeps
+   * focus, scroll and what's typed; no history entry, no autofocus, no
+   * notice. A navigation that starts meanwhile wins.
+   */
+  async function rebind(): Promise<void> {
+    const seq = nav;
+    try {
+      const got = await fetchText(location.href, { "yx-boost": "1", accept: "text/html" });
+      if (seq !== nav || !got.type.includes("text/html")) return;
+      showPage(got.text);
+      document.dispatchEvent(new CustomEvent("yx:applied", { detail: { regions: -1 } }));
+    } catch {
+      // Offline or the page failed: its next submit takes the stale path, as before.
+    }
   }
 
   async function submit(form: HTMLFormElement, submitter: HTMLElement | null): Promise<void> {

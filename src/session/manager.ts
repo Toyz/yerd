@@ -126,7 +126,13 @@ export class SessionManager {
     return { session: new Session(record, payload.i), payload, secure };
   }
 
-  async commit(loaded: LoadedSession, out: Outgoing): Promise<void> {
+  /**
+   * Save the session onto `out` (a cookie, and the store). True when the
+   * session's CSRF nonce is new to the page that sent the request: a session
+   * just started, or regenerated (signing in), or cleared. Tokens rendered
+   * before it no longer match.
+   */
+  async commit(loaded: LoadedSession, out: Outgoing): Promise<boolean> {
     const { session, payload, secure } = loaded;
     const state = session.state;
     const name = this.#cookieName(secure);
@@ -138,7 +144,7 @@ export class SessionManager {
     if (state.destroyed || (state.replaced && empty)) {
       if (session.id && this.#store.kind === "id") await this.#store.destroy(session.id);
       if (payload) (out.cookies ??= []).push(serializeCookie(name, "", { maxAge: 0, secure }));
-      return;
+      return false;
     }
 
     const refreshDue = payload !== undefined && this.#rolling && now - payload.s > this.#maxAge / 10;
@@ -148,9 +154,9 @@ export class SessionManager {
     // one too, and is written to keep it: until then its visitor counts as
     // having no session for action tokens.
     const nonceless = typeof state.record.data[CSRF_FIELD] !== "string";
-    if (!(payload !== undefined && nonceless) && !state.dirty && !refreshDue && !state.hadIncomingFlash) return;
+    if (!(payload !== undefined && nonceless) && !state.dirty && !refreshDue && !state.hadIncomingFlash) return false;
     // Nothing to keep and nothing to clear: don't hand out empty sessions.
-    if (!payload && empty) return;
+    if (!payload && empty) return false;
     if (nonceless) session[ENSURE_NONCE]();
 
     const remainingAbsolute = state.record.createdAt + this.#absolute - now;
@@ -177,5 +183,6 @@ export class SessionManager {
       throw new Error(`Session data is too big for a cookie (${value.length} bytes); use MemoryStore or your own SessionStore`);
     }
     (out.cookies ??= []).push(serializeCookie(name, value, { maxAge: ttl / 1000, secure }));
+    return !payload || nonceless || state.regenerated || state.replaced;
   }
 }
