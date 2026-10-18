@@ -45,7 +45,7 @@ const KEYWORDS = new Set(
     "undefined unique var void while yield accessor").split(" "),
 );
 
-function escape(text: string): string {
+export function escape(text: string): string {
   return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
@@ -68,7 +68,34 @@ export function highlight(code: string, lang: string, link?: CodeLinker): string
   const language = lang.toLowerCase();
   if (["ts", "tsx", "typescript", "js", "jsx", "javascript", "mjs", "json", "jsonc"].includes(language)) return highlightTs(code, link);
   if (["sh", "bash", "shell", "console", "fish"].includes(language)) return highlightSh(code);
+  if (["html", "xml", "svg"].includes(language)) return highlightHtml(code);
   return escape(code);
+}
+
+const HTML = /(<!--[\s\S]*?-->|<!doctype[^>]*>)|(<\/?[A-Za-z][\w:.-]*)([^>]*?)(\/?>)|([^<]+|<)/giy;
+const ATTR = /([^\s=/>]+)(\s*=\s*)?("[^"]*"|'[^']*'|[^\s>]+)?|(\s+|[\s\S])/gy;
+
+/** Markup: tags, attribute names and values, comments; text between tags stays plain. */
+function highlightHtml(code: string): string {
+  let out = "";
+  HTML.lastIndex = 0;
+  for (let m = HTML.exec(code); m; m = HTML.exec(code)) {
+    const [text, comment, open, attrs, close] = m;
+    if (comment) out += `<span class="tok-comment">${escape(text)}</span>`;
+    else if (open) {
+      out += `<span class="tok-tag">${escape(open)}</span>`;
+      ATTR.lastIndex = 0;
+      for (let a = ATTR.exec(attrs!); a; a = ATTR.exec(attrs!)) {
+        const [piece, name, eq, value] = a;
+        if (name) out += `<span class="tok-fn">${escape(name)}</span>${escape(eq ?? "")}${value ? `<span class="tok-string">${escape(value)}</span>` : ""}`;
+        else out += escape(piece);
+        if (ATTR.lastIndex >= attrs!.length) break;
+      }
+      out += `<span class="tok-tag">${escape(close!)}</span>`;
+    } else out += escape(text);
+    if (HTML.lastIndex >= code.length) break;
+  }
+  return out;
 }
 
 function highlightTs(code: string, link?: CodeLinker): string {
