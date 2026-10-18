@@ -49,6 +49,10 @@ export class Router<T> {
 
   add(pattern: string, verb: Verb, handler: T): void {
     const segments = segmentsOf(pattern);
+    // A repeated name would leave one of the two values silently overwritten in params.
+    const names = paramNames(pattern);
+    const repeated = names.find((name, i) => names.indexOf(name) !== i);
+    if (repeated !== undefined) throw new Error(`${pattern}: the parameter name ${repeated} appears twice`);
     let node = this.#root;
     segments.forEach((segment, i) => {
       if (segment.startsWith(":")) {
