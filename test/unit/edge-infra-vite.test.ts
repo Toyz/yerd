@@ -117,6 +117,39 @@ describe("the build plugin", () => {
     expect(config.environments.client.build.rollupOptions.input).toEqual([`${root}/src/a.css`, `${root}/src/b.css`, `${root}/src/c.css`]);
   });
 
+  it("adds every *.client module in the project as an entry, keeping their exports", async () => {
+    const project = mkdtempSync(join(tmpdir(), "yerd-vite-client-"));
+    try {
+      for (const file of [
+        "src/widgets/chart.client.ts", "src/a.client.tsx", "src/b.client.js", "lib/c.client.jsx", "client.ts", "src/plain.ts", "src/x.client.css",
+        "node_modules/pkg/skip.client.ts", ".cache/skip.client.ts", "out/client/skip.client.js", "src/.hidden/skip.client.ts",
+      ]) {
+        mkdirSync(join(project, file, ".."), { recursive: true });
+        writeFileSync(join(project, file), "export default () => {};\n");
+      }
+      const plugin = yerd({ client: ["src/styles.css", "./src/a.client.tsx"], outDir: "out" }).find((p) => p.name === "yerd:build")!;
+      const config = hook(plugin, "config")({ root: project }) as {
+        builder: { buildApp(builder: unknown): Promise<void> };
+        environments: { client: { build: Record<string, any> } };
+      };
+      expect(config.environments.client.build.rollupOptions).toEqual({
+        input: ["src/styles.css", "src/a.client.tsx", "lib/c.client.jsx", "src/b.client.js", "src/widgets/chart.client.ts"].map((file) => `${project}/${file}`),
+        preserveEntrySignatures: "exports-only",
+      });
+
+      // With no `client` list, the modules alone are reason to build the client.
+      const only = hook(yerd({ outDir: "out" }).find((p) => p.name === "yerd:build")!, "config")({ root: project }) as typeof config;
+      expect(only.environments.client.build.rollupOptions.input).toHaveLength(4);
+      mkdirSync(join(project, "out", "server"), { recursive: true });
+      writeFileSync(join(project, "out", "server", "prerender.js"), "export default { async prerender() { return []; } };\n");
+      const built: string[] = [];
+      await only.builder.buildApp({ environments: { client: { name: "client" }, ssr: { name: "ssr" } }, build: async (env: { name: string }) => void built.push(env.name) });
+      expect(built).toEqual(["client", "ssr"]);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
   it("builds the server unminified into <outDir>/server from two virtual entries", () => {
     const { config } = configured({});
     expect(config.environments.ssr.build).toMatchObject({

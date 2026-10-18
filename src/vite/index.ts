@@ -11,7 +11,8 @@
  *   only reads with node:fs aren't watched that way: import them (`?raw`)
  *   to reload on their changes.
  * - `vite build` builds two environments: the client (the `client` entries,
- *   e.g. stylesheets, hashed, with a manifest) into `<outDir>/client`, and a
+ *   e.g. stylesheets, and every `*.client.ts` module in the project, hashed,
+ *   with a manifest) into `<outDir>/client`, and a
  *   server bundle into `<outDir>/server/server.js` whose generated entry
  *   serves the client build and listens on PORT. `node dist/server/server.js`.
  */
@@ -19,6 +20,7 @@
 import type { Plugin, ViteDevServer } from "vite";
 import type { ModuleRunner } from "vite/module-runner";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { readdirSync } from "node:fs";
 
 /**
  * Options for the `@toyz/yerd/vite` plugin (the package's default export).
@@ -51,7 +53,8 @@ export interface YerdViteOptions {
    * Client build entries, relative to the Vite root: stylesheets and other
    * assets referenced with assetUrl() / <Stylesheet>. Hashed in production.
    * In dev, referencing a file that isn't listed here logs a warning, since
-   * the build wouldn't include it.
+   * the build wouldn't include it. Client modules named `*.client.ts` (or
+   * .tsx, .js, .jsx) anywhere in the project are added for you.
    *
    * ```tsx
    * // yerd({ client: ["src/styles.css"] }), then in a layout:
@@ -68,6 +71,35 @@ export interface YerdViteOptions {
    * ```
    */
   outDir?: string;
+}
+
+/** Client modules (islands, lazy elements, attribute halves) the build picks up without being listed. */
+const CLIENT_MODULE = /\.client\.[jt]sx?$/;
+
+/**
+ * Every `*.client.{ts,tsx,js,jsx}` under `root`, relative to it, skipping
+ * node_modules, the build output and dot-folders.
+ */
+function findClientModules(root: string, outDir: string): string[] {
+  const skip = outDir.replace(/^\.?\/|\/$/g, "");
+  const found: string[] = [];
+  const walk = (dir: string): void => {
+    let entries;
+    try {
+      entries = readdirSync(dir ? `${root}/${dir}` : root, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const path = dir ? `${dir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith(".") || entry.name === "node_modules" || path === skip) continue;
+        walk(path);
+      } else if (entry.isFile() && CLIENT_MODULE.test(entry.name)) found.push(path);
+    }
+  };
+  walk("");
+  return found.sort();
 }
 
 const SERVER_ENTRY = "virtual:yerd/server-entry";
@@ -109,10 +141,12 @@ function production(options: YerdViteOptions): Plugin {
     config(config) {
       root = config.root ?? process.cwd();
       base = config.base ?? "/";
+      // Listed entries, then the project's client modules, each once.
+      const inputs = Array.from(new Set([...clientInputs.map((input) => input.replace(/^\.?\//, "")), ...findClientModules(root, outDir)]));
       return {
         builder: {
           async buildApp(builder) {
-            if (clientInputs.length > 0) await builder.build(builder.environments.client!);
+            if (inputs.length > 0) await builder.build(builder.environments.client!);
             await builder.build(builder.environments.ssr!);
             // Prerender: load the built app (not the dev sources) and render @prerender routes into the client build.
             const serverDir = `${root}/${outDir}/server`;
@@ -133,7 +167,12 @@ function production(options: YerdViteOptions): Plugin {
               outDir: `${outDir}/client`,
               manifest: true,
               emptyOutDir: true,
-              rollupOptions: { input: clientInputs.map((input) => `${root}/${input.replace(/^\.?\//, "")}`) },
+              rollupOptions: {
+                input: inputs.map((input) => `${root}/${input}`),
+                // An app build would drop entry exports (nothing imports an
+                // entry); a client module's default export is what yerd calls.
+                preserveEntrySignatures: "exports-only",
+              },
             },
           },
           ssr: {
@@ -249,6 +288,7 @@ interface YerdModule {
   resetServiceRegistry?: () => void;
   resetGuardRegistry?: () => void;
   resetAttributeRegistry?: () => void;
+  resetLazyElements?: () => void;
 }
 
 function devServer(options: YerdViteOptions): Plugin {
@@ -335,6 +375,7 @@ function devServer(options: YerdViteOptions): Plugin {
                   yerdModule.resetServiceRegistry?.();
                   yerdModule.resetGuardRegistry?.();
                   yerdModule.resetAttributeRegistry?.();
+                  yerdModule.resetLazyElements?.();
                 }
                 runner.clearCache();
               })().finally(() => {
