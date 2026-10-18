@@ -122,7 +122,7 @@ export const pageStyles = css`
   .badge.kind.interface, .badge.kind.type { color: var(--tok-keyword); }
   .badge.kind.const { color: var(--tok-decorator); }
 
-  .prose { max-width: 90ch; }
+  /* Prose runs the width of the column, like the code blocks beside it. */
   .prose p, .prose li { line-height: 1.7; }
   .prose h2 { margin-top: 2.6em; }
   .prose h2:first-child, .prose h1 + h2 { margin-top: 1.2em; }

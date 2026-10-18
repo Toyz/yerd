@@ -19,7 +19,7 @@ const sheet = css`
   .rail a.sub { padding-left: 22px; font-size: 0.8rem; color: var(--text-faint); }
   .rail a:hover { color: var(--accent); border-left-color: var(--accent); text-decoration: none; }
 
-  .pager { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 56px; max-width: 90ch; }
+  .pager { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 56px; }
   .pager a {
     display: block; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius);
     background: var(--bg-raised); color: var(--text);
