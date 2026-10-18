@@ -149,14 +149,23 @@ export function yerdRuntime(
     }
   }
 
+  // State the runtime puts on elements, which the server never renders: a
+  // morph mustn't take it off mid-load, mid-cue or mid-drag.
+  const RUNTIME_STATE = new Set(["data-yx-loading", "data-yx-failed", "data-yx-cued", "data-yx-dragging", "data-yx-over"]);
+
   function morphAttributes(from: Element, to: Element): void {
     for (const { name, value } of Array.from(to.attributes)) {
       if (from.getAttribute(name) !== value) from.setAttribute(name, value);
     }
     for (const { name } of Array.from(from.attributes)) {
       // `open` on <details>/<dialog> belongs to the user, not the template.
-      if (!to.hasAttribute(name) && name !== "open") from.removeAttribute(name);
+      if (!to.hasAttribute(name) && name !== "open" && !RUNTIME_STATE.has(name)) from.removeAttribute(name);
     }
+  }
+
+  /** A lazyElement() that has upgraded: it owns its children now, so a morph leaves them be. */
+  function ownsChildren(el: Element): boolean {
+    return Object.hasOwn(lazyApp.elements, el.localName) && customElements.get(el.localName) !== undefined;
   }
 
   function morph(from: Node, to: Node): void {
@@ -182,7 +191,7 @@ export function yerdRuntime(
     // A focused select keeps the user's choice: patching its options' `selected`
     // attributes would otherwise move the selection under them.
     const held = a instanceof HTMLSelectElement && a === document.activeElement ? Array.from(a.options).filter((o) => o.selected) : null;
-    morphChildren(a, b);
+    if (!ownsChildren(a)) morphChildren(a, b);
     if (picked && a instanceof HTMLSelectElement) {
       Array.from(a.options).forEach((option, i) => (option.selected = held ? held.includes(option) : (picked[i] ?? false)));
     }

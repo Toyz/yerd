@@ -378,6 +378,19 @@ describe("lazy elements", () => {
     expect(more.textContent).toBe("ticking");
   });
 
+  it("once upgraded, keep their own children through a morph; only their attributes are patched", async () => {
+    // lazy-clock was defined by the previous test.
+    document.body.innerHTML = '<div id="r" data-yx-region><lazy-clock id="c3" data-zone="utc">12:00</lazy-clock></div>';
+    await flush();
+    // What the element drew for itself.
+    document.getElementById("c3")!.textContent = "ticking";
+    yerd.page.apply('<div id="r" data-yx-region><lazy-clock id="c3" data-zone="cet">12:00</lazy-clock></div>');
+    await flush();
+    const clock = document.getElementById("c3")!;
+    expect(clock.textContent).toBe("ticking");
+    expect(clock.getAttribute("data-zone")).toBe("cet");
+  });
+
   it("show the server's children until their trigger fires, then disarm the rest", async () => {
     modules.set("/m/later.js", () => {
       customElements.define("lazy-later", class extends HTMLElement {});
@@ -403,6 +416,23 @@ describe("lazy elements", () => {
     document.body.innerHTML = '<lazy-nodefine id="n"></lazy-nodefine>';
     await flush();
     expect(document.getElementById("n")!.hasAttribute("data-yx-failed")).toBe(true);
+  });
+});
+
+describe("morphs and runtime state", () => {
+  it("leave the state the runtime put on an element (loading, failed, cued, drag) and patch the rest", () => {
+    document.body.innerHTML = '<b id="x" class="a">go</b>';
+    const el = document.getElementById("x")!;
+    for (const name of ["data-yx-loading", "data-yx-failed", "data-yx-cued", "data-yx-dragging", "data-yx-over"]) el.setAttribute(name, "");
+    el.setAttribute("data-stale", "1");
+    const next = document.createElement("b");
+    next.id = "x";
+    next.className = "b";
+    next.textContent = "go";
+    yerd.page.morph(el, next);
+    expect(el.className).toBe("b");
+    expect(el.hasAttribute("data-stale")).toBe(false);
+    for (const name of ["data-yx-loading", "data-yx-failed", "data-yx-cued", "data-yx-dragging", "data-yx-over"]) expect(el.hasAttribute(name)).toBe(true);
   });
 });
 

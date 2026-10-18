@@ -106,7 +106,7 @@ So does a plain `customElements.define("share-link", class extends HTMLElement {
 ```
 
 - The module loads when the first element with the tag fires its trigger. Every instance upgrades then.
-- A morph patches an element's light DOM back to what the server sent. Use shadow DOM, or `key` and `data-yx-keep` on the tag.
+- Once upgraded, the element owns its children: a morph updates its attributes and leaves its light DOM alone.
 
 ## Lazy attribute halves
 

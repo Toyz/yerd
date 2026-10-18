@@ -147,8 +147,8 @@ export class ProductPage {
               <button class="btn" disabled={product.stock === 0} confetti>Add to cart</button>
             </form>
             <Toast />
-            {/* Keyed and kept: a morph leaves the upgraded element alone, and another product gets a fresh one. */}
-            <share-link key={product.slug} data-yx-keep url={absolute(`/products/${product.slug}`)} name={product.name}>
+            {/* Keyed: another product gets a fresh element. A morph leaves an upgraded lazy element's children alone. */}
+            <share-link key={product.slug} url={absolute(`/products/${product.slug}`)} name={product.name}>
               <a href={absolute(`/products/${product.slug}`)}>Link to this gnome</a>
             </share-link>
             <p class="muted small">
