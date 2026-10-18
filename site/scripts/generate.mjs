@@ -127,8 +127,24 @@ function parseComment(raw) {
     else if (tags.length) tags[tags.length - 1].lines.push(line);
     else description.push(line);
   }
-  const text = description.join("\n").trim();
+  // Code blocks in the description are its examples: they go in the page's
+  // Examples section (every page lays out the same way); the prose stays.
   const examples = [];
+  const prose = [];
+  let block;
+  for (const line of description) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      if (block) {
+        examples.push(block.join("\n").replace(/^\n+|\s+$/g, ""));
+        block = undefined;
+      } else block = [];
+      continue;
+    }
+    if (block) block.push(line);
+    else prose.push(line);
+  }
+  if (block) prose.push(...block);
+  const text = prose.join("\n").replace(/\n{3,}/g, "\n\n").trim();
   let deprecated;
   let since;
   let hidden = false;
