@@ -42,7 +42,7 @@ See [YerdViteOptions](api:vite.YerdViteOptions). The plugin also lowers TC39 dec
 npx vite
 ```
 
-One server, one port: Vite serves its assets and yerd gets everything else. When you change a server file, the next request stops the old app (hosted services, timers, `@onShutdown`, disposal), re-imports your code and serves from the fresh app. Boot errors show up in Vite's error overlay.
+One server, one port: Vite serves its assets and yerd gets everything else. When you change a server file, the next request stops the old app (hosted services, timers, `@onShutdown`, disposal), re-imports your code and serves from the fresh app. A server file is a module the app imports (a `?url` or `?raw` import counts) or a new module file; stylesheets linked with `assetUrl()`, `public/` files and data your app writes don't restart it, and neither does a file it only reads with `node:fs`. Boot errors show up in Vite's error overlay.
 
 ## Build: vite build
 

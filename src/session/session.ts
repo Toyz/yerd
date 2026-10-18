@@ -198,7 +198,7 @@ export interface MemoryStoreOptions {
 }
 
 /** Set by the Vite dev plugin; see src/vite. */
-const DEV_SERVER = Symbol.for("yerd.devAssets");
+const DEV_SERVER = Symbol.for("yerd.devServer");
 
 /**
  * Data in this process, keyed by a hash of the session id the cookie

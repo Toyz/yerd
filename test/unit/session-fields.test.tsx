@@ -262,11 +262,11 @@ describe("@session(Shape)", () => {
 });
 
 describe("MemoryStore under the dev server", () => {
-  const DEV = Symbol.for("yerd.devAssets");
+  const DEV = Symbol.for("yerd.devServer");
   const record = { data: { a: 1 }, flash: {}, createdAt: Date.now() };
 
   it("keeps sessions across app reloads (a new store with the same name)", () => {
-    (globalThis as Record<symbol, unknown>)[DEV] = { root: "/", publicDir: false, client: [] };
+    (globalThis as Record<symbol, unknown>)[DEV] = true;
     try {
       new MemoryStore({ name: "reload-test" }).set("id1", record, 60_000);
       expect(new MemoryStore({ name: "reload-test" }).get("id1")?.data).toEqual({ a: 1 });

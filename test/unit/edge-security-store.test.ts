@@ -156,10 +156,10 @@ describe("MemoryStore", () => {
   });
 
   it("keys records by a hash of the id, never the id itself", () => {
-    const dev = Symbol.for("yerd.devAssets");
+    const dev = Symbol.for("yerd.devServer");
     const globals = globalThis as Record<symbol, unknown>;
     const key = Symbol.for("yerd.memoryStore:edge-hash");
-    globals[dev] = {};
+    globals[dev] = true;
     try {
       const store = new MemoryStore({ name: "edge-hash" });
       store.set("secret-session-id", record({ x: 1 }), 1000);
@@ -173,12 +173,12 @@ describe("MemoryStore", () => {
   });
 
   it("shares records by name under the dev server only", () => {
-    const dev = Symbol.for("yerd.devAssets");
+    const dev = Symbol.for("yerd.devServer");
     const globals = globalThis as Record<symbol, unknown>;
     const plain1 = new MemoryStore({ name: "edge-share" });
     plain1.set("a", record({ v: 1 }), 1000);
     expect(new MemoryStore({ name: "edge-share" }).get("a")).toBeUndefined();
-    globals[dev] = {};
+    globals[dev] = true;
     try {
       const first = new MemoryStore({ name: "edge-share" });
       first.set("a", record({ v: 2 }), 1000);
@@ -188,6 +188,18 @@ describe("MemoryStore", () => {
       delete globals[dev];
       delete globals[Symbol.for("yerd.memoryStore:edge-share")];
       delete globals[Symbol.for("yerd.memoryStore:edge-other")];
+    }
+  });
+
+  it("the asset-check config alone (yerd.devAssets) isn't the dev server", () => {
+    const globals = globalThis as Record<symbol, unknown>;
+    globals[Symbol.for("yerd.devAssets")] = { root: "/", publicDir: false, client: [] };
+    try {
+      new MemoryStore({ name: "edge-assets" }).set("a", record({ v: 1 }), 1000);
+      expect(new MemoryStore({ name: "edge-assets" }).get("a")).toBeUndefined();
+    } finally {
+      delete globals[Symbol.for("yerd.devAssets")];
+      delete globals[Symbol.for("yerd.memoryStore:edge-assets")];
     }
   });
 });

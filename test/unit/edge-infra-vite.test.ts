@@ -274,4 +274,35 @@ export default yerd({ handleSignals: false }).discover(import.meta.glob("./route
     const results = await Promise.all(Array.from({ length: 10 }, () => text("/")));
     expect(results).toEqual(Array.from({ length: 10 }, () => [200, "four"]));
   });
+
+  it("tells MemoryStore it runs under the dev server with a flag of its own", () => {
+    expect((globalThis as Record<symbol, unknown>)[Symbol.for("yerd.devServer")]).toBe(true);
+  });
+
+  it("reloads for modules the app loaded and new module files, not for stylesheets, public files or data", async () => {
+    // A value fixed when the module runs: it changes only when the app is re-imported.
+    writeFileSync(join(dir, "src", "routes", "loaded.ts"), `
+import { get, route } from "@toyz/yerd";
+const loadedAt = Math.random();
+@route("/loaded")
+export class Loaded {
+  @get show() { return String(loadedAt); }
+}
+`);
+    await settle();
+    const [, first] = await text("/loaded");
+    expect(first).toMatch(/^0\./);
+
+    writeFileSync(join(dir, "src", "styles.css"), "body { color: red; }");
+    writeFileSync(join(dir, "public", "data.json"), `{"n":${Date.now()}}`);
+    writeFileSync(join(dir, "notes.md"), "# notes");
+    await settle();
+    expect(await text("/loaded")).toEqual([200, first]);
+
+    // An edit to a module the app imported does reload it.
+    writeFileSync(join(dir, "src", "routes", "page.ts"), route("/", "five"));
+    await settle();
+    expect(await text("/")).toEqual([200, "five"]);
+    expect((await text("/loaded"))[1]).not.toBe(first);
+  });
 });

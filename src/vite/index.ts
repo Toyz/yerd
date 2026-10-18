@@ -5,8 +5,11 @@
  *   legacy decorators and passes `@dec` / `accessor` through untouched, which
  *   Node can't run (docs/SPIKES.md), so Oxc is turned off for app TS.
  * - Mounts the yerd app (the entry module's default export) on Vite's dev
- *   server, loaded through the SSR module runner. On server-side file changes
- *   the route registry is reset and the app re-imported.
+ *   server, loaded through the SSR module runner. When a module the app
+ *   loaded changes (or a module file is added or removed), the registries
+ *   are reset and the app re-imported on the next request. Files the app
+ *   only reads with node:fs aren't watched that way: import them (`?raw`)
+ *   to reload on their changes.
  * - `vite build` builds two environments: the client (the `client` entries,
  *   e.g. stylesheets, hashed, with a manifest) into `<outDir>/client`, and a
  *   server bundle into `<outDir>/server/server.js` whose generated entry
@@ -271,12 +274,21 @@ function devServer(options: YerdViteOptions): Plugin {
         publicDir: server.config.publicDir || false,
         client: options.client ?? [],
       };
-      const markStale = () => {
-        stale = true;
+      // MemoryStore keeps its records across the reloads below.
+      (globalThis as Record<symbol, unknown>)[Symbol.for("yerd.devServer")] = true;
+      // Reload only for files the app's code is made of: modules the server
+      // side has loaded (CSS imported with ?url included), or a new module a
+      // glob may pick up. Stylesheets linked with assetUrl(), public files and
+      // data the app writes don't restart it (Vite serves the assets itself).
+      const loaded = (file: string) => (server.environments.ssr.moduleGraph.getModulesByFile(file.replace(/\\/g, "/"))?.size ?? 0) > 0;
+      server.watcher.on("change", (file) => {
+        if (loaded(file)) stale = true;
+      });
+      const addedOrRemoved = (file: string) => {
+        if (TS_FILE.test(file) || loaded(file)) stale = true;
       };
-      server.watcher.on("change", markStale);
-      server.watcher.on("add", markStale);
-      server.watcher.on("unlink", markStale);
+      server.watcher.on("add", addedOrRemoved);
+      server.watcher.on("unlink", addedOrRemoved);
 
       // yerd's own module runner, with HMR off. Vite's default SSR runner
       // re-executes the entries it has seen as soon as a file changes, which
