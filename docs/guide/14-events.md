@@ -332,7 +332,7 @@ The model is consumer groups: a message goes to every group subscribed to its to
   }
   ```
 
-- **Topics** are `event:<name>` for events, `call:<name>` for calls, and `reply:<instance id>` for answers coming back to the instance that asked.
+- **Topics** are `event:<name>` for events, `call:<name>` for calls, and `reply:<instance id>` for answers coming back to the instance that asked. [Channels](07-streaming-and-live.md#channels) use `channel:<name>`, see below.
 - **Return a count from `publish`** (how many groups it reached) when the broker can tell you. Then a call nobody answers fails at once instead of timing out.
 
 A transport over a message broker is a few lines. Here `Broker` stands for your client library:
@@ -367,6 +367,12 @@ export function withBroker(broker: Broker) {
 Name every event and call that leaves the process with `@named`, and use the same names in every app that shares the broker. What a delivery guarantees (at most once, at least once) is up to your broker; with at-least-once delivery, the same event can arrive twice, so handlers should be safe to repeat.
 
 [`MemoryTransport`](api:yerd.MemoryTransport) is the in-process default. Two apps given the same `MemoryTransport` instance behave like two instances sharing a broker, which is handy in tests.
+
+### Channels ride along
+
+Live features ([Channels](07-streaming-and-live.md#channels), and the cues built on them) need messages across instances too. When an `EventTransport` is registered and no `ChannelBackend` is, `Channels` runs over the transport through [`channelBackendFrom`](api:yerd.channelBackendFrom): channel `room:42` is topic `channel:room:42`, and every subscriber joins a group of its own, so each one hears every message. One adapter covers both.
+
+A group per subscriber suits brokers where groups are cheap and vanish with their last member (NATS queue groups, pub/sub fan-out). Where a group is durable (a Redis Streams consumer group outlives its consumers), register a [`ChannelBackend`](api:yerd.ChannelBackend) over plain pub/sub instead; a registered `ChannelBackend` always wins.
 
 ## Testing events
 

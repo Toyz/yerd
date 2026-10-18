@@ -189,7 +189,7 @@ export class LobbyEvents {
 - Channels push to open browser tabs. For work that should happen once per change on the server (send a mail, update a cache), use [events](14-events.md); an `@on` handler can publish to a channel when it's done.
 
 > [!NOTE]
-> The default backend is in-memory, so messages reach subscribers in the same process only. For several instances, implement [ChannelBackend](api:yerd.ChannelBackend) (Redis, NATS, Postgres `LISTEN`) and register it: `app.services((s) => s.value(ChannelBackend, myBackend))`. See [services](08-services.md).
+> The default backend is in-memory, so messages reach subscribers in the same process only, synchronously and by reference: every subscriber gets the very object you published (events, by contrast, are copied per handler), so don't mutate a message after publishing it. For several instances, either register an [EventTransport](14-events.md#several-instances-and-other-apps), and channels [ride on it](14-events.md#channels-ride-along) with no second adapter, or implement [ChannelBackend](api:yerd.ChannelBackend) (Redis, NATS, Postgres `LISTEN`) and register it: `app.services((s) => s.value(ChannelBackend, myBackend))`. A registered `ChannelBackend` wins over the transport. See [services](08-services.md).
 
 ## Per-user live feeds
 
@@ -386,7 +386,7 @@ The kitchen sink has both: the rave's room is public, and the back office's orde
 
 ### Instances and counts
 
-- **Instances:** cues go out through [Channels](api:yerd.Channels). With a shared [ChannelBackend](api:yerd.ChannelBackend), pages on every instance hear every cue. `cooldown` is counted per process.
+- **Instances:** cues go out through [Channels](api:yerd.Channels). With a shared [ChannelBackend](api:yerd.ChannelBackend), or an [EventTransport](14-events.md#channels-ride-along) that channels ride on, pages on every instance hear every cue. `cooldown` is counted per process.
 - **Counts:** `cues.watching(room)` is how many pages are listening through this process right now. The kitchen sink shows it as "tabs raving".
 - **Testing:** `cues.listen(rooms, signal)` is the same feed the runtime reads, so a test can play a cue and check that it arrived.
 

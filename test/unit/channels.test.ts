@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  ChannelBackend, Channels, MemoryBackend, channel, get, header, inject, route, signal, sse, yerd,
+  ChannelBackend, Channels, EventTransport, MemoryBackend, MemoryTransport, channel, channelBackendFrom, get, header, inject, route, signal, sse, yerd,
+  type ServiceCollection,
 } from "@toyz/yerd";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -167,5 +168,55 @@ describe("per-user live feeds", () => {
     } finally {
       await server.close();
     }
+  });
+});
+
+describe("channels over an EventTransport", () => {
+  it("broadcast to every subscriber on every instance, until each one stops", async () => {
+    const transport = new MemoryTransport();
+    const backend = channelBackendFrom(transport);
+    const heard: string[] = [];
+    const stops = [
+      backend.subscribe("room", (m) => heard.push(`a ${String(m)}`)),
+      backend.subscribe("room", (m) => heard.push(`b ${String(m)}`)),
+      channelBackendFrom(transport).subscribe("room", (m) => heard.push(`other ${String(m)}`)),
+    ];
+    await backend.publish("room", "hi");
+    await sleep(1);
+    expect(heard.sort()).toEqual(["a hi", "b hi", "other hi"]);
+    for (const stop of stops) stop();
+    await backend.publish("room", "gone");
+    await sleep(1);
+    expect(heard).toHaveLength(3);
+  });
+
+  it("are what Channels uses when an EventTransport is registered and no ChannelBackend is", async () => {
+    const transport = new MemoryTransport();
+    const topics: string[] = [];
+    const spy: EventTransport = {
+      publish: (topic, message) => (topics.push(topic), transport.publish(topic, message)),
+      subscribe: (topic, group, deliver) => transport.subscribe(topic, group, deliver),
+    };
+    const boot = async (extra?: (s: ServiceCollection) => void) => {
+      const app = yerd({ routes: [], services: [] }).services((s) => {
+        s.value(EventTransport, spy);
+        extra?.(s);
+      });
+      await app.boot();
+      return app.container.get(Channels);
+    };
+    const [a, b] = [await boot(), await boot()];
+    expect(a.backend).not.toBeInstanceOf(MemoryBackend);
+    expect(a.backend).toBe(a.backend);
+    const abort = new AbortController();
+    const onB = take(b.subscribe(userChannel("ada"), abort.signal), 1);
+    await a.publish(userChannel("ada"), { n: 5 });
+    expect(await onB).toEqual([{ n: 5 }]);
+    expect(topics).toContain("channel:user:ada");
+    abort.abort();
+
+    const own = new MemoryBackend();
+    expect((await boot((s) => s.value(ChannelBackend, own))).backend).toBe(own);
+    expect((await hub()).backend).toBeInstanceOf(MemoryBackend);
   });
 });

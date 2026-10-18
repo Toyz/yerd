@@ -27,7 +27,7 @@ export {
 export { res, redirect, bare, HttpError, YerdResponse, type ResponseInit } from "./respond/response.js";
 export type { Outgoing, Body } from "./respond/coerce.js";
 export { negotiate, parseAccept, type Negotiated, type Variants } from "./respond/negotiate.js";
-export { Channels, ChannelBackend, MemoryBackend, channel, type ChannelRef, type SubscribeOptions } from "./live/channels.js";
+export { Channels, ChannelBackend, MemoryBackend, channel, channelBackendFrom, type ChannelRef, type SubscribeOptions } from "./live/channels.js";
 export { Cues, type Cue, type CueOptions, type CuesOptions, type PublicRooms } from "./live/cues.js";
 export {
   Events, EventTransport, MemoryTransport, Call, named, eventName, on, handles,

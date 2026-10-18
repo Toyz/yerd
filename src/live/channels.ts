@@ -23,20 +23,26 @@
  * ```
  *
  * Messages go through a ChannelBackend: in-memory by default (one process).
- * For several instances, register your own (Redis, NATS, Postgres LISTEN):
+ * An app that already registers an EventTransport for several instances
+ * gets channels over it too (see channelBackendFrom); or register a backend
+ * of your own (Redis, NATS, Postgres LISTEN):
  * `app.services((s) => s.value(ChannelBackend, myBackend))`.
  */
 
+import { randomUUID } from "node:crypto";
 import { maybe } from "../di/decorators.js";
 import { token } from "../di/container.js";
+import { EventTransport } from "../events/events.js";
 import { Logger } from "../log/logger.js";
 
 const channelLog = new Logger("yerd::channels");
 
 /**
  * How messages travel between publishers and subscribers. The default is
- * in-process (MemoryBackend); register your own under the ChannelBackend
- * token to fan out across processes (Redis pub/sub, Postgres NOTIFY, NATS).
+ * in-process (MemoryBackend), or channelBackendFrom() over the app's
+ * EventTransport when it has one; register your own under the
+ * ChannelBackend token to fan out across processes (Redis pub/sub, Postgres
+ * NOTIFY, NATS).
  * Every subscriber hears every message: this is broadcast, not a work queue.
  *
  * A sketch over Redis pub/sub (two connections: a subscribed one can't publish):
@@ -91,9 +97,11 @@ export interface ChannelBackend {
 export const ChannelBackend = token<ChannelBackend>("ChannelBackend");
 
 /**
- * One process, no setup: what Channels uses when no ChannelBackend is
- * registered. Messages are delivered synchronously and by reference (not
- * copied). In tests it can tell you whether a stream is still subscribed.
+ * One process, no setup: what Channels uses when neither a ChannelBackend
+ * nor an EventTransport is registered. Messages are delivered synchronously
+ * and by reference: every subscriber gets the very object published, unlike
+ * events, which are copied per handler. Publish values nobody mutates. In
+ * tests it can tell you whether a stream is still subscribed.
  *
  * ```ts
  * const memory = app.container.get(Channels).backend as MemoryBackend;
@@ -129,6 +137,40 @@ export class MemoryBackend implements ChannelBackend {
   listeners(channel: string): number {
     return this.#listeners.get(channel)?.size ?? 0;
   }
+}
+
+/**
+ * Channels over an EventTransport, so an app spread over several instances
+ * writes one adapter (its EventTransport) instead of two. Channels uses it
+ * by itself when an EventTransport is registered and no ChannelBackend is.
+ * Channel `room:42` is topic `channel:room:42`, and every subscription joins
+ * a group of its own, so each one hears every message (broadcast, not a
+ * work queue). Messages travel as the transport carries them (as JSON over a
+ * real one, and copied by MemoryTransport too), and arrive as asynchronously
+ * as it delivers them.
+ *
+ * A group per subscription suits transports where groups are cheap and go
+ * away with their last member (NATS queue groups, pub/sub fan-out). Where a
+ * group is durable (Redis Streams consumer groups), register a ChannelBackend
+ * over plain pub/sub instead.
+ *
+ * ```ts
+ * // What Channels does when only an EventTransport is registered:
+ * app.services((s) => s.value(EventTransport, nats).value(ChannelBackend, channelBackendFrom(nats)));
+ * ```
+ */
+export function channelBackendFrom(transport: EventTransport): ChannelBackend {
+  // Groups are unique across instances: this one's UUID, then a counter.
+  const instance = randomUUID();
+  let seq = 0;
+  return {
+    async publish(channel: string, message: unknown): Promise<void> {
+      await transport.publish(`channel:${channel}`, message);
+    },
+    subscribe(channel: string, listener: (message: unknown) => void): () => void {
+      return transport.subscribe(`channel:${channel}`, `channel:${instance}:${(++seq).toString(36)}`, listener);
+    },
+  };
 }
 
 const REF: unique symbol = Symbol.for("yerd.channel");
@@ -292,17 +334,24 @@ class Subscription<T> implements AsyncGenerator<T, undefined, unknown> {
 export class Channels {
   /** The backend registered under the ChannelBackend token, if any. */
   @maybe(ChannelBackend) accessor custom: ChannelBackend | undefined;
+  /** The app's EventTransport, if one is registered: channels ride on it when there's no custom backend. */
+  @maybe(EventTransport) accessor transport: EventTransport | undefined;
   readonly #memory = new MemoryBackend();
+  #overTransport: ChannelBackend | undefined;
 
   /**
-   * The backend in use: the custom one, else an in-process MemoryBackend.
+   * The backend in use: the custom one, else channelBackendFrom() over a
+   * registered EventTransport, else an in-process MemoryBackend.
    *
    * ```ts
    * const memory = app.container.get(Channels).backend as MemoryBackend;
    * ```
    */
   get backend(): ChannelBackend {
-    return this.custom ?? this.#memory;
+    const custom = this.custom;
+    if (custom) return custom;
+    const transport = this.transport;
+    return transport ? (this.#overTransport ??= channelBackendFrom(transport)) : this.#memory;
   }
 
   /**
