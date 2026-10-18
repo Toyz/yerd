@@ -59,3 +59,31 @@ describe("send() on a long-lived stream", () => {
     await app.stop();
   });
 });
+
+let bigYielded = 0;
+
+@route("/big")
+class Big {
+  /** 100 rows of about 8 KB each, counting how far the source got. */
+  @get async *rows() {
+    for (let i = 0; i < 100; i++) {
+      bigYielded++;
+      yield "x".repeat(8 * 1024) + "\n";
+    }
+  }
+}
+
+describe("app.fetch() backpressure", () => {
+  it("pulls only as fast as the reader reads, then drains to the end", async () => {
+    const app = yerd({ routes: [Big], services: [], handleSignals: false });
+    const res = await app.request("/big");
+    await settle();
+    // Nothing read yet: the source waits once about 16 KiB are buffered, instead of running to the end.
+    expect(bigYielded).toBeGreaterThan(0);
+    expect(bigYielded).toBeLessThan(10);
+    const text = await res.text();
+    expect(bigYielded).toBe(100);
+    expect(text.length).toBe(100 * (8 * 1024 + 1));
+    await app.stop();
+  });
+});

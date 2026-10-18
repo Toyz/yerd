@@ -16,6 +16,11 @@ import { Readable } from "node:stream";
 /** Statuses whose responses can't have a body (the Response constructor refuses one). */
 const NULL_BODY = new Set([101, 204, 205, 304]);
 
+/** Bytes buffered for the reader before write() asks the app to wait, like a socket's 16 KiB. */
+const HIGH_WATER = 16 * 1024;
+
+const encoder = new TextEncoder();
+
 type HeaderValue = string | number | readonly string[];
 
 /** The response side: collects status and headers, streams the body into a ReadableStream. */
@@ -27,6 +32,8 @@ class Collector extends EventEmitter {
   readonly #headers = new Map<string, HeaderValue>();
   readonly #method: string;
   #controller!: ReadableStreamDefaultController<Uint8Array>;
+  /** write() returned false: the app waits for "drain" before writing more. */
+  #full = false;
   readonly #body: ReadableStream<Uint8Array>;
   readonly #ready: Promise<Response>;
   #resolve!: (response: Response) => void;
@@ -39,9 +46,15 @@ class Collector extends EventEmitter {
       start: (controller) => {
         this.#controller = controller;
       },
+      // The reader took some: room again for an app waiting to write.
+      pull: () => {
+        if (!this.#full) return;
+        this.#full = false;
+        this.emit("drain");
+      },
       // The reader gave up: for the app, the client went away.
       cancel: () => this.#hangUp(),
-    });
+    }, new ByteLengthQueuingStrategy({ highWaterMark: HIGH_WATER }));
     this.#ready = new Promise<Response>((resolve, reject) => {
       this.#resolve = resolve;
       this.#reject = reject;
@@ -76,12 +89,16 @@ class Collector extends EventEmitter {
     this.#commit();
   }
 
+  /** Like a socket's write(): false once the reader is behind, then "drain" when it catches up. */
   write(chunk: string | Uint8Array): boolean {
     // After the reader cancelled there's no one to write to; the app finds out through "close".
     if (this.destroyed) return true;
     this.#commit();
-    if (!this.#bodiless()) this.#controller.enqueue(typeof chunk === "string" ? new TextEncoder().encode(chunk) : new Uint8Array(chunk));
-    return true;
+    if (this.#bodiless()) return true;
+    this.#controller.enqueue(typeof chunk === "string" ? encoder.encode(chunk) : new Uint8Array(chunk));
+    if ((this.#controller.desiredSize ?? 0) > 0) return true;
+    this.#full = true;
+    return false;
   }
 
   end(chunk?: string | Uint8Array): this {
