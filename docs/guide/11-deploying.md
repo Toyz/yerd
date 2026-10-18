@@ -18,6 +18,7 @@ export default defineConfig({
 
 ```ts
 // src/main.ts
+/// <reference types="vite/client" />
 import { yerd } from "@toyz/yerd";
 
 export default yerd()
@@ -64,6 +65,7 @@ dist/
 
 - `server.js` listens on `PORT` (default 3000) and `HOST` (default: all interfaces).
 - Link stylesheets with `<Stylesheet href="src/styles.css" />` (or `assetUrl()`). In production they resolve through the manifest to hashed file names.
+- Files in `public/` (Vite's `publicDir`) are copied into `dist/client` as they are and served from the site root: `public/robots.txt` is `/robots.txt`, in dev and production. Refer to them by their path from `public/`: `assetUrl("favicon.svg")` or plain `/favicon.svg`, never `public/favicon.svg`. In development, `assetUrl()` warns about that mistake, about missing files, and about source files missing from `client` (they'd work in dev and 404 after the build). See [assets](05-pages-and-layouts.md#assets).
 - Routes marked `@prerender` are rendered to HTML files in `dist/client` at build time and served as files from then on. See [05-pages-and-layouts.md](05-pages-and-layouts.md).
 - The client runtime (`/_yerd/runtime.js`) isn't a build output. The server generates it from its own source, compresses it once (brotli and gzip, about 8 KB), and serves it with an `ETag` so browsers get a cheap 304 on later pages.
 
@@ -124,7 +126,7 @@ yerd()
 
 | Variable | Used for |
 | --- | --- |
-| `YERD_SECRET` | signing action tokens and sealing cookie sessions; comma-separated list to rotate, newest first, each at least 32 bytes ([09-sessions-and-auth.md](09-sessions-and-auth.md#the-security-model)) |
+| `YERD_SECRET` | signing action tokens and sealing cookie sessions; comma-separated list to rotate, newest first, each at least 32 bytes ([security](15-security.md#secrets)) |
 | `YERD_LOG` | log filter, e.g. `info,UserRepo=debug` ([10-logging.md](10-logging.md#filtering-with-yerd_log)) |
 | `YERD_LOG_FORMAT` | `pretty` or `json` console output |
 | `NODE_ENV` | `production`: JSON logs by default and a boot warning if `YERD_SECRET` is missing; `test`: default log level `warn` |
@@ -175,3 +177,7 @@ process.on("SIGTERM", async () => {
 ```
 
 Pass `handleSignals: false` (to `yerd()` or as `listen(port, host, { handleSignals: false })`) when something else owns the process's signals, like a test runner or your own supervisor.
+
+## Before you go live
+
+Run through the [security checklist](15-security.md#checklist): a real `YERD_SECRET`, sessions on, `trustProxy` only behind a proxy that sets the headers, and actions that check who may do what. With several instances, sessions need a shared store (or the default cookie store) and events need a [transport](14-events.md#several-instances-and-other-apps); channels need a [backend](07-streaming-and-live.md#channels).
