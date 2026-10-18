@@ -180,7 +180,7 @@ describe("Router depth", () => {
   it("matches thousands of segments without overflowing the stack", () => {
     const r = table(["/deep/*rest"]);
     const path = "/deep" + "/a".repeat(5000);
-    expect(r.match(path)?.params.rest.split("/").length).toBe(5000);
+    expect(r.match(path)?.params.rest?.split("/").length).toBe(5000);
   });
 
   it("stays fast on a wide param/static tree", () => {

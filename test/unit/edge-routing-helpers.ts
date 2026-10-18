@@ -25,7 +25,7 @@ export function raw(base: string, request: string): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
     const socket = connect(Number(port), hostname);
     const chunks: Buffer[] = [];
-    socket.on("data", (c) => chunks.push(c));
+    socket.on("data", (c: Buffer) => chunks.push(c));
     socket.on("error", reject);
     socket.on("end", () => {
       const text = Buffer.concat(chunks).toString("latin1");
