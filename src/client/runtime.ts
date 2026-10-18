@@ -716,9 +716,63 @@ export function yerdRuntime(): void {
   // handlers use for it. Handlers (data-yx-on-<event>) are compiled with the
   // state bound to that name; after each one, the scope's bindings
   // (data-yx-text, data-yx-bind) are re-applied from the state.
-  type Scope = { el: Element; state: Record<string, unknown>; name: string };
+  type Scope = { el: Element; state: Record<string, unknown>; name: string; key?: string; storage?: Storage };
   const scopes = new WeakMap<Element, Scope>();
   const wired = new WeakSet<Element>();
+  // Persisted scopes by storage key, so scopes sharing a key stay in step.
+  const byKey = new Map<string, Set<Scope>>();
+  const STORE_PREFIX = "yerd-local:";
+
+  function storageFor(el: Element): Storage | undefined {
+    try {
+      return el.getAttribute("data-yx-storage") === "session" ? sessionStorage : localStorage;
+    } catch {
+      return undefined; // storage blocked: works, just doesn't persist
+    }
+  }
+
+  function loadSaved(scope: Scope): void {
+    if (!scope.key || !scope.storage) return;
+    try {
+      const saved = scope.storage.getItem(STORE_PREFIX + scope.key);
+      if (saved) Object.assign(scope.state, JSON.parse(saved));
+    } catch {
+      // unreadable or blocked: keep the server's defaults
+    }
+  }
+
+  /** Save a persisted scope and bring the others with its key (in this tab) up to date. */
+  function save(scope: Scope): void {
+    if (!scope.key || !scope.storage) return;
+    try {
+      scope.storage.setItem(STORE_PREFIX + scope.key, JSON.stringify(scope.state));
+    } catch {
+      // full or blocked: the page still works
+    }
+    for (const other of byKey.get(scope.key) ?? []) {
+      if (other === scope || other.storage !== scope.storage) continue;
+      if (!other.el.isConnected) {
+        byKey.get(scope.key)!.delete(other);
+        continue;
+      }
+      Object.assign(other.state, JSON.parse(JSON.stringify(scope.state)));
+      applyBindings(other);
+    }
+  }
+
+  // Another tab saved: follow it.
+  window.addEventListener("storage", (event) => {
+    if (!event.key?.startsWith(STORE_PREFIX) || event.newValue === null) return;
+    for (const scope of byKey.get(event.key.slice(STORE_PREFIX.length)) ?? []) {
+      if (scope.storage !== event.storageArea) continue;
+      try {
+        Object.assign(scope.state, JSON.parse(event.newValue));
+      } catch {
+        continue;
+      }
+      applyBindings(scope);
+    }
+  });
 
   function read(state: unknown, path: string): unknown {
     const negate = path.startsWith("!");
@@ -780,9 +834,14 @@ export function yerdRuntime(): void {
             result = fn(event);
           } finally {
             applyBindings(scope);
+            save(scope);
           }
           if (result && typeof (result as Promise<unknown>).then === "function") {
-            void (result as Promise<unknown>).then(() => applyBindings(scope), () => applyBindings(scope));
+            const after = () => {
+              applyBindings(scope);
+              save(scope);
+            };
+            void (result as Promise<unknown>).then(after, after);
           }
         });
       }
@@ -800,6 +859,14 @@ export function yerdRuntime(): void {
           continue;
         }
         scope = { el, state, name: el.getAttribute("data-yx-as") || "s" };
+        const key = el.getAttribute("data-yx-persist");
+        if (key) {
+          scope.key = key;
+          scope.storage = storageFor(el);
+          loadSaved(scope);
+          if (!byKey.has(key)) byKey.set(key, new Set());
+          byKey.get(key)!.add(scope);
+        }
         scopes.set(el, scope);
       }
       // Wire handlers on new elements (a morph may have added some) and

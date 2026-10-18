@@ -335,7 +335,20 @@ export function Details() {
 > [!WARNING]
 > Handlers are sent to the browser as their source, so they can use the state (by the render prop's parameter name) and their event argument, nothing else from the server: no imports, no outer variables. A binding is a direct field read: `{s.count * 2}` renders the starting value but won't update, so compute it in the handler into another field. Compiling handlers needs `'unsafe-eval'` if you run a strict Content-Security-Policy.
 
-Local state is gone on reload. For state that should last, keep it on the server: a field in the session (per visitor) or your database, changed through an action.
+### Keeping it across reloads
+
+Local state is gone on reload unless you give it a key. `persist` saves it in the browser's storage after every handler and loads it back when the page starts:
+
+```tsx
+<Local state={{ theme: "light", collapsed: false }} persist="prefs">
+  {(s) => <button onClick={() => (s.collapsed = !s.collapsed)} aria-expanded={not(s.collapsed)}>Menu</button>}
+</Local>
+```
+
+- `persist="prefs"` uses localStorage; `persist={{ key: "prefs", storage: "session" }}` uses sessionStorage (this tab only, cleared when it closes).
+- Saved values are merged over `state`, so a field you add later starts at its default.
+- Every `Local` with the same key stays in step: in this page, and in other open tabs.
+- The server still renders the defaults (it can't see the browser's storage), so saved values appear once the runtime starts. For state the server needs to render, keep it on the server: a field in the session (per visitor) or your database, changed through an action.
 
 ## Custom attributes
 

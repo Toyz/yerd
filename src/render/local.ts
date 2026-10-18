@@ -28,6 +28,9 @@
  *   their event argument, nothing else from the server: they're sent as text.
  *   Compiling them in the browser needs `'unsafe-eval'` under a strict CSP.
  * - The state is JSON: plain objects, arrays, strings, numbers, booleans.
+ * - `persist="key"` keeps it in localStorage (or sessionStorage) across
+ *   reloads. The server still renders the defaults, so the saved values
+ *   appear once the runtime starts.
  */
 
 import type { Child } from "../jsx/jsx-runtime.js";
@@ -80,6 +83,14 @@ export function not(binding: boolean): boolean {
 export interface LocalProps<S extends object> {
   /** The initial state; serialized as JSON for the browser. */
   state: S;
+  /**
+   * Keep the state in the browser's storage under this key, so it survives
+   * reloads: `persist="likes"` (localStorage), or `{ key, storage: "session" }`
+   * for sessionStorage. Saved values are merged over `state` on load (so new
+   * fields get their defaults); every scope with the same key, in this tab
+   * and others, stays in step.
+   */
+  persist?: string | { key: string; storage?: "local" | "session" };
   /** Renders the UI from the state. Its parameter's name is how handlers refer to the state. */
   children: (state: S) => Child;
 }

@@ -250,7 +250,7 @@ function rawText(type: string, children: unknown, out: string): string {
  * JSON and the name handlers use for it, then the render prop's output.
  */
 function renderLocal(props: LocalProps<object>, state: State): Step {
-  const { state: initial, children } = props;
+  const { state: initial, children, persist } = props;
   if (typeof children !== "function") throw new TypeError("<Local> takes a render prop: {(s) => ...}");
   let json: string;
   try {
@@ -259,7 +259,10 @@ function renderLocal(props: LocalProps<object>, state: State): Step {
     throw new TypeError(`<Local> state must be JSON (plain objects, arrays, strings, numbers, booleans): ${(error as Error).message}`);
   }
   const name = stateName(children);
-  write(state, `<yerd-local data-yx-local="${escapeHtml(json)}" data-yx-as="${name}" style="display:contents">`);
+  const store = typeof persist === "string" ? { key: persist, storage: "local" } : persist;
+  if (store && !store.key) throw new TypeError("<Local persist> needs a non-empty key");
+  const persisted = store ? ` data-yx-persist="${escapeHtml(store.key)}"${store.storage === "session" ? ' data-yx-storage="session"' : ""}` : "";
+  write(state, `<yerd-local data-yx-local="${escapeHtml(json)}" data-yx-as="${name}"${persisted} style="display:contents">`);
   state.insideLocal++;
   const done = () => {
     state.insideLocal--;

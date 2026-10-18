@@ -92,3 +92,62 @@ describe("<Local> in the browser", () => {
     void second;
   });
 });
+
+describe("<Local persist>", () => {
+  function Likes({ storage }: { storage?: "session" }) {
+    return (
+      <Local state={{ likes: 0, theme: "light" }} persist={storage ? { key: "likes", storage } : "likes"}>
+        {(s) => (
+          <div>
+            <b class="likes">{s.likes}</b>
+            <i class="theme">{s.theme}</i>
+            <button class="like" onClick={() => s.likes++}>like</button>
+          </div>
+        )}
+      </Local>
+    );
+  }
+
+  const render = async (html: string) => {
+    document.body.innerHTML = html;
+    document.dispatchEvent(new CustomEvent("yx:applied"));
+    await flush();
+  };
+  const texts = (sel: string) => Array.from(document.querySelectorAll(sel)).map((e) => e.textContent);
+
+  it("saves after each handler and restores on the next page, merged over the defaults", async () => {
+    localStorage.clear();
+    const html = await renderToString(<Likes />);
+    expect(html).toContain('data-yx-persist="likes"');
+    await render(html);
+    (document.querySelector(".like") as HTMLElement).click();
+    (document.querySelector(".like") as HTMLElement).click();
+    expect(JSON.parse(localStorage.getItem("yerd-local:likes")!)).toEqual({ likes: 2, theme: "light" });
+
+    // An older save without "theme": the default fills it in.
+    localStorage.setItem("yerd-local:likes", JSON.stringify({ likes: 7 }));
+    await render(await renderToString(<Likes />));
+    expect(texts(".likes")).toEqual(["7"]);
+    expect(texts(".theme")).toEqual(["light"]);
+  });
+
+  it("keeps scopes with the same key in step, here and in other tabs", async () => {
+    localStorage.clear();
+    await render((await renderToString(<Likes />)) + (await renderToString(<Likes />)));
+    (document.querySelector(".like") as HTMLElement).click();
+    expect(texts(".likes")).toEqual(["1", "1"]);
+
+    window.dispatchEvent(new StorageEvent("storage", { key: "yerd-local:likes", newValue: JSON.stringify({ likes: 42, theme: "dark" }), storageArea: localStorage }));
+    expect(texts(".likes")).toEqual(["42", "42"]);
+    expect(texts(".theme")).toEqual(["dark", "dark"]);
+  });
+
+  it("uses sessionStorage when asked, separately from localStorage", async () => {
+    localStorage.clear();
+    sessionStorage.clear();
+    await render(await renderToString(<Likes storage="session" />));
+    (document.querySelector(".like") as HTMLElement).click();
+    expect(JSON.parse(sessionStorage.getItem("yerd-local:likes")!).likes).toBe(1);
+    expect(localStorage.getItem("yerd-local:likes")).toBeNull();
+  });
+});
