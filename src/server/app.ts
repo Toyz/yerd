@@ -23,7 +23,7 @@ import { LONG_LIVED } from "../respond/stream.js";
 import { Channels } from "../live/channels.js";
 import { ACTIONS, ActionForm, CSRF_FIELD, checkActionToken, resolveSecrets, safeBack, verifyAction } from "../actions/action.js";
 import { CLASS_GUARDS, METHOD_GUARDS, guardRegistry, isGuardRef, resetGuardRegistry, type GuardSpec } from "../decorators/guards.js";
-import { SessionManager, type LoadedSession } from "../session/manager.js";
+import { SessionManager, checkSessionOptions, type LoadedSession } from "../session/manager.js";
 import type { SessionOptions } from "../session/session.js";
 import { parseCookies } from "./cookies.js";
 import { RUNTIME_PATH } from "../actions/components.js";
@@ -274,6 +274,7 @@ export class YerdApp {
   /** Turn on sessions (cookie store by default). See SessionOptions. */
   sessions(options: SessionOptions = {}): this {
     if (this.#router) throw new Error("sessions() must be called before the app starts");
+    checkSessionOptions(options);
     this.#sessionOptions = options;
     return this;
   }
