@@ -122,6 +122,11 @@ describe("<script> and <style> text", () => {
     );
   });
 
+  // jsx("SCRIPT") / jsx("IMG") (not reachable from typed TSX) aren't treated as
+  // raw text or void: tag checks are case-sensitive. Escaped text can't break
+  // out, so it's a correctness question, not a hole.
+  it.todo("upper-case raw text and void tag names");
+
   it("keeps attributes", async () => {
     expect(await renderToString(<script type="module" src="/a.js" async />)).toBe('<script type="module" src="/a.js" async></script>');
     expect(await renderToString(<style media="print">{"p{}"}</style>)).toBe('<style media="print">p{}</style>');

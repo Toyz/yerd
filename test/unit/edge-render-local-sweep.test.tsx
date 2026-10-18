@@ -208,6 +208,21 @@ describe("persist", () => {
   });
 });
 
+// Judgment calls, left as they are for now:
+describe("open questions", () => {
+  // s["a.b"] binds the path "a.b", which the runtime reads as s.a.b; keys with
+  // ";", ":" or "=" break the binding list the same way. Refuse, or render unbound?
+  it.todo("state keys that can't be written in a binding path");
+  // eq(s.x, undefined) writes no "=value", so the runtime binds the field itself
+  // while the server rendered the comparison. undefined isn't JSON: refuse it?
+  it.todo("eq() with undefined (or an object) as the value");
+  // A binding to onclick (or any on* string) sets inline script from state in the browser.
+  it.todo("refusing bindings and strings on on* attributes");
+  // In dynamic: "only" mode a <Dynamic> inside a <Local> is sent without its
+  // scope, so its handlers and bindings have nothing to attach to.
+  it.todo("a <Dynamic> inside a <Local> in the runtime's fill-in request");
+});
+
 describe("custom attributes and bindings", () => {
   it("prefetch from a binding goes through its render with the value", async () => {
     expect(
