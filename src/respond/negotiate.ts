@@ -68,17 +68,17 @@ export function parseAccept(header: string | undefined): Range[] {
     let q = 1;
     for (const param of params) {
       const [key, value] = param.trim().split("=");
-      if (key === "q") q = Math.min(1, Math.max(0, Number(value) || 0));
+      if (key?.toLowerCase() === "q") q = Math.min(1, Math.max(0, Number(value) || 0));
     }
     ranges.push({ type, subtype, q });
   }
   return ranges;
 }
 
-/** Best q for `mime` from non-wildcard ranges (exact or `type/*`), or 0. */
+/** Best q for `mime` from non-wildcard ranges (exact or `type/*`), or -1 when none names it. */
 function explicitQuality(mime: string, ranges: Range[]): number {
   const [type, subtype] = mime.split("/");
-  let best = 0;
+  let best = -1;
   let specificity = -1;
   for (const r of ranges) {
     if (r.type === "*") continue;
@@ -128,9 +128,12 @@ export function choose(variants: readonly (readonly string[])[], accept: string 
 
   if (hasDefault && (bestIndex === -1 || otherQ > bestQ)) return "default";
   if (bestIndex !== -1) return bestIndex;
-  // Only wildcard matches left: */* with q > 0 accepts the first variant.
+  // Only wildcard matches left: */* with q > 0 accepts the first variant
+  // the client didn't refuse by name (`application/json;q=0, */*`).
   const anyQ = ranges.find((r) => r.type === "*")?.q ?? 0;
-  return anyQ > 0 && variants.length > 0 ? 0 : undefined;
+  if (anyQ <= 0) return undefined;
+  const index = variants.findIndex((types) => types.some((mime) => explicitQuality(mime, ranges) !== 0));
+  return index === -1 ? undefined : index;
 }
 
 const NEGOTIATED: unique symbol = Symbol.for("yerd.negotiated");
