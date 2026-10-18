@@ -468,25 +468,68 @@ function slugify(text) {
   return text.toLowerCase().replace(/<[^>]+>/g, "").replace(/[`*~]/g, "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-");
 }
 
-/** A guide's ## and ### headings, for search: their text and anchor ids (numbered like the renderer's). */
+/** Inline markdown as plain text: link labels only ("[@session](api:yerd.session)" reads "@session"), no code ticks or emphasis. */
+function plain(text) {
+  return text
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/`/g, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/(^|[^\w*])[*_]([^*_\s][^*_]*?)[*_](?!\w)/g, "$1$2");
+}
+
+/** A paragraph's first sentence, short enough for a search result. */
+function firstSentence(text) {
+  const end = text.search(/[.!?:](\s|$)/);
+  const sentence = end === -1 ? text : text.slice(0, end + 1);
+  return sentence.length > 160 ? `${sentence.slice(0, 157).replace(/\s+\S*$/, "")}...` : sentence;
+}
+
+/**
+ * A guide's ## and ### headings, for search: their text, anchor ids (numbered
+ * like the renderer's) and a one-sentence summary from the section's first
+ * paragraph. Fenced blocks (code, `answer`, `diagram`, tabs) are skipped
+ * whole, closing only on a fence as long as the one that opened them, the
+ * way markdown.ts reads them; callouts, tables and lists aren't summaries.
+ */
 function sectionsOf(text) {
   const sections = [];
   const used = new Map();
-  let fence = false;
+  let fence = "";
+  let paragraph;
+  const finish = () => {
+    const current = sections.at(-1);
+    if (current && paragraph?.length && !current.summary) current.summary = firstSentence(plain(paragraph.join(" ")));
+    paragraph = undefined;
+  };
   for (const line of text.split("\n")) {
-    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
-    if (fence) continue;
-    const heading = /^(#{1,6})\s+(.*?)\s*#*$/.exec(line);
-    if (!heading) continue;
-    let id = slugify(heading[2]) || "section";
-    const n = used.get(id) ?? 0;
-    used.set(id, n + 1);
-    if (n > 0) id = `${id}-${n}`;
-    if (heading[1].length === 2 || heading[1].length === 3) {
-      // Link labels only: "[@session](api:yerd.session)" reads "@session".
-      sections.push({ id, text: heading[2].replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/`/g, "") });
+    if (fence) {
+      if (line.trimStart().startsWith(fence)) fence = "";
+      continue;
     }
+    const open = /^\s*(```+|~~~+)/.exec(line);
+    if (open) {
+      finish();
+      fence = open[1];
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.*?)\s*#*$/.exec(line);
+    if (heading) {
+      finish();
+      let id = slugify(heading[2]) || "section";
+      const n = used.get(id) ?? 0;
+      used.set(id, n + 1);
+      if (n > 0) id = `${id}-${n}`;
+      if (heading[1].length === 2 || heading[1].length === 3) sections.push({ id, text: plain(heading[2]) });
+      continue;
+    }
+    if (line.trim() === "" || /^\s*(>|\||[-*+]\s|\d+[.)]\s|<)/.test(line) || /^\s*(---+|\*\*\*+|___+)\s*$/.test(line)) {
+      finish();
+      continue;
+    }
+    (paragraph ??= []).push(line.trim());
   }
+  finish();
   return sections;
 }
 

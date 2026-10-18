@@ -70,7 +70,7 @@ function buildIndex(api: Api, guides: GuideInfo[]): Item[] {
     const to = guide.slug === "overview" ? "/" : `/guide/${guide.slug}`;
     items.push({ kind: "guide", title: guide.title, to, where: guide.group, keywords: guide.group });
     for (const section of guide.sections ?? []) {
-      items.push({ kind: "section", title: section.text, to: `/guide/${guide.slug}/${section.id}`, where: guide.title, keywords: guide.title });
+      items.push({ kind: "section", title: section.text, to: `/guide/${guide.slug}/${section.id}`, where: guide.title, detail: section.summary, keywords: guide.title });
     }
   }
   items.push({ kind: "command", title: "All exports", to: "/api", where: "API", keywords: "api reference index" });
