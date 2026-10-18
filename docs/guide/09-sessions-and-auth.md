@@ -144,19 +144,40 @@ export const app = yerd().sessions({
 | `trustProxy` | the app's `trustProxy` | believe `X-Forwarded-Proto` when deciding whether the request was HTTPS |
 | `generateId` | 32 random bytes | makes the id for a new or regenerated session; only for stores that keep ids (`kind: "id"`) |
 
-Your own ids, for a store or logs that expect a format:
-
-```ts
-import { randomUUID } from "node:crypto";
-
-yerd().sessions({ store: new MemoryStore(), generateId: () => `sess_${randomUUID()}` });
-```
-
-It may be async (a database sequence), must return a unique non-empty string, and is refused with a `CookieStore`, which has no ids. The id sits inside the sealed cookie so it can't be forged, but keep it unguessable anyway: a leaked store dump shouldn't name live sessions.
-
 `MemoryStore` takes `maxSize` (evicts the least recently saved past it; default no cap) and `sweepInterval` (how often, at most, a save also clears expired sessions; default 60 s). It's for dev, tests and single-process deploys. Under the Vite dev server its sessions survive app reloads, so editing a file doesn't sign you out (stores share records by `name`, default `"default"`). For anything else, implement [SessionStore](api:yerd.SessionStore): `kind: "id"` plus `get`, `set` and `destroy`.
 
 Cookies are always `HttpOnly`, `SameSite=Lax` and `Path=/`.
+
+### Custom session ids
+
+Stores that keep the data on the server (`MemoryStore`, or your own [SessionStore](api:yerd.SessionStore) with `kind: "id"`) put only an id in the cookie. By default it's 32 random bytes, base64url. Pass [`generateId`](api:yerd.SessionOptions/generateId) when the id should look a certain way: a prefix you can spot in logs, the format your Redis keys or database rows use, or a value from a database sequence.
+
+```ts
+import { randomUUID } from "node:crypto";
+import { MemoryStore, yerd } from "@toyz/yerd";
+
+export const app = yerd().sessions({
+  store: new MemoryStore(),
+  generateId: () => `sess_${randomUUID()}`, // "sess_3f1c9a2e-..."
+});
+```
+
+It may be async, for ids that come from somewhere else:
+
+```ts
+yerd().sessions({
+  store: new PostgresSessionStore(pool),
+  generateId: async () => {
+    const { rows } = await pool.query("select nextval('session_ids') as id");
+    return `s${rows[0].id}`;
+  },
+});
+```
+
+- It's called for every new session and again on `regenerate()` (which `auth.login()` does), so a signed-in user gets a fresh id.
+- It must return a non-empty string, different from the session's old id; anything else is an error. Make ids unique: two live sessions with one id share their data.
+- Keep them unguessable even though they can't be forged (the id travels inside the sealed cookie): a leaked store dump or log line shouldn't name live sessions. A random UUID is fine; a plain counter is not, unless the store maps it to something random.
+- A `CookieStore` keeps the data in the cookie and has no ids, so `sessions({ generateId })` without an id store throws at startup.
 
 ## Sign-in with createAuth
 

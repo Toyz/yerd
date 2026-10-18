@@ -54,6 +54,8 @@ export interface GuideInfo {
   title: string;
   file: string;
   group: string;
+  /** Its ## and ### headings, for search. */
+  sections?: Array<{ id: string; text: string }>;
 }
 
 const base = import.meta.env.BASE_URL;

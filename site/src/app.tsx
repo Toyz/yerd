@@ -195,13 +195,42 @@ export class YerdDocs extends LoomElement {
       .sort((a, b) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)) || a.name.localeCompare(b.name))
       .slice(0, 40);
     const guides = this.guides.filter((g) => g.title.toLowerCase().includes(q)).slice(0, 6);
-    if (matches.length === 0 && guides.length === 0) return <div class="hint">Nothing matches “{this.query.trim()}”.</div>;
+    // Members ("generateId" finds SessionOptions.generateId) and guide sections ("Custom session ids").
+    const members = api.entries
+      .flatMap((e) => (e.members ?? []).filter((m) => m.name.toLowerCase().includes(q)).map((m) => ({ e, m })))
+      .sort((a, b) => Number(!a.m.name.toLowerCase().startsWith(q)) - Number(!b.m.name.toLowerCase().startsWith(q)) || a.m.name.localeCompare(b.m.name))
+      .slice(0, 20);
+    const sections = this.guides
+      .flatMap((g) => (g.sections ?? []).filter((s) => s.text.toLowerCase().includes(q)).map((s) => ({ g, s })))
+      .slice(0, 12);
+    if (matches.length === 0 && guides.length === 0 && members.length === 0 && sections.length === 0) {
+      return <div class="hint">Nothing matches “{this.query.trim()}”.</div>;
+    }
     return (
       <>
         {guides.length ? (
           <div class="group">
             <div class="hint">Guides</div>
             {guides.map((g) => this.#link(g.slug === "overview" ? "/" : `/guide/${g.slug}`, g.title))}
+          </div>
+        ) : null}
+        {sections.length ? (
+          <div class="group">
+            <div class="hint">In the guides</div>
+            {sections.map(({ g, s }) => (
+              <div class="result" loom-key={`${g.slug}/${s.id}`}>
+                {this.#link(`/guide/${g.slug}/${s.id}`, s.text)}
+                <div class="module">{g.title}</div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {members.length ? (
+          <div class="group">
+            <div class="hint">Members</div>
+            {members.map(({ e, m }) => (
+              <div class="result" loom-key={`${entryId(e)}/${m.name}`}>{this.#link(`/api/${entryId(e)}/${m.name}`, `${e.name}.${m.name}`)}</div>
+            ))}
           </div>
         ) : null}
         {matches.length ? (

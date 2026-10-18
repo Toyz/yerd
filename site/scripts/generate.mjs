@@ -456,6 +456,33 @@ function guideList() {
   return list;
 }
 
+/** Same as slugify() in src/markdown.ts, so search results land on the heading's anchor. */
+function slugify(text) {
+  return text.toLowerCase().replace(/<[^>]+>/g, "").replace(/[`*_~]/g, "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-");
+}
+
+/** A guide's ## and ### headings, for search: their text and anchor ids (numbered like the renderer's). */
+function sectionsOf(text) {
+  const sections = [];
+  const used = new Map();
+  let fence = false;
+  for (const line of text.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
+    if (fence) continue;
+    const heading = /^(#{1,6})\s+(.*?)\s*#*$/.exec(line);
+    if (!heading) continue;
+    let id = slugify(heading[2]) || "section";
+    const n = used.get(id) ?? 0;
+    used.set(id, n + 1);
+    if (n > 0) id = `${id}-${n}`;
+    if (heading[1].length === 2 || heading[1].length === 3) {
+      // Link labels only: "[@session](api:yerd.session)" reads "@session".
+      sections.push({ id, text: heading[2].replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/`/g, "") });
+    }
+  }
+  return sections;
+}
+
 function writeGuides() {
   mkdirSync(join(out, "guides"), { recursive: true });
   const keep = new Set(guideList().map((g) => `${g.slug}.md`));
@@ -467,7 +494,7 @@ function writeGuides() {
     const text = readFileSync(path, "utf8");
     const heading = /^#\s+(.+)$/m.exec(text)?.[1]?.replace(/`/g, "") ?? guide.slug;
     writeFileSync(join(out, "guides", `${guide.slug}.md`), text);
-    index.push({ slug: guide.slug, title: guide.title ?? heading, file: guide.file, group: guide.group });
+    index.push({ slug: guide.slug, title: guide.title ?? heading, file: guide.file, group: guide.group, sections: sectionsOf(text) });
   }
   writeFileSync(join(out, "guides.json"), JSON.stringify(index, null, 2));
   return index;
