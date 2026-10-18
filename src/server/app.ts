@@ -2063,7 +2063,9 @@ function isPageStream(out: Outgoing): boolean {
 /**
  * Pull a page stream's first chunk now (errors surface here, while there is
  * still time to send the error page) and hand back a body that replays it.
- * Long-lived streams are left alone: their first item may be minutes away.
+ * With `settle`, also every chunk after it that's ready without waiting on
+ * I/O; a body read to the end that way is in renderedInFull. Long-lived
+ * streams are left alone: their first item may be minutes away.
  */
 async function primeStream(out: Outgoing, settle = false): Promise<Outgoing> {
   if (!isPageStream(out)) return out;
