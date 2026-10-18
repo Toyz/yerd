@@ -139,7 +139,8 @@ const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 /** The render prop's parameter name: what handlers call the state. */
 export function stateName(fn: Function): string {
   const source = fn.toString();
-  const match = /^(?:async\s*)?(?:function[^(]*)?\(?\s*([^)=,\s]*)/.exec(source);
+  // \b: a parameter that merely starts with "async" or "function" is a name.
+  const match = /^(?:async\b\s*)?(?:function\b[^(]*)?\(?\s*([^)=,\s]*)/.exec(source);
   const name = match?.[1] ?? "";
   if (!IDENTIFIER.test(name)) {
     throw new TypeError(`<Local>'s render prop needs a plain parameter name, like (s) => ..., not ${JSON.stringify(name || source.slice(0, 30))}`);

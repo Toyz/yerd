@@ -1,9 +1,51 @@
 import { describe, expect, it } from "vitest";
 import { Local, renderToString } from "@toyz/yerd";
 import { jsx } from "@toyz/yerd/jsx-runtime";
+import { stateName } from "../../src/render/local.js";
 
 const scope = (state: string, as = "s") =>
   `<yerd-local data-yx-local="${state}" data-yx-as="${as}" style="display:contents">`;
+
+// Function sources as a compiler or minifier may print them.
+const fn = (source: string) => new Function(`return ${source}`)() as Function;
+
+describe("stateName", () => {
+  it.each([
+    ["(s) => 1", "s"],
+    ["s => 1", "s"],
+    ["s=>1", "s"],
+    ["(state)=>1", "state"],
+    ["( s ) => 1", "s"],
+    ["(s, extra) => 1", "s"],
+    ["(s = {}) => 1", "s"],
+    ["function (s) { return 1 }", "s"],
+    ["function named(s) { return 1 }", "s"],
+    ["function(s){return 1}", "s"],
+    ["async (s) => 1", "s"],
+    ["async s => 1", "s"],
+    ["async(s)=>1", "s"],
+    ["async function (s) { return 1 }", "s"],
+    ["$ => 1", "$"],
+    ["_s => 1", "_s"],
+    // Names that merely start with a keyword.
+    ["asyncState => 1", "asyncState"],
+    ["(asyncState) => 1", "asyncState"],
+    ['functional => jsx("div", {})', "functional"],
+    ["functions => 1", "functions"],
+    ["async asyncState => 1", "asyncState"],
+  ])("%s -> %s", (source, name) => {
+    expect(stateName(fn(source))).toBe(name);
+  });
+
+  it.each([
+    ["({ a }) => 1", "{"],
+    ["([a]) => 1", "[a]"],
+    ["(...s) => 1", "...s"],
+    ["() => 1", "() => 1"],
+  ])("refuses %s", (source, shown) => {
+    expect(() => stateName(fn(source))).toThrow(`plain parameter name, like (s) => ..., not ${JSON.stringify(shown)}`);
+  });
+});
 
 describe("bindings are not thenables", () => {
   it("an async component can return a binding", async () => {
