@@ -84,6 +84,7 @@ const sheet = css`
   .module { font: 0.75rem var(--mono); color: var(--text-faint); white-space: nowrap; }
   .doc { grid-column: 2; font-size: 0.86rem; color: var(--text-dim); line-height: 1.45; margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .doc code { background: none; padding: 0; font-size: 0.95em; color: var(--text); }
+  .added { grid-column: 2; font: 600 0.76rem var(--mono); color: var(--warn); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .parts { grid-column: 2; font: 0.74rem var(--mono); color: var(--text-faint); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .none { padding: 40px 0; color: var(--text-dim); }
@@ -99,7 +100,7 @@ const sheet = css`
     .tools { position: static; }
     a.row { grid-template-columns: minmax(0, 1fr); }
     .row .tag { grid-row: 1; transform: none; margin-bottom: 4px; }
-    .doc, .parts { grid-column: 1; }
+    .doc, .parts, .added { grid-column: 1; }
   }
 `;
 
@@ -164,6 +165,10 @@ export class PageApi extends LoomElement {
   #row(e: Entry, first: string | undefined) {
     // "since v<first release>" on everything is noise; badge what's newer or unreleased.
     const since = e.since === first ? undefined : e.since;
+    // "New on main" lists whole new exports and older ones that gained
+    // members; say which is which, and name the new members.
+    const newView = this.kind === "new";
+    const added = newView && e.since !== null ? (e.members ?? []).filter((m) => m.since === null) : [];
     const doc = summary(e.doc);
     return (
       <li loom-key={entryId(e)}>
@@ -171,13 +176,24 @@ export class PageApi extends LoomElement {
           <KindBadge kind={e.kind} />
           <span class="name-line">
             <span class="name">{e.name}</span>
-            <SinceBadge since={since} />
+            {newView && e.since === null ? (
+              <span class="badge unreleased" title="Not in a release yet">
+                new export
+              </span>
+            ) : newView ? null : (
+              <SinceBadge since={since} />
+            )}
             {e.deprecated ? <span class="badge deprecated">deprecated</span> : null}
             {e.module !== "@toyz/yerd" ? <span class="module">{e.module.replace("@toyz/yerd", "")}</span> : null}
           </span>
           {doc ? (
             <span class="doc">
               <Summary doc={e.doc} />
+            </span>
+          ) : null}
+          {added.length ? (
+            <span class="added">
+              new: {added.map((m) => `${m.static ? "static " : ""}${m.name}${m.kind === "method" ? "()" : ""}`).join(", ")}
             </span>
           ) : null}
           {e.parts?.length ? <span class="parts">with {e.parts.join(", ")}</span> : null}
