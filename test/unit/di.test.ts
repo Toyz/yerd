@@ -303,3 +303,29 @@ describe("disposal by owner lifetime", () => {
     expect(disposed).toEqual(["scratch", "pool"]);
   });
 });
+
+describe("@inject reads", () => {
+  it("give a singleton its app's singletons, and an instance no app built the current app's", async () => {
+    @service
+    class Dep {
+      readonly id = Math.random();
+    }
+    @service
+    class Holder {
+      @inject(Dep) accessor dep!: Dep;
+    }
+    class Loose {
+      @inject(Dep) accessor dep!: Dep;
+    }
+    const [a, b] = [0, 1].map(() => yerd({ routes: [], services: [Dep, Holder], handleSignals: false }));
+    await a!.boot();
+    await b!.boot();
+    const holder = a!.container.get(Holder);
+    expect(holder.dep).toBe(a!.container.get(Dep));
+    expect(holder.dep).toBe(holder.dep);
+    expect(await b!.scope(() => holder.dep)).toBe(a!.container.get(Dep));
+    const loose = new Loose();
+    expect(await a!.scope(() => loose.dep)).toBe(a!.container.get(Dep));
+    expect(await b!.scope(() => loose.dep)).toBe(b!.container.get(Dep));
+  });
+});

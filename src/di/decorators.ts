@@ -1,7 +1,7 @@
 import { createKey, localKey } from "../decorators/keys.js";
 import { assertPublicInstance, isDecoratorContext } from "../decorators/util.js";
 import {
-  OWNER, currentServices, keyName,
+  OWNER, classRegistration, currentServices, keyName,
   type Container, type Lifetime, type Registration, type ServiceKey,
 } from "./container.js";
 import { parseDuration } from "../util/duration.js";
@@ -53,13 +53,7 @@ export function lifetimeOf(def: { lifetime?: Lifetime | undefined; metadata: Dec
 }
 
 export function registrationFor(def: ServiceDef): Registration {
-  const lifetime = lifetimeOf(def, "singleton");
-  return {
-    key: def.provides,
-    lifetime,
-    impl: def.cls,
-    create: (container) => container.construct(def.cls, currentServices()?.scope, lifetime),
-  };
+  return classRegistration(def.provides, def.cls, lifetimeOf(def, "singleton"));
 }
 
 /** Options for @service. */
@@ -180,23 +174,36 @@ export const scoped = lifetimeDecorator("scoped");
 export const transient = lifetimeDecorator("transient");
 
 function resolveFor<T>(owner: object, key: ServiceKey<T>, optional: boolean, perOwner: ReturnType<typeof localKey<T>>): T | undefined {
-  const context = currentServices();
-  const container: Container | undefined = OWNER.from(owner) ?? context?.container;
+  if (perOwner.hasOwn(owner)) return perOwner.from(owner);
+  const own = OWNER.from(owner);
+  // The request's services are looked up only when needed: for the container
+  // of an instance nobody constructed, or the scope of a scoped or transient.
+  let context = own ? undefined : currentServices();
+  const container: Container | undefined = own ?? context?.container;
   if (!container) throw new Error(`Can't inject ${keyName(key)}: no yerd app is running`);
   const registration = container.registration(key);
   if (!registration) {
     if (optional) return undefined;
     throw new Error(`No service registered for ${keyName(key)}`);
   }
+  if (registration.lifetime === "singleton") {
+    const value = container.resolveRegistration(registration) as T;
+    // A singleton of the same container keeps it, so its later reads skip
+    // the lookups. Only a singleton: a property added to every short-lived
+    // instance (a route per request) costs more than it saves on one read.
+    if (own && own.outlivesRequests(owner) && Object.isExtensible(owner)) perOwner.set(owner, value);
+    return value;
+  }
+  context ??= currentServices();
   // Transients are cached on the owner: one per owning instance, not one per
   // read, and disposed with it (a singleton's at shutdown, not after a request).
   if (registration.lifetime === "transient") {
-    if (perOwner.hasOwn(owner)) return perOwner.from(owner);
-    const value = container.get(key, context?.scope, owner);
+    const value = container.resolveRegistration(registration, context?.scope, owner) as T;
     perOwner.set(owner, value);
     return value;
   }
-  return container.get(key, context?.scope);
+  // Scoped: never cached, as the owner may outlive the request.
+  return container.resolveRegistration(registration, context?.scope) as T;
 }
 
 function injectDecorator<T>(key: ServiceKey<T>, optional: boolean) {

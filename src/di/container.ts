@@ -102,6 +102,15 @@ export interface Registration {
   create(container: Container): unknown;
 }
 
+/**
+ * Register `cls` under `key`: constructed by the container (so its @inject
+ * fields resolve there) and tracked for disposal per `lifetime`. What
+ * @service classes and the class forms of app.services() both become.
+ */
+export function classRegistration(key: ServiceKey, cls: new () => unknown, lifetime: Lifetime): Registration {
+  return { key, lifetime, impl: cls, create: (container) => container.construct(cls, currentServices()?.scope, lifetime) };
+}
+
 /** The container an instance was created by, so its @inject fields resolve there. */
 export const OWNER = localKey<Container>("owner");
 
@@ -326,6 +335,11 @@ export class Container {
     return instance;
   }
 
+  /** @internal Whether `instance` lives as long as this container: a singleton it created or adopted. */
+  outlivesRequests(instance: object): boolean {
+    return TRACKER.from(instance) === this.#created;
+  }
+
   #trackerFor(scope: Scope | undefined, lifetime: Lifetime): unknown[] | null {
     if (lifetime === "singleton") return this.#created;
     if (lifetime === "scoped") return scope?.created ?? this.#created;
@@ -351,12 +365,21 @@ export class Container {
   get<T>(key: ServiceKey<T>, scope?: Scope, holder?: object): T {
     const registration = this.#registrations.get(key);
     if (!registration) throw new Error(`No service registered for ${keyName(key)}`);
+    return this.resolveRegistration(registration, scope, holder) as T;
+  }
 
+  /**
+   * @internal get() for a registration already looked up (by @inject, which
+   * needs its lifetime first), so the key isn't looked up twice. It must be
+   * this container's registration for its key.
+   */
+  resolveRegistration(registration: Registration, scope?: Scope, holder?: object): unknown {
+    const key = registration.key;
     if (registration.lifetime === "singleton") {
-      if (this.#singletons.has(key)) return this.#singletons.get(key) as T;
+      if (this.#singletons.has(key)) return this.#singletons.get(key);
       const instance = this.#creating(key, () => runWithServices(this, undefined, () => registration.create(this)));
       this.#singletons.set(key, instance);
-      return instance as T;
+      return instance;
     }
 
     if (registration.lifetime === "scoped") {
@@ -366,14 +389,14 @@ export class Container {
             `Use app.scope(async () => ...) to create a scope by hand.`,
         );
       }
-      if (scope.instances.has(key)) return scope.instances.get(key) as T;
+      if (scope.instances.has(key)) return scope.instances.get(key);
       const instance = this.#creating(key, () => runWithServices(this, scope, () => registration.create(this)));
       scope.instances.set(key, instance);
-      return instance as T;
+      return instance;
     }
 
     const tracker = holder && TRACKER.has(holder) ? TRACKER.from(holder)! : scope ? scope.created : null;
-    return this.#creating(key, () => storage.run({ container: this, scope, tracker }, () => registration.create(this))) as T;
+    return this.#creating(key, () => storage.run({ container: this, scope, tracker }, () => registration.create(this)));
   }
 
   /**
@@ -490,13 +513,7 @@ export class ServiceCollection {
       /^class[\s{]/.test(Function.prototype.toString.call(target)) ||
       (target.prototype !== undefined && Object.getOwnPropertyNames(target.prototype).length > 1);
     if (isClass) {
-      const cls = target as new () => T;
-      this.add({
-        key,
-        lifetime,
-        impl: cls,
-        create: (container) => container.construct(cls, currentServices()?.scope, lifetime),
-      });
+      this.add(classRegistration(key, target as new () => T, lifetime));
     } else {
       const factory = target as (container: Container) => T;
       this.add({ key, lifetime, create: (container) => container.adopt(factory(container), currentServices()?.scope, lifetime) });
