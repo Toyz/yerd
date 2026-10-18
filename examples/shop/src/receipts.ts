@@ -4,7 +4,7 @@ import { OrderPlaced } from "./orders.js";
 
 /**
  * Sends the receipt. Checkout doesn't know this exists: it announces
- * OrderPlaced, and this runs after the response, so a slow mail server
+ * OrderPlaced, and this runs once checkout has returned, so a slow mail server
  * never holds up the customer. Nothing injects it, so app.ts imports it.
  */
 @service

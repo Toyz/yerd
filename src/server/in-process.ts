@@ -224,14 +224,16 @@ export class TestClient {
   /**
    * Submit the action form a page rendered: fetches `page`, takes the
    * `index`-th action token on it, and posts it to `to` (default: the page)
-   * with `fields`, as the runtime would (`yx` header: JSON answers, no redirects).
+   * with `fields`, as the runtime would (`yx` header: JSON answers, no
+   * redirects). `script: false` posts like a browser without JavaScript
+   * (`Accept: text/html`: redirects, and error pages for failures).
    */
   async action(page: string, fields: Record<string, string> = {}, options: { index?: number; to?: string; script?: boolean } = {}): Promise<Response> {
     const html = await this.page(page);
     const tokens = [...html.matchAll(/name="_yx" value="([^"]+)"|data-yx-token="([^"]+)"/g)].map((m) => (m[1] ?? m[2])!.replace(/&amp;/g, "&").replace(/&quot;/g, '"'));
     const token = tokens[options.index ?? 0];
     if (!token) throw new Error(`No action on ${page} at index ${options.index ?? 0} (found ${tokens.length})`);
-    const headers: Record<string, string> = options.script === false ? {} : { yx: "1" };
+    const headers: Record<string, string> = options.script === false ? { accept: "text/html,application/xhtml+xml" } : { yx: "1" };
     return this.request(options.to ?? page, { method: "POST", body: new URLSearchParams({ _yx: token, ...fields }), headers });
   }
 }

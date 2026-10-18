@@ -27,7 +27,7 @@ Sign in with `ada` / `analytical-engine`.
 | `GET /api/products`, `/api/products/:id` | JSON, same filters, no session |
 
 Placing an order emits `OrderPlaced`; `Receipts` (`src/receipts.ts`) hears it
-after the response and logs a pretend receipt.
+once the checkout action has returned, and logs a pretend receipt.
 
 | File | What |
 |------|------|

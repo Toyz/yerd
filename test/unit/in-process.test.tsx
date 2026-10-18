@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import {
-  YerdError, action, body, currentContext, get, head, is, post, route, session, sse, status, yerd,
+  Conflict, YerdError, action, body, currentContext, get, head, is, post, route, session, sse, status, yerd,
   type ActionForm, type Session,
 } from "@toyz/yerd";
 
@@ -210,5 +210,25 @@ describe("app.client(): a cookie-keeping test client", () => {
     expect(res.status).toBe(204);
     expect(todos).toContain("jam");
     await expect(client.action("/form", {}, { index: 3 })).rejects.toThrow(/No action on \/form at index 3 \(found 1\)/);
+  });
+});
+
+describe("client.action({ script: false })", () => {
+  @route("/plain-fail")
+  class PlainFail {
+    @get page() {
+      return <form action={this.go}><button>go</button></form>;
+    }
+    @action go() {
+      return new Conflict("Already done");
+    }
+  }
+
+  it("posts like a browser without JavaScript: a failure gets the error page", async () => {
+    const app = yerd({ routes: [PlainFail], services: [], handleSignals: false }).errorPage(({ status }) => <h1>error {status}</h1>);
+    const r = await app.client().action("/plain-fail", {}, { script: false });
+    expect(r.status).toBe(409);
+    expect(r.headers.get("content-type")).toMatch(/^text\/html/);
+    expect(await r.text()).toContain("error 409");
   });
 });

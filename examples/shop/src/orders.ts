@@ -23,7 +23,7 @@ export interface Order {
 }
 
 /**
- * Announced after checkout. Handlers run after the response, so it carries
+ * Announced after checkout. Handlers run once the action has returned, so it carries
  * what they need (no "current user" by then). Plain data: events travel as JSON.
  */
 @named("order.placed")
