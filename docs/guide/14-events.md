@@ -271,7 +271,7 @@ What to know about calls:
 - **One answer.** Two `@handles` for the same call class is a boot error. `@handles` belongs on a singleton service, like `@on`.
 - **Nobody home.** In memory, a call nothing answers fails at once: `Nothing answers shipping.quote`. Over a transport that can't count its listeners, it waits for `timeout` (default `"10s"`) and then fails.
 - **Not deferred.** Unlike `emit()`, a call goes out immediately, even inside a request: you're waiting for it. If the request fails later, the call already happened.
-- **JSON both ways.** The call is copied like an event, and so is the answer: return plain data (a `Date` comes back as a string).
+- **JSON both ways.** The call is copied like an event, and so is the answer: return plain data (a `Date` comes back as a string). A call JSON can't serialize is refused the same way, `events.call()` rejecting with the TypeError before anything is sent.
 - **Its own scope.** The handler runs in a fresh DI scope with no current request, like an `@on` handler.
 
 `ResultOf<C>` is the answer type of a call class, for helpers that wrap `events.call()`.

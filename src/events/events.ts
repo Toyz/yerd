@@ -48,9 +48,10 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { createKey } from "../decorators/keys.js";
+import { setTimeout as sleep } from "node:timers/promises";
+import { createKey, localKey } from "../decorators/keys.js";
 import { assertPublicInstance } from "../decorators/util.js";
-import { parseDuration } from "../di/decorators.js";
+import { parseDuration } from "../util/duration.js";
 import { Scope, runWithServices, token, type Container } from "../di/container.js";
 import { Logger } from "../log/logger.js";
 import { HttpError } from "../respond/response.js";
@@ -312,7 +313,10 @@ export const EventTransport = token<EventTransport>("EventTransport");
 /**
  * One process: the default when no EventTransport is registered. Groups take
  * turns among their members; delivery is asynchronous, never inside
- * publish(). Construct one yourself to drive an Events bus in a unit test.
+ * publish(). Like a real transport, each delivery gets its own copy of the
+ * message (it goes through JSON once per publish), so one handler can't
+ * change what another sees. Construct one yourself to drive an Events bus in
+ * a unit test.
  *
  * ```ts
  * const events = new Events(new MemoryTransport());
@@ -327,6 +331,8 @@ export class MemoryTransport implements EventTransport {
   publish(topic: string, message: unknown): number {
     const groups = this.#topics.get(topic);
     if (!groups) return 0;
+    // Serialized once, parsed per delivery: every group gets a fresh object.
+    const json = JSON.stringify(message) as string | undefined;
     let reached = 0;
     for (const group of groups.values()) {
       if (group.members.length === 0) continue;
@@ -334,7 +340,7 @@ export class MemoryTransport implements EventTransport {
       reached++;
       queueMicrotask(() => {
         void Promise.resolve()
-          .then(() => deliver(message))
+          .then(() => deliver(json === undefined ? undefined : JSON.parse(json)))
           .catch((error) => log.error(`delivery on ${topic} failed`, { error }));
       });
     }
@@ -448,10 +454,22 @@ export class Events {
   /** This instance, for replies and `every` groups. */
   readonly instance = randomUUID();
   readonly #transport: EventTransport;
-  readonly #queued = new WeakMap<YerdContext, EventMessage[]>();
+  /**
+   * A request's queue and whether it was released, kept on its context as
+   * symbol properties (like DI's OWNER) rather than in a WeakMap / WeakSet:
+   * release() runs on every request, and weak entries are costly for the
+   * garbage collector. One pair of keys per bus, so buses never mix.
+   */
+  readonly #queued = localKey<EventMessage[] | undefined>("events:queued");
+  readonly #released = localKey<true>("events:released");
   /** Subscribes the app's @on / @handles methods; set by the app at boot, run once on first use. */
   #wiring: (() => void) | undefined;
-  readonly #released = new WeakSet<YerdContext>();
+  /**
+   * For call ids and waitFor groups. A counter is enough: a call id is only
+   * looked up here (the reply comes back on this instance's own topic), and
+   * a waitFor group also carries the instance id, which is a UUID.
+   */
+  #seq = 0;
   readonly #pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: unknown) => void; timer: ReturnType<typeof setTimeout> }>();
   readonly #running = new Set<Promise<unknown>>();
   readonly #unsubscribe: Array<() => void> = [];
@@ -486,10 +504,10 @@ export class Events {
     const message = encode(event);
     this.#prepare();
     const ctx = maybeContext();
-    if (ctx && !this.#released.has(ctx)) {
-      let queue = this.#queued.get(ctx);
-      if (!queue) this.#queued.set(ctx, (queue = []));
-      queue.push(message);
+    if (ctx && this.#released.from(ctx) !== true) {
+      const queue = this.#queued.from(ctx);
+      if (queue) queue.push(message);
+      else this.#queued.set(ctx, [message]);
       return;
     }
     void this.#send(message);
@@ -522,10 +540,19 @@ export class Events {
    * ```
    */
   call<C extends Call<any>>(call: C, options: CallOptions = {}): Promise<ResultOf<C>> {
+    let encoded: EventMessage;
+    let ms: number;
+    try {
+      // Before anything is pending: a call that can't be sent (a BigInt, a
+      // cycle) fails with encode()'s TypeError and leaves no timer behind.
+      encoded = encode(call);
+      ms = parseDuration(options.timeout ?? "10s");
+    } catch (error) {
+      return Promise.reject(error);
+    }
     this.#prepare();
-    const name = eventName(call.constructor);
-    const id = randomUUID();
-    const ms = parseDuration(options.timeout ?? "10s");
+    const { name, data } = encoded;
+    const id = (++this.#seq).toString(36);
     this.#listenForReplies();
     return new Promise<ResultOf<C>>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -533,7 +560,7 @@ export class Events {
         reject(new Error(`events.call(${name}) got no answer within ${ms}ms`));
       }, ms);
       this.#pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
-      const message: CallMessage = { id, reply: `reply:${this.instance}`, name, data: toWire(call) };
+      const message: CallMessage = { id, reply: `reply:${this.instance}`, name, data };
       Promise.resolve(this.#transport.publish(callTopic(name), message)).then(
         (reached) => {
           if (reached === 0) this.#settle({ id, ok: false, error: { message: `Nothing answers ${name}: no @handles(${call.constructor.name}) in this app or on the transport` } });
@@ -558,7 +585,7 @@ export class Events {
     const name = eventName(type);
     const ms = parseDuration(options.timeout ?? "10s");
     return new Promise<E>((resolve, reject) => {
-      const leave = this.#transport.subscribe(eventTopic(name), `wait:${randomUUID()}`, (message) => {
+      const leave = this.#transport.subscribe(eventTopic(name), `wait:${this.instance}:${(++this.#seq).toString(36)}`, (message) => {
         const event = fromWire<E>(type, (message as EventMessage).data);
         if (options.where && !options.where(event)) return;
         clearTimeout(timer);
@@ -574,10 +601,10 @@ export class Events {
 
   /** @internal The request succeeded: send what it emitted, and anything it emits from now on. */
   release(ctx: YerdContext): void {
-    this.#released.add(ctx);
-    const queue = this.#queued.get(ctx);
+    this.#released.set(ctx, true);
+    const queue = this.#queued.from(ctx);
     if (!queue) return;
-    this.#queued.delete(ctx);
+    this.#queued.set(ctx, undefined);
     for (const message of queue) void this.#send(message);
   }
 
@@ -604,10 +631,10 @@ export class Events {
 
   /** @internal The request failed: forget what it emitted. */
   discard(ctx: YerdContext): void {
-    const queue = this.#queued.get(ctx);
+    const queue = this.#queued.from(ctx);
     if (!queue) return;
-    this.#queued.delete(ctx);
-    log.debug(`dropped ${queue.length} event(s) from a failed request`, { events: queue.map((e) => eventName(e.constructor)) });
+    this.#queued.set(ctx, undefined);
+    if (log.enabled("debug")) log.debug(`dropped ${queue.length} event(s) from a failed request`, { events: queue.map((m) => m.name) });
   }
 
   /** @internal Subscribe a service's @on and @handles methods (at app start). */
@@ -705,11 +732,12 @@ export class Events {
           return;
         }
         log.warn(`@on ${handler} failed; retrying in ${wait}ms`, { error, attempt: attempt + 1 });
-        const stopped = await new Promise<boolean>((resolve) => {
-          const timer = setTimeout(() => resolve(false), wait);
-          this.#stopped.signal.addEventListener("abort", () => (clearTimeout(timer), resolve(true)), { once: true });
-        });
-        if (stopped) return;
+        try {
+          // Takes its abort listener off the long-lived stop signal when the wait ends.
+          await sleep(wait, undefined, { signal: this.#stopped.signal });
+        } catch {
+          return; // stopped while waiting
+        }
         wait *= 2;
       }
     }

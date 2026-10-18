@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { getEventListeners } from "node:events";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BootError, Call, Events, EventTransport, HttpError, ILogger, MemoryTransport, get, inject, named, on, handles, post, resolve, route,
   scoped, service, yerd, type RunningServer, type YerdApp,
 } from "@toyz/yerd";
-import { maybeContext } from "../../src/server/context.js";
+import { maybeContext, runWithContext, type YerdContext } from "../../src/server/context.js";
 
 @named("test.order-placed")
 class OrderPlaced {
@@ -326,5 +327,114 @@ describe("events without app.start()", () => {
     await tick();
     expect(heard).toEqual(["script", "request"]);
     await lazy.stop();
+  });
+});
+
+describe("delivery copies and cleanup", () => {
+  @named("test.basket")
+  class Basket {
+    constructor(readonly items: string[]) {}
+  }
+  const fake = { get: () => undefined } as never;
+
+  it("give each handler and waiter its own copy of the event, in memory too", async () => {
+    const bus = new Events(new MemoryTransport());
+    const views: string[][] = [];
+    bus.wire(fake, {
+      a: (e: Basket) => (e.items.push("from a"), views.push([...e.items])),
+      b: (e: Basket) => (e.items.push("from b"), views.push([...e.items])),
+    }, "Shop", [
+      { method: "a", type: Basket, options: {} },
+      { method: "b", type: Basket, options: {} },
+    ], []);
+    const waited = bus.waitFor(Basket);
+    const original = new Basket(["apple"]);
+    bus.emit(original);
+    const event = await waited;
+    await tick();
+    expect(views.sort()).toEqual([["apple", "from a"], ["apple", "from b"]]);
+    expect(event.items).toEqual(["apple"]);
+    expect(original.items).toEqual(["apple"]);
+  });
+
+  it("give a fromJSON class fresh data per delivery", async () => {
+    @named("test.tagged")
+    class Tagged {
+      constructor(readonly tags: string[]) {}
+      static fromJSON(data: { tags: string[] }): Tagged {
+        data.tags.push("seen");
+        return new Tagged(data.tags);
+      }
+    }
+    const bus = new Events(new MemoryTransport());
+    const [first, second] = [bus.waitFor(Tagged), bus.waitFor(Tagged)];
+    bus.emit(new Tagged(["x"]));
+    expect((await first).tags).toEqual(["x", "seen"]);
+    expect((await second).tags).toEqual(["x", "seen"]);
+  });
+
+  it("refuse a call that can't be sent with a clear TypeError, leaving no timer or pending call", async () => {
+    @named("test.big-call")
+    class BigCall extends Call<number> {
+      constructor(readonly n: bigint) {
+        super();
+      }
+    }
+    vi.useFakeTimers();
+    try {
+      const bus = new Events(new MemoryTransport());
+      await expect(bus.call(new BigCall(1n), { timeout: "1h" })).rejects.toThrow(TypeError);
+      await expect(bus.call(new BigCall(1n))).rejects.toThrow(/test.big-call can't be sent as JSON/);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("take each retry's abort listener off the stop signal once the wait is over", async () => {
+    const signals = new Set<EventTarget>();
+    const add = EventTarget.prototype.addEventListener;
+    const spy = vi.spyOn(EventTarget.prototype, "addEventListener").mockImplementation(function (this: EventTarget, ...args) {
+      if (args[0] === "abort") signals.add(this);
+      return add.apply(this, args);
+    });
+    try {
+      let tries = 0;
+      const bus = new Events(new MemoryTransport());
+      const flaky = () => {
+        if (tries++ < 3) throw new Error("down");
+      };
+      bus.wire(fake, { flaky }, "Shop", [{ method: "flaky", type: Basket, options: { retries: 3, backoff: 1 } }], []);
+      bus.emit(new Basket([]));
+      await tick(50);
+      expect(tries).toBe(4);
+      expect(signals.size).toBeGreaterThan(0);
+      for (const signal of signals) expect(getEventListeners(signal, "abort")).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keep a request's queue on its context: released or dropped once, per bus", async () => {
+    const heard: string[] = [];
+    const listen = (bus: Events, label: string) =>
+      bus.wire(fake, { note: (e: Basket) => heard.push(`${label}:${e.items.join()}`) }, "Shop", [{ method: "note", type: Basket, options: {} }], []);
+    const [bus, other] = [new Events(new MemoryTransport()), new Events(new MemoryTransport())];
+    listen(bus, "bus");
+    listen(other, "other");
+    const ok = {} as YerdContext;
+    const failed = {} as YerdContext;
+    runWithContext(ok, () => bus.emit(new Basket(["kept"])));
+    runWithContext(failed, () => bus.emit(new Basket(["dropped"])));
+    await tick();
+    expect(heard).toEqual([]);
+    bus.release(ok);
+    bus.discard(failed);
+    bus.release(ok);
+    runWithContext(ok, () => bus.emit(new Basket(["after release"])));
+    // Released on one bus is not released on another.
+    runWithContext(ok, () => other.emit(new Basket(["held"])));
+    await tick();
+    expect(heard).toEqual(["bus:kept", "bus:after release"]);
   });
 });
