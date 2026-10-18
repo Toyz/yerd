@@ -2,7 +2,7 @@
 
 Most pages need no client code: actions, Regions and [custom attributes](06-interactivity.md#custom-attributes) cover forms, live updates and small behaviours. Reach for a client module when something has to run in the browser on its own: a chart, a map, an editor, a custom element.
 
-yerd gives you three ways to ship one, each loaded only on pages that use it:
+There are three ways to ship one, each loaded only on pages that use it:
 
 - [Island](api:yerd.Island): a part of the page mounted by a module.
 - [lazyElement](api:yerd.lazyElement): a custom element whose definition loads when the tag appears.
@@ -10,7 +10,7 @@ yerd gives you three ways to ship one, each loaded only on pages that use it:
 
 ## Client modules
 
-Name client modules `*.client.ts` (or `.tsx`, `.js`, `.jsx`). The Vite plugin builds every one it finds as a client entry, so they don't go in the `client` option.
+Name client modules `*.client.ts` (or `.tsx`, `.js`, `.jsx`); the Vite plugin builds each as a client entry, with no need to list them in the `client` option.
 
 ```
 src/
@@ -22,7 +22,7 @@ src/
 
 - Refer to a module by its source path from the Vite root: `"src/widgets/sparkline.client.ts"`.
 - In dev that's the file itself; in production, the hashed build output.
-- Modules can import packages and each other. Shared code is split into chunks by Vite as usual.
+- Modules can import packages and each other; Vite splits shared code as usual.
 
 ## Islands
 
@@ -97,7 +97,7 @@ export class ShareLink extends LoomElement {
 }
 ```
 
-So does a plain `customElements.define("share-link", class extends HTMLElement { ... })`. In a page, use the tag; its children show until it upgrades:
+So does a plain `customElements.define(...)`. In a page, use the tag; its children show until it upgrades:
 
 ```tsx
 <share-link url={url}>
@@ -135,8 +135,7 @@ export default confetti;
 ```
 
 - Unlike an inline half, the module can import things, and pages without the attribute never download it.
-- The first element to fire its trigger loads the module. From then on every element with the attribute connects, as with an inline half.
-- `update` and `disconnect` work the same way.
+- The first element to fire its trigger loads the module; then every element with the attribute connects, with `update` and `disconnect` as usual.
 
 ## Triggers
 
