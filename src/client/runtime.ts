@@ -401,6 +401,14 @@ export function yerdRuntime(): void {
     return form.getAttribute(name);
   }
 
+  /**
+   * An action submit: an action form, or a formaction={action} button (which
+   * carries the action's token as its own name="_yx") in any form.
+   */
+  function isActionSubmit(form: HTMLFormElement, submitter: HTMLElement | null): boolean {
+    return form.hasAttribute("data-yx") || submitter?.getAttribute("name") === "_yx";
+  }
+
   /** Forms aimed at another window, or method=dialog, are the browser's. */
   function intercepts(form: HTMLFormElement, submitter: HTMLElement | null): boolean {
     const target = formAttr(form, submitter, "target");
@@ -463,24 +471,28 @@ export function yerdRuntime(): void {
     let first: HTMLElement | undefined;
     const boxes = Array.from(form.querySelectorAll<HTMLElement>("[data-yx-error]"));
     for (const { path, message } of issues) {
+      // An issue about the whole form ("(root)", or no path) goes in the form's own box, with the rest.
+      const fieldPath = path && path !== "(root)" ? path : "";
       // An item of a list ("photos[0]", "tags[1]") belongs to its field ("photos") when there's nothing for the item itself.
-      const owner = path.replace(/(\[\d+\])+$/, "");
-      const lookup = (name: string) => (name && name !== "(root)" ? form.elements.namedItem(name) : null);
-      const named = lookup(path) ?? lookup(owner);
+      const owner = fieldPath.replace(/(\[\d+\])+$/, "");
+      const lookup = (name: string) => (name ? form.elements.namedItem(name) : null);
+      const named = lookup(fieldPath) ?? lookup(owner);
       const field = named instanceof RadioNodeList ? (named[0] as HTMLElement | undefined) : (named as HTMLElement | null);
       if (field) {
         field.setAttribute("aria-invalid", "true");
         field.setAttribute("data-yx-invalid", "");
         first ??= field;
       }
-      const box = boxes.find((b) => b.getAttribute("data-yx-error") === path) ?? boxes.find((b) => owner !== path && b.getAttribute("data-yx-error") === owner);
+      const box = fieldPath
+        ? (boxes.find((b) => b.getAttribute("data-yx-error") === fieldPath) ?? boxes.find((b) => owner !== fieldPath && b.getAttribute("data-yx-error") === owner))
+        : undefined;
       if (box) {
         box.textContent = message;
         continue;
       }
       // "What needs doing?" or "Email *" reads better without its trailing marks.
       const label = (field as HTMLInputElement | null)?.labels?.[0]?.textContent?.trim().replace(/[\s?:*]+$/, "");
-      left.push(path && path !== "(root)" ? `${label || path}: ${message}` : message);
+      left.push(fieldPath ? `${label || owner}: ${message}` : message);
     }
     first?.focus();
     return left;
@@ -533,7 +545,8 @@ export function yerdRuntime(): void {
     const body = multipart ? data : new URLSearchParams(entries.map(([name, value]) => [name, typeof value === "string" ? value : value.name]));
     // Plain forms (auto mode) let fetch follow redirects to the page they land
     // on; action forms get yx-location instead (see below).
-    const headers: Record<string, string> = form.hasAttribute("data-yx") ? { yx: "1", accept: "text/html" } : { accept: "text/html" };
+    const plain = !isActionSubmit(form, submitter);
+    const headers: Record<string, string> = plain ? { accept: "text/html" } : { yx: "1", accept: "text/html" };
     if (!multipart) headers["content-type"] = "application/x-www-form-urlencoded";
     // The form's own message box: [data-yx-error] with no field name.
     const errorBox = Array.from(form.querySelectorAll<HTMLElement>("[data-yx-error]")).find((box) => !box.getAttribute("data-yx-error")) ?? null;
@@ -561,7 +574,6 @@ export function yerdRuntime(): void {
       }
       // A plain form (auto mode): whatever page the server answered with,
       // after following its redirects, is the new page, errors included.
-      const plain = !form.hasAttribute("data-yx");
       if (plain && (response.headers.get("content-type") ?? "").includes("text/html")) {
         const html = await response.text();
         const landed = new URL(response.url || url.href);
@@ -580,10 +592,10 @@ export function yerdRuntime(): void {
       if (!response.ok) {
         const { message, issues } = await readFailure(response);
         const rest = issues.length ? showIssues(form, issues) : [message];
-        if (rest.length) {
-          if (errorBox) errorBox.textContent = rest.join(". ");
-          else notify(rest.join(". "));
-        }
+        // The box is emptied too when every issue went to a field's own box,
+        // so an earlier submit's message doesn't linger beside the new ones.
+        if (errorBox) errorBox.textContent = rest.join(". ");
+        else if (rest.length) notify(rest.join(". "));
         return;
       }
       if (errorBox) errorBox.textContent = "";
@@ -614,7 +626,7 @@ export function yerdRuntime(): void {
     const form = event.target;
     if (!(form instanceof HTMLFormElement) || event.defaultPrevented) return;
     const submitter = (event as SubmitEvent).submitter;
-    if (!form.hasAttribute("data-yx")) {
+    if (!isActionSubmit(form, submitter)) {
       // Auto mode: any same-origin form that isn't opted out.
       if (!auto || form.closest("[data-yx-boost]")?.getAttribute("data-yx-boost") === "false") return;
       const action = new URL(formAttr(form, submitter, "action") || location.href, form.baseURI);
