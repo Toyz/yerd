@@ -137,6 +137,25 @@ export class Accounts {
 
 The paths are type-checked: `"input.billing.pin"` or `"1.headers.cookie"` is a compile error naming the field that doesn't exist. TypeScript can't see parameter *names*, only positions and types, so the part after a name is checked by the compiler and the name itself when the class loads (a misspelled name throws right there, before any request). Positional paths (`"0.password"`) are checked end to end.
 
+### Wildcards
+
+A path segment can be `*`, any one key (or array index), or `**`, any number of keys:
+
+```ts
+@instrument({ level: "info", skip: ["card.*", "**.cvc", "*.password", "items.*.secret"] })
+charge(card: Card, user: User, items: LineItem[]) { ... }
+```
+
+| Path | Leaves out |
+| --- | --- |
+| `card.*` | every field of `card` (it's logged as `{}`) |
+| `*.password` | `password` one level inside any argument |
+| `**.cvc` | `cvc` anywhere, at any depth |
+| `items.*.secret` | `secret` in every item |
+| `0.*` | every field of the first argument |
+
+The compiler still checks what comes before the first wildcard: `"card.nope.*"` is an error when `card` has no `nope`, and a wildcard has to be a whole segment (`"card.num*"` is refused).
+
 > [!TIP]
 > Argument names are read from the compiled function source, so keep server code unminified (the Vite plugin does). If a name ever trips you up (a bundler renamed it), positional paths don't depend on names at all.
 
@@ -176,6 +195,7 @@ export const app = yerd().logging({
 | --- | --- | --- |
 | `filter` | `YERD_LOG`, else `info` (`warn` under tests) | directives, as above |
 | `format` | `YERD_LOG_FORMAT`, else `pretty` on a terminal outside production, `json` otherwise | console output format |
+| `redact` | `[]` | field paths to mask as `"[redacted]"` in every record ([your own redactions](#your-own-redactions)) |
 
 > [!TIP]
 > `YERD_LOG` and `YERD_LOG_FORMAT` win over what you pass here, so the values in code are defaults that a deploy can still change without a rebuild.
@@ -234,3 +254,20 @@ log.info("login", { user: "ada", password: "hunter2", headers: { authorization: 
 
 > [!NOTE]
 > Whole words, so `csrfToken`, `x-api-key` and `sessionId` (a session id is a credential) are redacted, but `passengers` and `tokenizer` aren't.
+
+### Your own redactions
+
+Your data has secrets the word list can't guess: card numbers, emails, national ids. List their paths in `logging({ redact })`, with the same wildcards as `skip`, and they're masked in every record: plain logs, span fields, `@instrument` arguments, logs from libraries using yerd's logger.
+
+```ts
+export const app = yerd().logging({
+  redact: ["**.ssn", "**.email", "card.number", "headers.x-forwarded-for"],
+});
+
+log.info("signup", { user: { email: "ada@example.com", name: "ada" }, card: { number: "4242", brand: "visa" } });
+// fields: { user: { email: "[redacted]", name: "ada" }, card: { number: "[redacted]", brand: "visa" } }
+```
+
+- Paths start at the record's fields (and a span's fields, which are the method's arguments by name), so `card.number` means a field called `card`. Use `**.` to match a key wherever it shows up.
+- Masked rather than removed, so you can still see the field was there.
+- `skip` decides what one method records; `redact` is the app-wide safety net. A malformed path stops the app at boot.

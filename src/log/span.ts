@@ -18,11 +18,20 @@ import { maybeContext } from "../server/context.js";
 import { ConsoleLogger } from "./console.js";
 import { LogFilter, defaultFilter } from "./filter.js";
 import type { ILogger, Level, LogRecord, SpanRecord } from "./ilogger.js";
+import { prunePaths } from "./paths.js";
 import { errorInfo, safeFields, safeValue } from "./serialize.js";
 
 export interface LogBinding {
   sink: ILogger;
   filter: LogFilter;
+  /** Field paths masked in every record (logging({ redact })), compiled. */
+  redact?: string[][];
+}
+
+/** A record's fields, serialized safely, with the app's redact paths masked. */
+function recordFields(binding: LogBinding, fields: Record<string, unknown> | undefined): Record<string, unknown> {
+  const safe = safeFields(fields);
+  return binding.redact?.length ? (prunePaths(safe, binding.redact, "[redacted]") as Record<string, unknown>) : safe;
 }
 
 export interface Span {
@@ -122,7 +131,7 @@ export function emit(
     level,
     target,
     message,
-    fields: safeFields(fields),
+    fields: recordFields(binding, fields),
     spans: chain(span),
     kind,
   };
@@ -165,7 +174,7 @@ export function withSpan<T>(options: SpanOptions, fn: () => T): T {
     target: options.target,
     id: newSpanId(),
     traceId: parent ? rootOf(parent).traceId : newTraceId(),
-    fields: safeFields(options.fields),
+    fields: recordFields(binding, options.fields),
     parent,
     start: performance.now(),
     level,

@@ -45,3 +45,22 @@ export class Accounts {
     return input;
   }
 }
+
+export class Wildcards {
+  @instrument({ skip: ["card.*", "**.cvc", "*.password", "items.*.secret", "0.*"] })
+  charge(card: { number: string; cvc: string }, user: { password: string }, items: Array<{ secret: string }>) {
+    return [card, user, items];
+  }
+
+  // @ts-expect-error "card.nope": card has no such field, so card.nope.* is wrong too
+  @instrument({ skip: ["1.nope.*"] })
+  wrongPrefix(card: { number: string }, other: { a: string }) {
+    return [card, other];
+  }
+
+  // @ts-expect-error a wildcard is a whole segment
+  @instrument({ skip: ["card.num*"] })
+  partial(card: { number: string }) {
+    return card;
+  }
+}

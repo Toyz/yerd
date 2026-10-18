@@ -27,6 +27,7 @@
  */
 
 import type { Level } from "./ilogger.js";
+import { compilePath, prunePaths } from "./paths.js";
 import { withSpan } from "./span.js";
 
 // ── typed argument paths ──
@@ -52,7 +53,7 @@ export type DeepPath<T, D extends number = 4> = [D] extends [never]
         ? { [K in keyof T & string]-?: K | `${K}.${DeepPath<NonNullable<T[K]>, Depth[D]>}` }[keyof T & string]
         : never;
 
-/** A path rooted at an argument's position: "0", "1.password", "2.items.0.token". */
+/** A path rooted at an argument's position: "0", "1.password", "2.items.0.token". Wildcards ("card.*", "**.cvc") are checked up to the first one. */
 export type ArgPath<Args extends readonly unknown[]> = {
   [I in keyof Args & `${number}`]: I | `${I}.${DeepPath<NonNullable<Args[I]>>}`;
 }[keyof Args & `${number}`];
@@ -62,7 +63,20 @@ export type ArgPath<Args extends readonly unknown[]> = {
  * when the class loads), or `name.path` whose path exists in some parameter.
  * An invalid entry becomes a message type, so the error says what's wrong.
  */
-export type SkipPath<E extends string, Args extends readonly unknown[]> = E extends ArgPath<Args>
+export type SkipPath<E extends string, Args extends readonly unknown[]> = E extends `${infer Pre}*${string}`
+  ? WildcardSkip<E, Pre, Args>
+  : PlainSkip<E, Args>;
+
+/** A path with a wildcard ("card.*", "**.cvc"): what comes before the first wildcard must be a valid path. */
+type WildcardSkip<E extends string, Pre extends string, Args extends readonly unknown[]> = Pre extends ""
+  ? E
+  : Pre extends `${infer Prefix}.`
+    ? PlainSkip<Prefix, Args> extends Prefix
+      ? E
+      : `skip "${E}": "${Prefix}" isn't a field of any argument`
+    : `skip "${E}": a wildcard is a whole segment ("*" or "**"), not part of one`;
+
+type PlainSkip<E extends string, Args extends readonly unknown[]> = E extends ArgPath<Args>
   ? E
   : E extends `${number}`
     ? `skip "${E}": there's no argument at that position`
@@ -197,21 +211,6 @@ export function parameterNames(fn: Function): string[] {
  * position -> nested paths to drop ([] drops the whole argument). A name
  * that isn't one of the method's parameters throws here, at class definition.
  */
-function compileSkip(entries: readonly string[], names: string[], method: string): Map<number, string[][]> {
-  const out = new Map<number, string[][]>();
-  for (const entry of entries) {
-    const [root, ...path] = entry.split(".");
-    const index = /^\d+$/.test(root!) ? Number(root) : findParameter(names, root!);
-    if (index < 0 || (/^\d+$/.test(root!) && names.length > 0 && index >= names.length)) {
-      throw new TypeError(`@instrument skip "${entry}": ${method}(${names.join(", ")}) has no parameter "${root}"`);
-    }
-    const list = out.get(index) ?? [];
-    if (path.length === 0) out.set(index, []);
-    else if (!out.has(index) || list.length > 0) out.set(index, [...list, path]);
-  }
-  return out;
-}
-
 /**
  * A parameter by name. Compilers rename a parameter that shadows an outer
  * variable by adding a number (`input` becomes `input2` in esbuild output), so
@@ -225,22 +224,21 @@ function findParameter(names: string[], name: string): number {
   return renamed.length === 1 ? renamed[0]! : -1;
 }
 
-/** A copy of `value` without the fields at `paths`; never touches the original argument. */
-function without(value: unknown, paths: string[][]): unknown {
-  if (typeof value !== "object" || value === null) return value;
-  const copy: Record<string, unknown> | unknown[] = Array.isArray(value) ? [...value] : { ...(value as Record<string, unknown>) };
-  const here = paths.filter((p) => p.length === 1).map((p) => p[0]!);
-  for (const key of here) {
-    if (Array.isArray(copy)) copy[Number(key)] = "[skipped]";
-    else delete (copy as Record<string, unknown>)[key];
-  }
-  const deeper = new Map<string, string[][]>();
-  for (const p of paths) if (p.length > 1) deeper.set(p[0]!, [...(deeper.get(p[0]!) ?? []), p.slice(1)]);
-  for (const [key, rest] of deeper) {
-    const target = copy as Record<string, unknown>;
-    if (key in target) target[key] = without(target[key], rest);
-  }
-  return copy;
+/**
+ * `skip` entries as field paths over the arguments by name: a positional
+ * root ("0.secret") becomes its parameter's name, a wildcard root ("*",
+ * "**") stays. A root naming no parameter is an error when the class loads.
+ */
+function compileSkip(entries: readonly string[], names: string[], method: string): string[][] {
+  return entries.map((entry) => {
+    const [root, ...path] = compilePath(entry);
+    if (root === "*" || root === "**") return [root, ...path];
+    const index = /^\d+$/.test(root!) ? Number(root) : findParameter(names, root!);
+    if (index < 0 || (/^\d+$/.test(root!) && names.length > 0 && index >= names.length)) {
+      throw new TypeError(`@instrument skip "${entry}": ${method}(${names.join(", ")}) has no parameter "${root}"`);
+    }
+    return [names[index] ?? `arg${index}`, ...path];
+  });
 }
 
 /**
@@ -290,15 +288,11 @@ export function instrument<This, Args extends unknown[], R, const S extends read
           // A getter: withSpan reads it only after the filter check, so a
           // disabled span never captures its arguments.
           get fields() {
-            const fields: Record<string, unknown> = {};
+            let fields: Record<string, unknown> = {};
             if (!options.skipAll) {
-              args.forEach((value, i) => {
-                const name = names[i] ?? `arg${i}`;
-                const paths = skip.get(i);
-                if (paths === undefined) fields[name] = value;
-                else if (paths.length > 0) fields[name] = without(value, paths);
-                // an empty list means the whole argument is skipped
-              });
+              args.forEach((value, i) => (fields[names[i] ?? `arg${i}`] = value));
+              // A copy without the skipped fields; the arguments themselves are never touched.
+              if (skip.length) fields = prunePaths(fields, skip) as Record<string, unknown>;
             }
             if (options.fields) Object.assign(fields, options.fields(self, args));
             return fields;

@@ -22,6 +22,7 @@ import { HttpError } from "../respond/response.js";
 import { LONG_LIVED } from "../respond/stream.js";
 import { Channels } from "../live/channels.js";
 import { TestClient, answer } from "./in-process.js";
+import { compilePath } from "../log/paths.js";
 import { EventTransport, Events, HANDLES, ON_EVENT, eventName } from "../events/events.js";
 import { ACTIONS, ActionForm, CSRF_FIELD, checkActionToken, fillHoles, resolveSecrets, safeBack, verifyAction } from "../actions/action.js";
 import { CLASS_GUARDS, METHOD_GUARDS, guardRegistry, isGuardRef, resetGuardRegistry, type GuardSpec } from "../decorators/guards.js";
@@ -118,6 +119,16 @@ export interface LoggingOptions {
   filter?: string;
   /** ConsoleLogger format. Default: pretty on a terminal outside production, else json. */
   format?: "pretty" | "json";
+  /**
+   * Field paths to mask as "[redacted]" in every record (fields and span
+   * fields), on top of the secret-looking keys yerd always masks. `*` is any
+   * one key, `**` any depth.
+   *
+   * ```ts
+   * yerd().logging({ redact: ["**.ssn", "card.number", "headers.authorization", "*.email"] });
+   * ```
+   */
+  redact?: string[];
 }
 
 interface Handler {
@@ -917,6 +928,14 @@ export class YerdApp {
     } catch (error) {
       problems.push((error as Error).message);
     }
+    const redact: string[][] = [];
+    for (const path of this.#loggingOptions.redact ?? []) {
+      try {
+        redact.push(compilePath(path));
+      } catch (error) {
+        problems.push(`logging({ redact }): ${(error as Error).message}`);
+      }
+    }
     const sinkRegistration = container.registration(ILogger);
     if (sinkRegistration && sinkRegistration.lifetime !== "singleton") problems.push("ILogger must be a singleton service");
 
@@ -924,7 +943,7 @@ export class YerdApp {
     const envFormat = process.env.YERD_LOG_FORMAT;
     const format = envFormat === "pretty" || envFormat === "json" ? envFormat : this.#loggingOptions.format;
     const sink = sinkRegistration ? container.get(ILogger) : new ConsoleLogger({ format });
-    this.#log = { sink, filter: filter! };
+    this.#log = { sink, filter: filter!, redact: redact.length ? redact : undefined };
     bindLogging(container, this.#log);
     for (const [name, guard] of namedGuards) this.#namedGuards.set(name, guard);
     this.#secrets = resolveSecrets(this.#options.secret);
