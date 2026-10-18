@@ -1073,7 +1073,7 @@ export class YerdApp {
         const message = accessor.validate?.(info, ...(accessor.args as never[]));
         if (message) problems.push(`${def.className}.${accessor.field} (@${accessor.name}): ${message}`);
       }
-      const argsByMethod = ARGS.from(def.metadata);
+      const argsByMethod = ARGS.entries(def.metadata);
       for (const [method, resolvers] of argsByMethod ?? []) {
         resolvers.forEach((resolver, i) => {
           const message = resolver.validate?.(info, ...(resolver.args as never[]));

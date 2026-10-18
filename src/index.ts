@@ -13,7 +13,12 @@ export {
   type When, type WhenTest, type VerbDecorator,
 } from "./decorators/route.js";
 export type { Verb, RouteOptions, GroupOptions, PageMeta, LayoutProps, PrerenderOptions } from "./decorators/route.js";
-export { createAccessor, args, type AccessorDecorator, type AccessorOptions, type Resolver, type Resolves } from "./decorators/kit.js";
+export {
+  createAccessor, args, methodFlag, methodValue, methodList, classFlag, classValue, classList, createMethodDecorator,
+  type AccessorDecorator, type AccessorOptions, type Resolver, type Resolves, type DecoratorTarget,
+  type MethodFlag, type MethodValue, type MethodList, type ValueOptions, type ClassFlag, type ClassValue, type ClassList,
+  type MethodDecoratorFactory, type MethodDecoratorOptions,
+} from "./decorators/kit.js";
 export { readBody, readNdjson, type ParsedBody, type FormFields } from "./server/body.js";
 export { YerdKey, createKey, localKey, registeredKeys, findLocalStore, metadataOf } from "./decorators/keys.js";
 export { is, parse, dto, type Issue, type Spec, type IsDecorator, type IsOptions, type DtoClass } from "./decorators/dto.js";
