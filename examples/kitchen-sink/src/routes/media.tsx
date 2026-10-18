@@ -1,4 +1,4 @@
-import { HttpError, bare, between, get, inject, noLayout, param, query, res, route, setHeader, toInt } from "@toyz/yerd";
+import { NotFound, bare, between, get, inject, noLayout, param, query, res, route, setHeader, toInt } from "@toyz/yerd";
 import { formatMoney } from "../attributes.js";
 import { Catalog, imageUrl, type CategoryId, type Product } from "../catalog.js";
 
@@ -73,10 +73,10 @@ export class ProductImageRoute {
   @get @noLayout @setHeader("cache-control", "public, max-age=3600")
   image() {
     const product = this.catalog.bySlug(this.slug);
-    if (!product) throw new HttpError(404, "No such product");
+    if (!product) throw new NotFound("No such product");
     const photo = this.catalog.photo(product.id, this.n);
     if (photo) return res(photo.bytes, { headers: { "content-type": photo.type } });
-    if (product.photos > 0 || this.n > 2) throw new HttpError(404, "No such photo");
+    if (product.photos > 0 || this.n > 2) throw new NotFound("No such photo");
     const height = Math.round(this.width * 0.75);
     // Three views of the same drawing: front, side (mirrored), and at night.
     const night = this.n === 2;
@@ -101,7 +101,7 @@ export class ReviewPhotoRoute {
 
   @get @setHeader("cache-control", "public, max-age=86400") photo() {
     const photo = this.catalog.reviewPhoto(this.id);
-    if (!photo) throw new HttpError(404, "No such photo");
+    if (!photo) throw new NotFound("No such photo");
     return res(photo.bytes, { headers: { "content-type": photo.type } });
   }
 }
@@ -117,7 +117,7 @@ export class ProductEmbed {
 
   @get card() {
     const product: Product | undefined = this.catalog.bySlug(this.slug);
-    if (!product) throw new HttpError(404, "No such product");
+    if (!product) throw new NotFound("No such product");
     return bare(
       <div class="yerd-bazaar-embed">
         <style>{".yerd-bazaar-embed{font:14px system-ui;display:flex;gap:12px;align-items:center;padding:12px;border:1px solid #ddd;border-radius:12px;max-width:360px} .yerd-bazaar-embed img{border-radius:8px}"}</style>

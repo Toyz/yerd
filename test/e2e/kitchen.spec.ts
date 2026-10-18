@@ -489,7 +489,7 @@ test("REST API: create, patch, delete, with the API key", async ({ request }) =>
   expect((await request.delete(`/api/products/${product.id}`, { headers })).status()).toBe(204);
   const gone = await request.get(`/api/products/${product.id}`);
   expect(gone.status()).toBe(404);
-  expect(await gone.json()).toEqual({ error: `No product with id ${product.id}`, id: product.id });
+  expect(await gone.json()).toEqual({ error: `No product with id ${product.id}`, code: "not_found", id: product.id });
 });
 
 test("crawlers get the script-free variant, people the interactive one", async ({ request }) => {

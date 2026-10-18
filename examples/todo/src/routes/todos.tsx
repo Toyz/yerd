@@ -1,5 +1,5 @@
 import {
-  ActionForm, HttpError, accepts, action, get, group, inject, negotiate, oneOf, param, query, redirect, route, setMeta,
+  ActionForm, YerdError, accepts, action, get, group, inject, negotiate, oneOf, param, query, redirect, route, setMeta,
 } from "@toyz/yerd";
 import { Ago } from "../attributes.js";
 import { ImportForm, NewTodoForm, SharePanel, TodoList, Toolbar, type ListActions } from "../components.js";
@@ -79,7 +79,7 @@ export class TodoListPage implements ListActions {
 
   @action rename({ id }: { id: string }, form: ActionForm) {
     const { title } = form.parse(NewTodo);
-    if (!this.todos.get(id)) throw new HttpError(404, "That todo is gone");
+    if (!this.todos.get(id)) throw new YerdError(404, "That todo is gone");
     this.todos.update(id, { title });
     return this.regions();
   }
@@ -113,10 +113,10 @@ export class TodoListPage implements ListActions {
   @action async importFile(_: {}, form: ActionForm) {
     const { file } = form.parse(ImportTodos);
     const titles = (await file.text()).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    if (titles.length === 0) throw new HttpError(400, "That file has no todos in it.");
-    if (titles.length > 200) throw new HttpError(400, "That's more than 200 todos; split the file up.");
+    if (titles.length === 0) throw new YerdError(400, "That file has no todos in it.");
+    if (titles.length > 200) throw new YerdError(400, "That's more than 200 todos; split the file up.");
     const long = titles.findIndex((title) => title.length > 140);
-    if (long >= 0) throw new HttpError(400, `Todo ${long + 1} is longer than 140 characters.`);
+    if (long >= 0) throw new YerdError(400, `Todo ${long + 1} is longer than 140 characters.`);
     this.todos.addMany(titles);
     return this.regions();
   }
@@ -135,7 +135,7 @@ export class TodoDetailPage {
 
   #todo() {
     const todo = this.todos.get(this.id);
-    if (!todo) throw new HttpError(404, "That todo doesn't exist (or was deleted).");
+    if (!todo) throw new YerdError(404, "That todo doesn't exist (or was deleted).");
     return todo;
   }
 

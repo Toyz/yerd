@@ -1,5 +1,5 @@
 import {
-  HttpError, accepts, action, currentContext, field, file, get, inject, isBot, json, negotiate, param, post, redirect, route, session, setMeta, toInt, between, trim, length, type Session,
+  NotFound, Unauthorized, YerdError, accepts, action, currentContext, field, file, get, inject, isBot, json, negotiate, param, post, redirect, route, session, setMeta, toInt, between, trim, length, type Session,
 } from "@toyz/yerd";
 import { Ago, Price, formatMoney } from "../attributes.js";
 import { CATEGORIES, Catalog, imageUrl, type Product } from "../catalog.js";
@@ -109,7 +109,7 @@ export class ProductPage {
 
   #product(): Product {
     const product = this.catalog.bySlug(this.slug);
-    if (!product) throw new HttpError(404, "We looked under every rock. It isn't here.");
+    if (!product) throw new NotFound("We looked under every rock. It isn't here.");
     return product;
   }
 
@@ -219,11 +219,11 @@ export class ProductPage {
   /** The review form: a plain POST, auth checked here because the page itself is public. */
   @post async review() {
     const product = this.#product();
-    if (!this.me) throw new HttpError(401, "Log in to review");
+    if (!this.me) throw new Unauthorized("Log in to review");
     try {
       await this.catalog.addReview(product.id, { author: this.me.name, rating: await this.rating, text: await this.text }, await this.photo);
     } catch (error) {
-      if (!(error instanceof HttpError) || error.status >= 500) throw error;
+      if (!(error instanceof YerdError) || error.status >= 500) throw error;
       this.session.flash("reviewError", error.message);
     }
     return redirect(`/products/${product.slug}`);

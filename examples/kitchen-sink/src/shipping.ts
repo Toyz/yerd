@@ -1,4 +1,4 @@
-import { HttpError, handles, inject, service } from "@toyz/yerd";
+import { YerdError, handles, inject, service } from "@toyz/yerd";
 import { formatMoney } from "./attributes.js";
 import { Catalog, type CategoryId } from "./catalog.js";
 import { EventLog, QuoteShipping } from "./events.js";
@@ -19,8 +19,8 @@ const GRAMS: Record<CategoryId, number> = { gnomes: 2000, flamingos: 800, founta
 
 /**
  * Shipping quotes, answered as a call: `await events.call(new QuoteShipping(...))`
- * anywhere gets a number back from here. Its HttpErrors reach the caller as
- * HttpErrors, so an impossible destination is a 422 the cart can show.
+ * anywhere gets a number back from here. Its YerdErrors reach the caller
+ * intact, so an impossible destination is a 422 the cart can show.
  */
 @service
 export class Shipping {
@@ -41,10 +41,10 @@ export class Shipping {
   }
 
   #price(q: QuoteShipping): number {
-    if (q.country === "AQ") throw new HttpError(422, "We don't ship to Antarctica: the penguins send everything back.");
-    if (q.country === "MOON") throw new HttpError(422, "The Moon is out of range until our rocket clears customs.");
+    if (q.country === "AQ") throw new YerdError(422, "We don't ship to Antarctica: the penguins send everything back.");
+    if (q.country === "MOON") throw new YerdError(422, "The Moon is out of range until our rocket clears customs.");
     const base = BASE[q.country];
-    if (base === undefined) throw new HttpError(422, `We don't ship to ${q.country} yet.`);
+    if (base === undefined) throw new YerdError(422, `We don't ship to ${q.country} yet.`);
     if (q.subtotalCents >= this.config.freeShippingCents) return 0;
     const grams = q.lines.reduce((sum, line) => {
       const product = this.catalog.get(line.id);

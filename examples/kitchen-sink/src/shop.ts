@@ -1,4 +1,4 @@
-import { HttpError, createGuard, currentContext, resolve, service, singleton, token, type Middleware } from "@toyz/yerd";
+import { ServiceUnavailable, ValidationFailed, YerdError, createGuard, currentContext, resolve, service, singleton, token, type Middleware } from "@toyz/yerd";
 
 /** Settings that aren't a class: registered in code with `app.services((s) => s.value(ShopConfig, ...))`. */
 export interface ShopConfig {
@@ -43,13 +43,14 @@ export class Presence {
 
 /**
  * App-wide guard (`app.guard(readOnlyMode)`): during maintenance the shop
- * stays browsable but every write is a 503. Logging in still works, so staff
- * can get in to see what's going on.
+ * stays browsable but every write is a 503, with a Retry-After and the
+ * message shown. Logging in still works, so staff can get in to see what's
+ * going on.
  */
 export const readOnlyMode = createGuard("readOnlyMode", (ctx) => {
   if (!resolve(ShopConfig).readOnly || ctx.method === "GET" || ctx.method === "HEAD") return true;
   if (ctx.path === "/login" || ctx.path === "/logout") return true;
-  return new HttpError(503, "The Bazaar is in read-only mode for a moment. Browse away; buying resumes shortly.");
+  return new ServiceUnavailable("The Bazaar is in read-only mode for a moment. Browse away; buying resumes shortly.", { retryAfter: 60, expose: true });
 });
 
 /**
@@ -74,8 +75,8 @@ export function fromScript(): boolean {
 }
 
 /** The first problem of a validation failure, with its field ("Address: Can't be empty"), or the error's own message. */
-export function firstIssue(error: HttpError): string {
-  const issue = (error.details as { issues?: Array<{ path: string; message: string }> } | undefined)?.issues?.[0];
+export function firstIssue(error: YerdError): string {
+  const issue = error instanceof ValidationFailed ? error.issues[0] : undefined;
   if (!issue) return error.message;
   if (!issue.path || issue.path === "(root)") return issue.message;
   const field = issue.path.replace(/\[\d+\]$/, "");

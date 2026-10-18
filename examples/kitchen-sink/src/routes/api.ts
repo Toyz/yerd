@@ -1,5 +1,5 @@
 import {
-  Channels, HttpError, between, body, catches, createGuard, currentContext, del, event, get, inject, ndjson, oneOf, param, patch, post, put, query, res, resolve, route, setHeader, signal,
+  Channels, Unauthorized, between, body, createGuard, currentContext, del, event, get, inject, ndjson, oneOf, param, patch, post, put, query, resolve, route, setHeader, signal,
   sse, status, toInt, trim,
 } from "@toyz/yerd";
 import { CATEGORY_IDS, Catalog, ProductChanges, ProductInput, ProductNotFound, type CategoryId, type Product } from "../catalog.js";
@@ -14,7 +14,7 @@ import { auth } from "../users.js";
 export const apiWriter = createGuard("apiWriter", (ctx) => {
   if (ctx.headers["x-api-key"] === resolve(ShopConfig).apiKey) return true;
   if (auth.current()?.roles.includes("staff")) return true;
-  return new HttpError(401, "Send x-api-key, or sign in as staff", { details: { hint: "x-api-key: let-me-in (the demo key)" } });
+  return new Unauthorized("Send x-api-key, or sign in as staff", { details: { hint: "x-api-key: let-me-in (the demo key)" } });
 });
 
 /** What the API shows of a product: everything but the internals of photo storage. */
@@ -83,11 +83,6 @@ export class ProductApi {
     if (!this.catalog.remove(this.id)) throw new ProductNotFound(this.id);
   }
 
-  /** The catalog throws a domain error; this route decides it's a JSON 404. */
-  @catches(ProductNotFound)
-  notFound(error: ProductNotFound) {
-    return res({ error: error.message, id: error.id }, { status: 404 });
-  }
 }
 
 /** The whole catalog as NDJSON, one product per line, streamed: `curl -N localhost:3300/api/products.ndjson`. */

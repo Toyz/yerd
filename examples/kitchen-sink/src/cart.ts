@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { Events, HttpError, channel, every, inject, instrument, is, length, logger, matches, service, trim, uuid, type Logger, type Transform } from "@toyz/yerd";
-import { Catalog, type Photo, type Product } from "./catalog.js";
+import { BadRequest, Conflict, Events, NotFound, channel, every, inject, instrument, is, length, logger, matches, service, trim, uuid, type Logger, type Transform } from "@toyz/yerd";
+import { Catalog, OutOfStock, type Photo, type Product } from "./catalog.js";
 import { OrderStatusChanged } from "./events.js";
 
 export interface CartLine {
@@ -33,6 +33,7 @@ export class Cart {
 
   add(product: Product, qty = 1): void {
     const line = this.lines.find((l) => l.id === product.id);
+    if ((line?.qty ?? 0) + qty > product.stock) throw new OutOfStock(product.name, product.stock);
     // Changes made in place are noticed and saved.
     if (line) line.qty = Math.min(99, line.qty + qty);
     else this.lines.push({ id: product.id, name: product.name, priceCents: product.priceCents, qty });
@@ -76,7 +77,7 @@ export type Uuid = string & { readonly __brand: "Uuid" };
  * A bad id is a 404 rather than a 400: an order URL either exists or it doesn't.
  */
 export function toUuid(value: string): Uuid {
-  if (uuid()(value) !== true) throw new HttpError(404, "There's no order with that number.");
+  if (uuid()(value) !== true) throw new NotFound("There's no order with that number.");
   return value.toLowerCase() as Uuid;
 }
 
@@ -148,7 +149,7 @@ export class Orders {
    */
   @instrument({ level: "info", skip: ["payment.card", "payment.cvc"], ret: false })
   place(customer: { id: string; name: string }, lines: CartLine[], payment: CheckoutForm, shippingCents: number): Order {
-    if (lines.length === 0) throw new HttpError(400, "Your cart is empty.");
+    if (lines.length === 0) throw new BadRequest("Your cart is empty.");
     if (!luhn(payment.card)) throw new PaymentDeclined("That card number has a typo in it (it fails the checksum).");
     for (const line of lines) {
       // Only a check: the Warehouse takes the stock when it hears about the order.
@@ -212,8 +213,8 @@ export class Orders {
   /** Only while pending: the stock goes back on the shelf. */
   async cancel(id: Uuid): Promise<Order> {
     const order = this.get(id);
-    if (!order) throw new HttpError(404, "There's no order with that number.");
-    if (order.status !== "pending") throw new HttpError(409, `Too late: it's already ${order.status}.`);
+    if (!order) throw new NotFound("There's no order with that number.");
+    if (order.status !== "pending") throw new Conflict(`Too late: it's already ${order.status}.`);
     for (const line of order.lines) this.catalog.restock(line.id, line.qty);
     await this.#set(order, "cancelled");
     return order;
@@ -222,9 +223,9 @@ export class Orders {
   /** Ask to send a shipped order back, with photos of the item. One return per order. */
   async requestReturn(id: Uuid, request: { reason: ReturnReason; note: string; photos?: File[] }): Promise<Order> {
     const order = this.get(id);
-    if (!order) throw new HttpError(404, "There's no order with that number.");
-    if (order.status !== "shipped") throw new HttpError(409, "Returns open once the order has shipped.");
-    if (order.return) throw new HttpError(409, "There's already a return for this order.");
+    if (!order) throw new NotFound("There's no order with that number.");
+    if (order.status !== "shipped") throw new Conflict("Returns open once the order has shipped.");
+    if (order.return) throw new Conflict("There's already a return for this order.");
     const photos = await Promise.all((request.photos ?? []).map(async (f) => ({ type: f.type, bytes: new Uint8Array(await f.arrayBuffer()) })));
     this.#returnPhotos.set(id, photos);
     order.return = { reason: request.reason, note: request.note, photos: photos.length, status: "requested", at: new Date().toISOString() };

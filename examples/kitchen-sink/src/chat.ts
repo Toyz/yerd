@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Channels, HttpError, channel, guard, inject, is, length, service, singleton, trim, type YerdContext } from "@toyz/yerd";
+import { Channels, Forbidden, channel, guard, inject, is, length, service, singleton, trim, type YerdContext } from "@toyz/yerd";
 import { auth } from "./users.js";
 
 export interface ChatMessage {
@@ -56,6 +56,6 @@ export class Chat {
    */
   @guard("notMuted") notMuted(_ctx: YerdContext) {
     const me = auth.current();
-    return !me || !this.isMuted(me.id) || new HttpError(403, "You're muted for a few minutes. Go look at a rock.");
+    return !me || !this.isMuted(me.id) || new Forbidden("You're muted for a few minutes. Go look at a rock.");
   }
 }

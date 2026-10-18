@@ -1,4 +1,4 @@
-import { ActionForm, HttpError, action, get, group, inject, query, redirect, route, session, type Session } from "@toyz/yerd";
+import { ActionForm, YerdError, action, get, group, inject, query, redirect, route, session, type Session } from "@toyz/yerd";
 import { safeNext, verifyPassword } from "@toyz/yerd/auth";
 import { AuthLayout } from "../layouts.js";
 import { LoginForm, SignupForm, UserRepo, auth, type User } from "../users.js";
@@ -15,7 +15,7 @@ export class AuthPages {}
 
 /** The first message of a validation failure, or the error's own message. */
 function messageOf(error: unknown): string {
-  if (error instanceof HttpError) {
+  if (error instanceof YerdError) {
     const issues = (error.details as { issues?: Array<{ message: string }> } | undefined)?.issues;
     return issues?.[0]?.message ?? error.message;
   }

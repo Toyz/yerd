@@ -1,4 +1,4 @@
-import { ActionForm, Events, HttpError, Region, action, body, catches, get, inject, post, redirect, route } from "@toyz/yerd";
+import { ActionForm, Events, ValidationFailed, YerdError, Region, action, body, catches, get, inject, post, redirect, route } from "@toyz/yerd";
 import { Price } from "../attributes.js";
 import { CheckoutForm, Orders, PaymentDeclined, type Cart } from "../cart.js";
 import { OrderPlaced, QuoteShipping } from "../events.js";
@@ -193,17 +193,17 @@ export class CartPage {
   }
 
   /**
-   * A new destination. The handler's HttpError arrives here as an HttpError;
-   * re-thrown with an issue for `country`, the runtime puts its message in
-   * the select's [data-yx-error="country"] box.
+   * A new destination. The handler's YerdError arrives here as one too;
+   * re-thrown as a ValidationFailed with an issue for `country`, the runtime
+   * puts its message in the select's [data-yx-error="country"] box.
    */
   @action async quote(_: {}, form: ActionForm) {
     const country = form.string("country");
     try {
       await this.shippingFor(country);
     } catch (error) {
-      if (!(error instanceof HttpError)) throw error;
-      throw new HttpError(error.status, error.message, { details: { issues: [{ path: "country", message: error.message }] } });
+      if (!(error instanceof YerdError)) throw error;
+      throw new ValidationFailed(error.message, { issues: [{ path: "country", message: error.message }] });
     }
     this.cart.shipTo = country;
     return this.shipping();
@@ -216,7 +216,7 @@ export class CartPage {
     } catch (error) {
       // With the runtime, the issues go back as they are and land under their fields;
       // a plain form post gets the first one as a message above the form.
-      if (!(error instanceof HttpError) || error.status >= 500 || fromScript()) throw error;
+      if (!(error instanceof YerdError) || error.status >= 500 || fromScript()) throw error;
       this.cart.flash("error", firstIssue(error));
       return redirect("/cart");
     }

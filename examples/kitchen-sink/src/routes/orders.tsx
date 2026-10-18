@@ -1,4 +1,4 @@
-import { ActionForm, Channels, HttpError, Region, action, get, inject, param, query, res, route, session, setHeader, signal, sse, toInt, between, trim, type Action, type Session } from "@toyz/yerd";
+import { ActionForm, Channels, NotFound, YerdError, Region, action, get, inject, param, query, res, route, session, setHeader, signal, sse, toInt, between, trim, type Action, type Session } from "@toyz/yerd";
 import { Ago, Price } from "../attributes.js";
 import { ORDER_STEPS, Orders, orderChannel, toUuid, type Order, type Uuid } from "../cart.js";
 import { PhotoSlider } from "../components.js";
@@ -138,7 +138,7 @@ export class ReturnPhotoRoute {
     const order = this.orders.get(this.id);
     const allowed = order && (order.userId === this.me.id || this.me.roles.includes("staff"));
     const photo = allowed ? this.orders.returnPhoto(this.id, this.n) : undefined;
-    if (!photo) throw new HttpError(404, "No such photo");
+    if (!photo) throw new NotFound("No such photo");
     return res(photo.bytes, { headers: { "content-type": photo.type } });
   }
 }
@@ -219,7 +219,7 @@ export class OrderPage {
   /** Someone else's order is a 404, not a 403: no hint that it exists. */
   #order(): Order {
     const order = this.orders.get(this.id);
-    if (!order || order.userId !== this.me.id) throw new HttpError(404, "There's no order with that number.");
+    if (!order || order.userId !== this.me.id) throw new NotFound("There's no order with that number.");
     return order;
   }
 
@@ -326,7 +326,7 @@ export class ReturnsPage {
     try {
       request = form.parse(ReturnRequest);
     } catch (error) {
-      if (fromScript() || !(error instanceof HttpError)) throw error;
+      if (fromScript() || !(error instanceof YerdError)) throw error;
       this.session.flash("returnError", firstIssue(error));
       return undefined;
     }

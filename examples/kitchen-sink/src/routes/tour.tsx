@@ -85,7 +85,7 @@ const FEATURES: Array<[string, Feature[]]> = [
   ["Responses", [
     { name: "res() with a layout", href: "/orders", how: "Order pages add ReceiptCard at return time." },
     { name: "redirect()", href: "/cart", how: "Checkout redirects to the new order, with a flash notice." },
-    { name: "HttpError", href: "/products/no-such-thing", how: "A 404 with a friendly message." },
+    { name: "NotFound", href: "/products/no-such-thing", how: "A 404 with a friendly message." },
     { name: "@status(201), @setHeader, ctx.setHeader", href: "/api/products", how: "POST /api/products answers 201 with Location and Cache-Control." },
     { name: "@catches", href: "/api/products/p999", how: "A domain error turned into a JSON 404 (and declined cards into a flash on /cart)." },
     { name: "json() in a script tag", href: "/products/disco-gnome", how: "View source: the application/ld+json block." },

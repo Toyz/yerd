@@ -83,8 +83,10 @@ with `trim`, `lower`, `length`, `between`, `matches` and a custom transform.
 `ProductChanges` is all-optional, so `PATCH` only changes what was sent.
 
 **Responses**: `res()` (status, headers, layouts), `redirect()`, `bare()`,
-`HttpError`, `@status(201)`, `@setHeader`, `@catches(ProductNotFound)` on the
-API and `@catches(PaymentDeclined)` on the cart, `json()` for JSON-LD in a
+`YerdError` subclasses (`ProductNotFound extends NotFound` answers the API's
+JSON 404 by itself, `OutOfStock extends Conflict` refuses more than the shelf
+holds), `@status(201)`, `@setHeader`, `@catches(PaymentDeclined)` on the
+cart, `json()` for JSON-LD in a
 `<script>`, `raw()` for the inline logo.
 
 **Services** (`src/*.ts`): `@service` singletons (`Catalog`, `Orders`,
@@ -124,7 +126,7 @@ The card is charged after the event is emitted: the decline test card
 (4000 0000 0000 0002) throws there, the request fails, and yerd drops the
 event, so no receipt goes out and no stock is taken. The cart's shipping
 estimate is a call, `await events.call(new QuoteShipping(...))`, answered by
-`Shipping`'s `@handles`; its 422 for Antarctica comes back as an `HttpError`
+`Shipping`'s `@handles`; its 422 for Antarctica comes back as a `YerdError`
 and is shown under the country select. `/admin/event-log` lists the last 50
 events and calls with the handlers that ran for each, live. Services that
 only react to events are never injected, so `src/app.ts` imports

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { between, is, length, logger, lower, onBoot, onShutdown, service, trim, type Logger } from "@toyz/yerd";
+import { Conflict, NotFound, between, is, length, logger, lower, onBoot, onShutdown, service, trim, type Logger } from "@toyz/yerd";
 
 /** The five aisles of the Bazaar. The ids double as URL values (`/?category=gnomes`). */
 export const CATEGORY_IDS = ["gnomes", "flamingos", "fountains", "rocks", "signs"] as const;
@@ -90,10 +90,17 @@ export class DroppedPhotos {
   @is.files({ types: ["image/*"], maxSize: 2_000_000, min: 1, max: 4 }) files!: File[];
 }
 
-/** A domain error: the REST API maps it to a JSON 404 with @catches, pages to the error page. */
-export class ProductNotFound extends Error {
+/** A domain error: a NotFound, so the API answers a JSON 404 with the id, and pages show the error page. */
+export class ProductNotFound extends NotFound {
   constructor(readonly id: string) {
-    super(`No product with id ${id}`);
+    super(`No product with id ${id}`, { details: { id } });
+  }
+}
+
+/** More in the cart than on the shelf: a 409, which the runtime shows as a notice. */
+export class OutOfStock extends Conflict {
+  constructor(readonly product: string, readonly left: number) {
+    super(left === 0 ? `${product} just sold out.` : `Only ${left} of ${product} left on the shelf.`, { code: "out_of_stock", details: { left } });
   }
 }
 

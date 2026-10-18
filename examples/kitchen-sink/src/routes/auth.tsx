@@ -1,4 +1,4 @@
-import { ActionForm, HttpError, action, get, group, inject, query, redirect, route, session, type Session } from "@toyz/yerd";
+import { ActionForm, ValidationFailed, YerdError, action, get, group, inject, query, redirect, route, session, type Session } from "@toyz/yerd";
 import { safeNext, verifyPassword } from "@toyz/yerd/auth";
 import { AuthLayout } from "../layouts.js";
 import { fromScript } from "../shop.js";
@@ -16,9 +16,8 @@ export class AuthPages {}
 
 /** The first message of a validation failure, or the error's own message. */
 function messageOf(error: unknown): string {
-  if (error instanceof HttpError) {
-    const issues = (error.details as { issues?: Array<{ message: string }> } | undefined)?.issues;
-    return issues?.[0]?.message ?? error.message;
+  if (error instanceof YerdError) {
+    return (error instanceof ValidationFailed ? error.issues[0]?.message : undefined) ?? error.message;
   }
   throw error;
 }

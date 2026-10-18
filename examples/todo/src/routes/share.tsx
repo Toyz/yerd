@@ -1,4 +1,4 @@
-import { HttpError, currentContext, get, inject, isBot, layout, oneOf, param, query, route, setMeta } from "@toyz/yerd";
+import { YerdError, currentContext, get, inject, isBot, layout, oneOf, param, query, route, setMeta } from "@toyz/yerd";
 import { Ago } from "../attributes.js";
 import { MarketingLayout, SharedCard } from "../layouts.js";
 import { TodoRepo, type Filter, type Todo } from "../todos.js";
@@ -38,7 +38,7 @@ export class SharedList {
 
   #owner(): User {
     const owner = this.users.byShareToken(this.token);
-    if (!owner) throw new HttpError(404, "This link was turned off, or never existed.");
+    if (!owner) throw new YerdError(404, "This link was turned off, or never existed.");
     return owner;
   }
 

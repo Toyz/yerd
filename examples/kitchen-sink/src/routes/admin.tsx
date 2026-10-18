@@ -1,4 +1,4 @@
-import { ActionForm, Channels, Cues, HttpError, Region, action, css, get, group, inject, keyframes, query, route, signal, sse, type Action } from "@toyz/yerd";
+import { ActionForm, Channels, Cues, NotFound, Region, action, css, get, group, inject, keyframes, query, route, signal, sse, type Action } from "@toyz/yerd";
 import { Ago, Price } from "../attributes.js";
 import { CATEGORIES, CATEGORY_IDS, Catalog, DroppedPhotos, EditProductForm, NewProductForm, imageUrl, type Product } from "../catalog.js";
 import { Stock } from "../components.js";
@@ -253,7 +253,7 @@ export class AdminProducts {
   }
 
   @action remove({ id }: { id: string }) {
-    if (!this.catalog.remove(id)) throw new HttpError(404, "Already gone.");
+    if (!this.catalog.remove(id)) throw new NotFound("Already gone.");
     return this.list();
   }
 
@@ -383,7 +383,7 @@ export class AdminOrders {
   /** `is.uuid()` checks and lowercases the pasted id; an unknown one is a message, not a crash. */
   @action lookup(_: {}, form: ActionForm) {
     const { id } = form.parse(FindOrder);
-    if (!this.orders.get(id as Uuid)) throw new HttpError(404, "No order with that id.");
+    if (!this.orders.get(id as Uuid)) throw new NotFound("No order with that id.");
     return this.list(id);
   }
 }
