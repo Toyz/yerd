@@ -1401,14 +1401,23 @@ export function yerdRuntime(): void {
     return el.getAttribute("data-yx-token") ?? el.querySelector<HTMLInputElement>("input[name=_yx]")?.value ?? "";
   }
 
-  const wiredTriggers = new WeakSet<Element>();
+  // The trigger specs each element has been wired for: when a morph changes an
+  // element's trigger ("every 5s" to "click", a new debounce), the new one is
+  // wired and the old one goes quiet (it checks the spec is still current).
+  const wiredTriggers = new WeakMap<Element, Set<string>>();
   // visible / load fire once per token: a new render (new token) arms them again.
   const firedWith = new WeakMap<Element, string>();
   let visibility: IntersectionObserver | undefined;
 
+  /** An element's trigger as written now, with its whitespace normalized. */
+  function triggerOf(el: Element): string | undefined {
+    return el.getAttribute("data-yx-trigger")?.trim().split(/\s+/).join(" ");
+  }
+
   function initTriggers(): void {
     for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-yx-trigger]"))) {
-      const [kind = "click", option] = el.getAttribute("data-yx-trigger")!.trim().split(/\s+/);
+      const spec = triggerOf(el)!;
+      const [kind = "click", option] = spec.split(" ");
       if (kind === "visible" || kind === "load") {
         if (firedWith.get(el) === tokenOf(el)) continue;
         if (kind === "load") {
@@ -1434,13 +1443,17 @@ export function yerdRuntime(): void {
       }
       // Drops are handled centrally (see drag and drop).
       if (kind === "drop" || kind.startsWith("drop:")) continue;
-      if (wiredTriggers.has(el)) continue;
-      wiredTriggers.add(el);
+      const wired = wiredTriggers.get(el) ?? new Set<string>();
+      wiredTriggers.set(el, wired);
+      if (wired.has(spec)) continue;
+      wired.add(spec);
       if (kind === "every") {
         const period = Math.max(duration(option, 0), 250);
         const timer = setInterval(() => {
-          if (!el.isConnected) clearInterval(timer);
-          else if (document.visibilityState === "visible" && el.hasAttribute("data-yx-trigger")) void runAction(el);
+          if (!el.isConnected || triggerOf(el) !== spec) {
+            clearInterval(timer);
+            wired.delete(spec);
+          } else if (document.visibilityState === "visible") void runAction(el);
         }, period);
         continue;
       }
@@ -1450,7 +1463,7 @@ export function yerdRuntime(): void {
       let timer: ReturnType<typeof setTimeout> | undefined;
       el.addEventListener(event, (e) => {
         // The trigger may have been morphed away or changed since.
-        if (el.getAttribute("data-yx-trigger")?.trim().split(/\s+/)[0] !== kind) return;
+        if (triggerOf(el) !== spec) return;
         if (key && (e as KeyboardEvent).key !== key) return;
         // A click on a link or a submit button would navigate or submit too.
         if (event === "click" || event === "submit" || key) e.preventDefault();
