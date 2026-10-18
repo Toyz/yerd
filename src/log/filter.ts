@@ -28,7 +28,9 @@ export class LogFilter {
   /** Parse `source` (the directive string). Throws on an unknown level; with no bare level, the base is info. */
   constructor(readonly source: string) {
     let base: Threshold = LEVELS.info;
-    const targets: Array<[string, Threshold]> = [];
+    // Maps, so a later directive for the same name replaces an earlier one
+    // (`$DEFAULTS,UserRepo=trace`), as a later bare level does.
+    const targets = new Map<string, Threshold>();
     const spans = new Map<string, Threshold>();
     for (const raw of source.split(",")) {
       const part = raw.trim();
@@ -41,12 +43,11 @@ export class LogFilter {
       const name = part.slice(0, eq).trim();
       const level = threshold(part.slice(eq + 1));
       if (name.startsWith("[") && name.endsWith("]")) spans.set(name.slice(1, -1), level);
-      else targets.push([name, level]);
+      else targets.set(name, level);
     }
-    // Longest prefix first, so the most specific directive wins.
-    targets.sort((a, b) => b[0].length - a[0].length);
     this.#base = base;
-    this.#targets = targets;
+    // Longest prefix first, so the most specific directive wins.
+    this.#targets = [...targets].sort((a, b) => b[0].length - a[0].length);
     this.#spans = spans;
   }
 

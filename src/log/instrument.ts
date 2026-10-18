@@ -91,6 +91,18 @@ export interface InstrumentOptions<This = any, Args extends unknown[] = any[], S
   err?: boolean;
 }
 
+const QUOTES = "\"'`";
+
+/** Where the string literal opening at `start` ends (its closing quote), skipping escapes. */
+function closingQuote(source: string, start: number): number {
+  const quote = source[start];
+  for (let i = start + 1; i < source.length; i++) {
+    if (source[i] === "\\") i++;
+    else if (source[i] === quote) return i;
+  }
+  return source.length;
+}
+
 /**
  * Parameter names from a function's compiled source, read once when the
  * decorator runs. JavaScript keeps no parameter names at runtime, but
@@ -104,8 +116,9 @@ export function parameterNames(fn: Function): string[] {
   let depth = 0;
   let close = -1;
   for (let i = open; i < source.length; i++) {
-    const c = source[i];
-    if (c === "(" || c === "[" || c === "{") depth++;
+    const c = source[i]!;
+    if (QUOTES.includes(c)) i = closingQuote(source, i);
+    else if (c === "(" || c === "[" || c === "{") depth++;
     else if (c === ")" || c === "]" || c === "}") {
       depth--;
       if (depth === 0) {
@@ -119,7 +132,15 @@ export function parameterNames(fn: Function): string[] {
   const params: string[] = [];
   let current = "";
   depth = 0;
-  for (const c of list) {
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i]!;
+    if (QUOTES.includes(c)) {
+      // A default value's string may hold commas or brackets: copy it whole.
+      const end = closingQuote(list, i);
+      current += list.slice(i, end + 1);
+      i = end;
+      continue;
+    }
     if (c === "(" || c === "[" || c === "{") depth++;
     else if (c === ")" || c === "]" || c === "}") depth--;
     if (c === "," && depth === 0) {

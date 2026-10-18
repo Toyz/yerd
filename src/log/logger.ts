@@ -102,18 +102,18 @@ export class Logger {
 /** The root logger, target "app". */
 export const log = new Logger("app");
 
-const CACHED = Symbol("yerd.logger");
-
 function loggerAccessor(explicit: string | undefined) {
   return function <This extends object>(
     _target: ClassAccessorDecoratorTarget<This, Logger>,
     context: ClassAccessorDecoratorContext<This, Logger>,
   ): ClassAccessorDecoratorResult<This, Logger> {
     if (context.static || context.private) throw new TypeError("@logger goes on a public instance accessor");
+    // One cache per accessor: a class may have several loggers under different names.
+    const cached = Symbol("yerd.logger");
     return {
       get(this: This): Logger {
-        const self = this as This & { [CACHED]?: Logger };
-        return (self[CACHED] ??= new Logger(explicit ?? className(this)));
+        const self = this as This & { [cached]?: Logger };
+        return (self[cached] ??= new Logger(explicit ?? className(this)));
       },
       set() {
         throw new TypeError("@logger fields are read-only");

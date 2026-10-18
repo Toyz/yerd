@@ -97,6 +97,8 @@ BootError: yerd refused to start:
 
 Boot also reports an `@inject` that nothing provides, along with every other problem it finds, all in one list. [BootError](api:yerd.BootError) has them as `error.problems`.
 
+Two services may inject each other: `@inject` fields resolve lazily, so the cycle is never followed. A constructor or factory that resolves its own key while it's being created (directly, or through others) throws `Circular dependency: A -> B -> A` instead.
+
 ## Tokens for interfaces and config
 
 Interfaces don't exist at runtime, so they need a key. [token](api:yerd.token) makes one, and `provides` registers a class under it.

@@ -86,7 +86,7 @@ export interface NdjsonOptions {
 
 async function* ndjsonLines(source: AsyncIterable<unknown>, options: NdjsonOptions): AsyncGenerator<string> {
   try {
-    yield* withHeartbeat(source, options.heartbeat ?? 0, "\n", (item) => `${JSON.stringify(item)}\n`);
+    yield* withHeartbeat(source, options.heartbeat ?? 0, "\n", (item) => `${JSON.stringify(item) ?? "null"}\n`);
   } catch (error) {
     if (options.errorLine === false) throw error;
     yield `${JSON.stringify({ error: publicMessage(error) })}\n`;
@@ -141,9 +141,10 @@ export function formatEvent(item: unknown): string {
   if (e.comment !== undefined) out += `: ${field(e.comment)}\n`;
   if (e.event !== undefined) out += `event: ${field(e.event)}\n`;
   if (e.id !== undefined) out += `id: ${field(e.id)}\n`;
-  if (e.retry !== undefined) out += `retry: ${Math.max(0, Math.floor(e.retry))}\n`;
+  if (e.retry !== undefined && Number.isFinite(e.retry)) out += `retry: ${Math.max(0, Math.floor(e.retry))}\n`;
   if (e.data !== undefined) {
-    const text = typeof e.data === "string" ? e.data : JSON.stringify(e.data);
+    // undefined and functions have no JSON: null, as JSON.stringify does inside arrays.
+    const text = typeof e.data === "string" ? e.data : (JSON.stringify(e.data) ?? "null");
     for (const line of text.split(/\r\n|\r|\n/)) out += `data: ${line}\n`;
   }
   return out + "\n";
@@ -160,7 +161,7 @@ export interface SseOptions {
 }
 
 async function* sseEvents(source: AsyncIterable<unknown>, options: SseOptions): AsyncGenerator<string> {
-  if (options.retry !== undefined) yield `retry: ${Math.max(0, Math.floor(options.retry))}\n\n`;
+  if (options.retry !== undefined && Number.isFinite(options.retry)) yield `retry: ${Math.max(0, Math.floor(options.retry))}\n\n`;
   try {
     yield* withHeartbeat(source, options.heartbeat ?? 15000, ": ping\n\n", formatEvent);
   } catch (error) {

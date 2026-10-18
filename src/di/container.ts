@@ -85,6 +85,18 @@ interface ServiceContext {
  */
 const TRACKER = localKey<unknown[] | null>("tracker");
 
+/** Tracked objects that can't take a symbol property (frozen, sealed): rare, so a WeakSet is fine. */
+const trackedFrozen = new WeakSet<object>();
+
+function isTracked(instance: object): boolean {
+  return TRACKER.hasOwn(instance) || trackedFrozen.has(instance);
+}
+
+function markTracked(instance: object, tracker: unknown[] | null): void {
+  if (Object.isExtensible(instance)) TRACKER.set(instance, tracker);
+  else trackedFrozen.add(instance);
+}
+
 const storage = new AsyncLocalStorage<ServiceContext>();
 
 export function runWithServices<T>(container: Container, scope: Scope | undefined, fn: () => T): T {
@@ -163,6 +175,8 @@ export class Container {
   readonly #registrations = new Map<ServiceKey, Registration>();
   readonly #singletons = new Map<ServiceKey, unknown>();
   readonly #created: unknown[] = [];
+  /** Keys whose create() is running, outermost first (see #creating). */
+  readonly #resolving: ServiceKey[] = [];
 
   /** Add a registration, replacing any earlier one for the same key. */
   register(registration: Registration): void {
@@ -187,15 +201,21 @@ export class Container {
   /** Construct a class owned by this container (its @inject fields resolve here). */
   construct<T>(cls: new () => T, scope: Scope | undefined, lifetime: Lifetime): T {
     const instance = new cls();
-    if (typeof instance === "object" && instance !== null) OWNER.set(instance, this);
+    // A constructor may freeze its instance; it then just can't carry the mark.
+    if (typeof instance === "object" && instance !== null && Object.isExtensible(instance)) OWNER.set(instance, this);
     return this.adopt(instance, scope, lifetime);
   }
 
-  /** Track a freshly created instance (constructed, or returned by a factory) for disposal per its lifetime. */
+  /**
+   * Track a freshly created instance (constructed, or returned by a factory)
+   * for disposal per its lifetime. An instance already tracked (a factory
+   * handing back another registration's instance, `(c) => c.get(Pool)`)
+   * keeps the lifetime it has, so it's never disposed twice or early.
+   */
   adopt<T>(instance: T, scope: Scope | undefined, lifetime: Lifetime): T {
-    if (typeof instance !== "object" || instance === null) return instance;
+    if (typeof instance !== "object" || instance === null || isTracked(instance)) return instance;
     const tracker = this.#trackerFor(scope, lifetime);
-    TRACKER.set(instance, tracker);
+    markTracked(instance, tracker);
     if (tracker && disposerOf(instance)) tracker.push(instance);
     return instance;
   }
@@ -222,7 +242,7 @@ export class Container {
 
     if (registration.lifetime === "singleton") {
       if (this.#singletons.has(key)) return this.#singletons.get(key) as T;
-      const instance = runWithServices(this, undefined, () => registration.create(this));
+      const instance = this.#creating(key, () => runWithServices(this, undefined, () => registration.create(this)));
       this.#singletons.set(key, instance);
       return instance as T;
     }
@@ -235,13 +255,32 @@ export class Container {
         );
       }
       if (scope.instances.has(key)) return scope.instances.get(key) as T;
-      const instance = runWithServices(this, scope, () => registration.create(this));
+      const instance = this.#creating(key, () => runWithServices(this, scope, () => registration.create(this)));
       scope.instances.set(key, instance);
       return instance as T;
     }
 
     const tracker = holder && TRACKER.has(holder) ? TRACKER.from(holder)! : scope ? scope.created : null;
-    return storage.run({ container: this, scope, tracker }, () => registration.create(this)) as T;
+    return this.#creating(key, () => storage.run({ container: this, scope, tracker }, () => registration.create(this))) as T;
+  }
+
+  /**
+   * Run a registration's create(), refusing to re-enter a key already being
+   * created: a constructor or factory that (indirectly) resolves itself
+   * would otherwise recurse until the stack overflows. Creation is
+   * synchronous, so one stack per container is enough.
+   */
+  #creating<T>(key: ServiceKey, create: () => T): T {
+    if (this.#resolving.includes(key)) {
+      const chain = [...this.#resolving.slice(this.#resolving.indexOf(key)), key].map(keyName).join(" -> ");
+      throw new Error(`Circular dependency: ${chain}`);
+    }
+    this.#resolving.push(key);
+    try {
+      return create();
+    } finally {
+      this.#resolving.pop();
+    }
   }
 
   /** Dispose singletons, newest first. */
@@ -284,6 +323,8 @@ export class ServiceCollection {
 
   /** Register an existing value as a singleton. */
   value<T>(key: ServiceKey<T>, value: T): this {
+    // Marked as tracked by nobody, so a factory returning it doesn't adopt it either.
+    if (typeof value === "object" && value !== null && !isTracked(value)) markTracked(value, null);
     this.add({ key, lifetime: "singleton", create: () => value });
     return this;
   }

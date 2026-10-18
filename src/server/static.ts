@@ -137,7 +137,9 @@ async function insideRoot(mount: StaticMount, file: string): Promise<boolean> {
 export function acceptsEncoding(header: string, encoding: string): boolean {
   let wildcard: boolean | undefined;
   for (const part of header.split(",")) {
-    const [name, ...params] = part.trim().toLowerCase().split(";");
+    const [coding, ...params] = part.toLowerCase().split(";");
+    // Whitespace is allowed before the ";" too (`gzip ;q=0`).
+    const name = coding!.trim();
     const q = params.map((p) => p.trim()).find((p) => p.startsWith("q="));
     const allowed = q === undefined || Number(q.slice(2)) > 0;
     if (name === encoding) return allowed;
@@ -178,8 +180,9 @@ export async function serveStatic(
     vary: "accept-encoding",
   };
 
+  // If-None-Match compares weakly (RFC 9110 13.1.2): `"x"` matches `W/"x"`.
   const inm = headers["if-none-match"];
-  if (inm && inm.split(",").some((tag) => tag.trim() === etag || tag.trim() === "*")) {
+  if (inm && inm.split(",").some((tag) => tag.trim() === "*" || tag.trim().replace(/^W\//, "") === etag.slice(2))) {
     return { status: 304, headers: base, body: null };
   }
 

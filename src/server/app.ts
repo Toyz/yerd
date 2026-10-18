@@ -741,7 +741,8 @@ export class YerdApp {
     // A failed start tears down whatever it got running (timers, hosted
     // services, singletons) and stays failed: there's no half-started app.
     this.#started ??= this.#start().catch(async (error) => {
-      await this.#teardown();
+      // The start failure is the error to report; a cleanup failure is only logged.
+      await this.#teardown().catch((cleanup: unknown) => lifecycleLog.error("cleaning up after a failed start failed", { error: cleanup }));
       throw error;
     });
     return this.#started;
@@ -827,11 +828,15 @@ export class YerdApp {
         }
       });
     }
-    await this.#container?.dispose();
     try {
-      await this.#log?.sink.flush?.();
-    } catch {
-      // nowhere left to report it
+      await this.#container?.dispose();
+    } finally {
+      // Even when a service fails to dispose: the sink may hold that very error.
+      try {
+        await this.#log?.sink.flush?.();
+      } catch {
+        // nowhere left to report it
+      }
     }
   }
 

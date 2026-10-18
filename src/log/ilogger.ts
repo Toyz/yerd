@@ -63,14 +63,28 @@ export interface ILogger {
   flush?(): void | Promise<void>;
 }
 
-/** Fan records out to several sinks. */
+/**
+ * Fan records out to several sinks. A sink that throws doesn't stop the
+ * others: every sink gets the record (or is flushed), then the first error
+ * is rethrown for the caller to report.
+ */
 export function teeLogger(...sinks: ILogger[]): ILogger {
   return {
     write(record) {
-      for (const sink of sinks) sink.write(record);
+      const errors: unknown[] = [];
+      for (const sink of sinks) {
+        try {
+          sink.write(record);
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length > 0) throw errors[0];
     },
     async flush() {
-      await Promise.all(sinks.map((s) => s.flush?.()));
+      const results = await Promise.allSettled(sinks.map(async (s) => s.flush?.()));
+      const failed = results.find((r) => r.status === "rejected");
+      if (failed) throw failed.reason;
     },
   };
 }

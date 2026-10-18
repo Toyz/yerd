@@ -13,18 +13,21 @@
 // `passengers` or `tokenizer`.
 const SECRET_WORDS = new Set([
   "pass", "password", "passwd", "passphrase", "pwd", "secret", "secrets", "token", "tokens", "authorization", "auth",
-  "cookie", "cookies", "session", "sessions", "apikey", "credential", "credentials", "privatekey", "signature", "otp",
+  "cookie", "cookies", "session", "sessions", "apikey", "apikeys", "credential", "credentials", "privatekey", "privatekeys",
+  "signature", "otp",
 ]);
 
 function isSecretKey(key: string): boolean {
+  // A trailing number doesn't change the word: `password2`, `token0`.
   const words = key
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .toLowerCase()
-    .split(/[\s_\-.]+/);
+    .split(/[\s_\-.]+/)
+    .map((word) => word.replace(/(?<=[a-z])\d+$/, ""));
   for (let i = 0; i < words.length; i++) {
     if (SECRET_WORDS.has(words[i]!)) return true;
-    // "api key", "private key" split across two words
-    if ((words[i] === "api" || words[i] === "private") && words[i + 1] === "key") return true;
+    // "api key", "private keys" split across two words
+    if ((words[i] === "api" || words[i] === "private") && (words[i + 1] === "key" || words[i + 1] === "keys")) return true;
   }
   return false;
 }
@@ -59,7 +62,15 @@ export function safeValue(value: unknown, depth = 1, seen = new Set<object>()): 
       return `[Function ${value.name || "anonymous"}]`;
   }
   if (value === null) return null;
-  const object = value as object;
+  try {
+    return objectValue(value as object, depth, seen);
+  } catch {
+    // A revoked Proxy, a throwing trap or constructor getter: describe it rather than break the log call.
+    return "[unserializable]";
+  }
+}
+
+function objectValue(object: object, depth: number, seen: Set<object>): unknown {
   if (seen.has(object)) return "[Circular]";
   if (object instanceof Error) return { name: object.name, message: object.message };
   if (object instanceof Date) return Number.isNaN(object.getTime()) ? "Invalid Date" : object.toISOString();

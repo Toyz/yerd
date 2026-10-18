@@ -152,7 +152,7 @@ YERD_LOG=info,[stripe]=trace           # everything inside a span named stripe
 YERD_LOG=off                           # nothing at all
 ```
 
-- A target directive covers the target and everything under it: `yerd` matches `yerd::request`. The most specific match wins.
+- A target directive covers the target and everything under it: `yerd` matches `yerd::request`. The most specific match wins, and a later directive for the same target replaces an earlier one (`$DEFAULTS,UserRepo=trace`).
 - A span directive (`[name]=level`) sets the level for everything logged inside a span with that name, whatever its target: louder (`info,[stripe]=trace`) or quieter (`debug,[healthcheck]=warn`). The innermost matching span decides.
 - Without `YERD_LOG`, the level is `info`, or `warn` when `NODE_ENV=test`.
 - A typo (`UserRepo=chatty`) is a boot error, not a silent no-op.
@@ -229,7 +229,7 @@ log.info("login", { user: "ada", password: "hunter2", headers: { authorization: 
 // fields: { user: "ada", password: "[redacted]", headers: { authorization: "[redacted]" } }
 ```
 
-- A key is redacted (`"[redacted]"`, at any depth, `@instrument` arguments included) when one of its words is a secret-sounding one: `password`, `pass`, `secret`, `token`, `auth`, `authorization`, `cookie`, `session`, `credential`, `signature`, `otp`, or `api key` / `private key`. Words are split on camelCase, `_`, `-` and `.`.
+- A key is redacted (`"[redacted]"`, at any depth, `@instrument` arguments included) when one of its words is a secret-sounding one: `password`, `pass`, `secret`, `token`, `auth`, `authorization`, `cookie`, `session`, `credential`, `signature`, `otp`, or `api key` / `private key`. Words are split on camelCase, `_`, `-` and `.`, and a trailing number is ignored (`password2`).
 - Values are bounded: depth 4, strings 256 characters, arrays 20 items, objects 30 keys. Circular references, binary data and class instances are summarized.
 
 > [!NOTE]

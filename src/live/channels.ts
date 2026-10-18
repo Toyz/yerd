@@ -63,7 +63,8 @@ export class MemoryBackend implements ChannelBackend {
     set.add(listener);
     return () => {
       set.delete(listener);
-      if (set.size === 0) this.#listeners.delete(channel);
+      // Only if it's still this channel's set: a stop called twice mustn't drop subscribers who came after.
+      if (set.size === 0 && this.#listeners.get(channel) === set) this.#listeners.delete(channel);
     };
   }
 
