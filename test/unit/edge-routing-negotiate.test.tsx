@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { accepts, get, negotiate, parseAccept, post, res, route, type ErrorPageProps, type RunningServer } from "@toyz/yerd";
+import {
+  accepts, catches, createGuard, get, negotiate, parseAccept, post, put, redirect, res, route, type ErrorPageProps, type RunningServer,
+} from "@toyz/yerd";
 import { choose, expandType } from "../../src/respond/negotiate.js";
 import { serve } from "./edge-routing-helpers.js";
 
@@ -157,11 +159,55 @@ class NegJsonFirst {
   }
 }
 
+class Missing extends Error {}
+const either = (what: string, status?: number) =>
+  negotiate({
+    html: () => (status === undefined ? <p>{what}</p> : res(<p>{what}</p>, { status })),
+    json: () => (status === undefined ? { what } : res({ what }, { status })),
+  });
+const negotiatingGuard = createGuard("negotiating", (ctx) => (ctx.query.get("block") ? either("blocked", 403) : true));
+
+@route("/neg-explicit")
+class NegExplicit {
+  @get problem() {
+    return negotiate({
+      html: () => <p>problem</p>,
+      json: () => res({ title: "bad" }, { status: 422, headers: { "content-type": "application/problem+json" } }),
+      csv: () => res("a;b", { headers: { "content-type": "text/csv; header=present" } }),
+    });
+  }
+  @post moved() {
+    return negotiate({ html: () => <p>h</p>, json: () => redirect("/elsewhere") });
+  }
+  @put gone() {
+    return negotiate({ html: () => <p>h</p>, json: () => 404 });
+  }
+}
+
+@route("/neg-wrapped")
+@negotiatingGuard
+class NegWrapped {
+  @get show() {
+    return res(either("wrapped"), { status: 201, headers: { "x-wrapped": "1" } });
+  }
+  @post fail(): never {
+    throw new Missing();
+  }
+  @put failElsewhere(): never {
+    throw new RangeError("for onError");
+  }
+  @catches(Missing) missing() {
+    return either("missing");
+  }
+}
+
 const ErrorPage = ({ status, message }: ErrorPageProps) => <p>{status} {message}</p>;
 
 let server: RunningServer;
 beforeAll(async () => {
-  server = await serve([Todos, ApiOnly, Vendor, Neg, NegJsonFirst], (app) => app.errorPage(ErrorPage));
+  server = await serve([Todos, ApiOnly, Vendor, Neg, NegJsonFirst, NegExplicit, NegWrapped], (app) =>
+    app.errorPage(ErrorPage).onError((error) => (error instanceof RangeError ? either("from onError", 503) : undefined)),
+  );
 });
 afterAll(() => server.close());
 
@@ -260,5 +306,74 @@ describe("negotiate() over HTTP", () => {
     const r = await go("/neg-json-first", "application/json", "POST");
     expect(r.status).toBe(200);
     expect(await r.text()).toBe("null");
+  });
+});
+
+describe("negotiate() with explicit responses", () => {
+  it("an explicit res() from the json variant is sent as it is", async () => {
+    const r = await go("/neg-explicit", "application/json");
+    expect(r.status).toBe(422);
+    expect(r.headers.get("content-type")).toBe("application/problem+json");
+    expect(await r.text()).toBe('{"title":"bad"}');
+  });
+
+  it("an explicit content type from another variant is kept", async () => {
+    const r = await go("/neg-explicit", "text/csv");
+    expect(r.headers.get("content-type")).toBe("text/csv; header=present");
+    expect(await r.text()).toBe("a;b");
+  });
+
+  it("a redirect from the json variant stays a redirect with no body", async () => {
+    const r = await fetch(server.url + "/neg-explicit", { method: "POST", headers: { accept: "application/json" }, redirect: "manual" });
+    expect(r.status).toBe(303);
+    expect(r.headers.get("location")).toBe("/elsewhere");
+    expect(await r.text()).toBe("");
+  });
+
+  it("a number from the json variant is that status, like anywhere else", async () => {
+    const r = await go("/neg-explicit", "application/json", "PUT");
+    expect(r.status).toBe(404);
+    expect(await r.text()).toBe("");
+  });
+});
+
+describe("negotiate() outside a handler's own return", () => {
+  it.each([
+    ["application/json", 201, '{"what":"wrapped"}'],
+    [BROWSER, 201, "<p>wrapped</p>"],
+  ])("inside res(): Accept %s", async (accept, status, body) => {
+    const r = await go("/neg-wrapped", accept);
+    expect(r.status).toBe(status);
+    expect(r.headers.get("x-wrapped")).toBe("1");
+    expect(r.headers.get("vary")).toBe("accept");
+    expect(await r.text()).toBe(body);
+  });
+
+  it.each([
+    ["application/json", '{"what":"missing"}'],
+    [BROWSER, "<p>missing</p>"],
+  ])("from @catches: Accept %s", async (accept, body) => {
+    const r = await go("/neg-wrapped", accept, "POST");
+    expect(r.status).toBe(500);
+    expect(r.headers.get("vary")).toBe("accept");
+    expect(await r.text()).toBe(body);
+  });
+
+  it.each([
+    ["application/json", '{"what":"from onError"}'],
+    [BROWSER, "<p>from onError</p>"],
+  ])("from app.onError: Accept %s", async (accept, body) => {
+    const r = await go("/neg-wrapped", accept, "PUT");
+    expect(r.status).toBe(503);
+    expect(await r.text()).toBe(body);
+  });
+
+  it.each([
+    ["application/json", '{"what":"blocked"}'],
+    [BROWSER, "<p>blocked</p>"],
+  ])("from a guard: Accept %s", async (accept, body) => {
+    const r = await go("/neg-wrapped?block=1", accept);
+    expect(r.status).toBe(403);
+    expect(await r.text()).toBe(body);
   });
 });

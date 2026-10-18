@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, extname, join } from "node:path";
 import { ACCESSORS, ARGS, type Resolver } from "../decorators/kit.js";
 import { ACCEPTS, METHOD_LAYOUTS, NO_LAYOUT, PRERENDER, applyLayouts, joinLayouts, resetRouteRegistry, type When, VERBS, resolveRoute, routeRegistry, type LayoutProps, type PageMeta, type RouteDef, type Verb } from "../decorators/route.js";
-import { choose, expandType, isNegotiated } from "../respond/negotiate.js";
+import { choose, expandType } from "../respond/negotiate.js";
 import { Container, Scope, ServiceCollection, currentServices, keyName, runWithServices, type Lifetime, type Registration } from "../di/container.js";
 
 const currentScope = () => currentServices()?.scope;
@@ -1029,29 +1029,8 @@ export class YerdApp {
           const fn = instance[serving.method] as ((...args: unknown[]) => unknown) | undefined;
           if (typeof fn !== "function") throw new Error(`${serving.def.className}.${String(serving.method)} is not a method`);
           const args = serving.args ? await Promise.all(serving.args.map((r) => r.resolve(context))) : [];
-          let result = await fn.apply(instance, args);
-          if (isNegotiated(result)) {
-            const keys = Object.keys(result.variants);
-            const chosen = choose(keys.map((k) => [expandType(k)]), req.headers.accept, true);
-            if (chosen === undefined) throw new HttpError(406, "Not Acceptable");
-            const key = chosen === "default" ? keys[0]! : keys[chosen]!;
-            const type = expandType(key);
-            result = await (result.variants as Record<string, () => unknown>)[key]!();
-            const out = await coerce(result, { layouts: serving.layouts, meta: context.meta, dynamic });
-            if (type === "application/json") {
-              // Strings and nulls are JSON here too, not text or 204.
-              if (!out.headers["content-type"]?.startsWith("application/json")) {
-                out.body = JSON.stringify(result ?? null);
-                out.headers["content-type"] = "application/json; charset=utf-8";
-                if (out.status === 204) out.status = 200;
-              }
-            } else if (type !== "text/html" && (typeof out.body === "string" || out.body instanceof Uint8Array)) {
-              out.headers["content-type"] = type.startsWith("text/") ? `${type}; charset=utf-8` : type;
-            }
-            addVary(out.headers, "accept");
-            return out;
-          }
-          const out = await coerce(result, { layouts: serving.layouts, meta: context.meta, dynamic });
+          const result = await fn.apply(instance, args);
+          const out = await coerce(result, { layouts: serving.layouts, meta: context.meta, dynamic, accept: req.headers.accept });
           if (negotiated) addVary(out.headers, "accept");
           return out;
         }));
@@ -1210,7 +1189,7 @@ export class YerdApp {
   ): Promise<Outgoing> {
     if (!(error instanceof HttpError)) requestLog.log(level, error instanceof Error ? error.message : "request failed", { handledBy: by }, error);
     // A returned res(..., { status }) or number says the status; otherwise it's the error's.
-    let out = await coerce(result, { layouts, meta: context.meta, dynamic });
+    let out = await coerce(result, { layouts, meta: context.meta, dynamic, accept: context.req.headers.accept });
     if (!out.explicitStatus) out.status = error instanceof HttpError ? error.status : 500;
     if (isPageStream(out)) out = await primeStream(out);
     return out;
@@ -1232,7 +1211,7 @@ export class YerdApp {
       // Returning an error (e.g. `ok || new HttpError(403)`) is the same as throwing it.
       if (result instanceof Error) throw result;
       if (typeof result === "string") return coerce(redirect(result), { layouts: [] });
-      return coerce(result, { layouts, meta: context.meta });
+      return coerce(result, { layouts, meta: context.meta, accept: (context as RequestContext).req.headers.accept });
     }
     return undefined;
   }

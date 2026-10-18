@@ -7,6 +7,7 @@ import { isYerdNode, jsx, type Child, type Component } from "../jsx/jsx-runtime.
 import { applyLayouts, type LayoutProps, type PageMeta } from "../decorators/route.js";
 import { renderToStream } from "../render/render.js";
 import { isBare, YerdResponse, type HeaderInit } from "./response.js";
+import { choose, expandType, isNegotiated, type Negotiated } from "./negotiate.js";
 
 export type Body = null | string | Uint8Array | AsyncIterable<string | Uint8Array>;
 
@@ -27,6 +28,8 @@ export interface CoerceOptions {
   meta?: PageMeta;
   /** How <Dynamic> parts render (see RenderOptions.dynamic). */
   dynamic?: "fallback" | "only";
+  /** The request's Accept header, for picking a negotiate() variant. */
+  accept?: string;
 }
 
 const HTML = "text/html; charset=utf-8";
@@ -70,8 +73,41 @@ async function* streamChunks(source: AsyncIterable<unknown>): AsyncGenerator<str
   }
 }
 
+/**
+ * Run the negotiate() variant the Accept header picks and coerce its result
+ * as that type: a string from the json variant is JSON, a string from the
+ * csv one is text/csv. Explicit responses (res(), redirect(), a status
+ * number) say what they are themselves and are left alone.
+ */
+async function coerceNegotiated(value: Negotiated, options: CoerceOptions): Promise<Outgoing> {
+  const keys = Object.keys(value.variants);
+  // With a default (the first key), choose() always picks something.
+  const chosen = choose(keys.map((k) => [expandType(k)]), options.accept, true);
+  const key = chosen === "default" || chosen === undefined ? keys[0]! : keys[chosen]!;
+  const type = expandType(key);
+  const result = await (value.variants as Record<string, () => unknown>)[key]!();
+  const out = await coerce(result, options);
+  const explicit = result instanceof YerdResponse || typeof result === "number";
+  if (!explicit && type === "application/json") {
+    // Strings and nulls are JSON here too, not text or 204.
+    if (!out.headers["content-type"]?.startsWith("application/json")) {
+      out.body = JSON.stringify(result ?? null);
+      out.headers["content-type"] = JSON_TYPE;
+      if (out.status === 204) out.status = 200;
+    }
+  } else if (!explicit && type !== "text/html" && (typeof out.body === "string" || out.body instanceof Uint8Array)) {
+    out.headers["content-type"] = type.startsWith("text/") ? `${type}; charset=utf-8` : type;
+  }
+  const vary = out.headers.vary;
+  if (!vary) out.headers.vary = "accept";
+  else if (!vary.toLowerCase().split(/\s*,\s*/).includes("accept")) out.headers.vary = `${vary}, accept`;
+  return out;
+}
+
 export async function coerce(value: unknown, options: CoerceOptions): Promise<Outgoing> {
   if (value instanceof Promise) value = await value;
+
+  if (isNegotiated(value)) return coerceNegotiated(value, options);
 
   if (value instanceof YerdResponse) {
     const inner = value.body === null || value.body === undefined
