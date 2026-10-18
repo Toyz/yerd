@@ -28,13 +28,12 @@ iterable for a stream, JSX for a page, `res()` / `redirect()` for full control.
 
 ## What's in it
 
-- **Routing**: `@route`, verb decorators, `@group` with nested prefixes,
-  layouts, guards and meta; content negotiation with `@accepts` / `negotiate()`.
+- **Routing**: `@route`, verb decorators, nested `@group`s, guards and meta;
+  layouts on routes, groups, one handler or one response; content
+  negotiation with `@accepts` / `negotiate()`.
 - **Request data**: `@param` `@query` `@header` `@cookie` `@body` `@field`
   `@file` accessors with transform/validate pipelines; DTO classes (`is.*`)
   that validate bodies, forms and uploads into typed instances.
-- **Layouts anywhere**: `@layout(Root, Marketing)` on routes, groups or one
-  handler, or per response with `res(node, { layout })`.
 - **DI**: singleton / scoped / transient services, `@inject`, disposal,
   lifecycle hooks, `@every`, hosted background services.
 - **Interactivity without a client framework**: `@action` forms that post

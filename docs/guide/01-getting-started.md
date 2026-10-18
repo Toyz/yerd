@@ -1,10 +1,10 @@
 # Getting started
 
-This page takes you from an empty folder to a running yerd app with a route and a layout.
+From an empty folder to a running app with a route and a layout.
 
 ## Install
 
-yerd needs Node 24 or newer. Vite and esbuild are optional: you need them only if you use the Vite plugin, which is the easiest way to run and build an app.
+yerd needs Node 24 or newer. Vite and esbuild are only needed for the Vite plugin, the easiest way to run and build an app.
 
 ```sh
 npm install @toyz/yerd
@@ -32,8 +32,6 @@ Routes are TC39 decorators and pages are TSX, so the compiler needs to know abou
 }
 ```
 
-The three settings that matter:
-
 | Option | Value | Why |
 | --- | --- | --- |
 | `target` | `ES2022` or later | Standard decorators and `accessor` fields compile as-is. |
@@ -41,11 +39,11 @@ The three settings that matter:
 | `jsxImportSource` | `@toyz/yerd` | JSX compiles to yerd's own runtime, not React's. |
 
 > [!WARNING]
-> Do not turn on `experimentalDecorators`. yerd uses the standard (TC39) decorators, and the legacy flag switches TypeScript to a different, incompatible decorator model.
+> Don't turn on `experimentalDecorators`: it switches TypeScript to the legacy decorator model, which is incompatible.
 
 ## Your first route
 
-A route is a class. `@route` gives it a path, and a verb decorator like `@get` marks the method that handles the request.
+A route is a class: `@route` gives it a path, and a verb decorator like `@get` marks the method that handles the request.
 
 ```tsx
 // src/routes/home.tsx
@@ -61,15 +59,15 @@ export class Home {
 }
 ```
 
-Visit `/?name=Ada` and you get `<h1>Hello, Ada!</h1>`. A few things to notice:
+Visit `/?name=Ada` and you get `<h1>Hello, Ada!</h1>`.
 
-- [`@query`](api:yerd.query) reads the query string. When `name` is missing, the field's initializer (`"world"`) is used.
-- Request data lives on `accessor` fields. The `accessor` keyword is required: decorated plain fields can't do this.
-- The handler returns JSX, so the response is HTML. Return an object and you get JSON instead (see [responses](04-responses.md)).
+- [`@query`](api:yerd.query) reads the query string; when `name` is missing, the initializer (`"world"`) is used.
+- Request data lives on `accessor` fields; the keyword is required.
+- JSX makes the response HTML. Return an object for JSON (see [responses](04-responses.md)).
 
 ## Run it with Vite
 
-The Vite plugin compiles decorators, mounts your app on the dev server, and reloads routes when you save. Add a config and an entry module.
+The Vite plugin compiles decorators, mounts your app on the dev server, and reloads routes when you save.
 
 ```ts
 // vite.config.ts
@@ -94,16 +92,14 @@ export default yerd()
 npx vite
 ```
 
-The entry module default-exports the app and does not call `listen()`: the plugin serves it for you. [`discover()`](api:yerd.YerdApp) takes the result of `import.meta.glob`, so every file under `src/routes/` is loaded and its routes register themselves.
-
-> [!TIP]
-> `entry` defaults to `/src/main.ts`, so `yerd()` with no options works if you use that path.
-
-For production, `npx vite build` writes a client build and a server bundle, and `node dist/server/server.js` runs it. The [deploying guide](11-deploying.md) has the details.
+- The entry default-exports the app and doesn't call `listen()`; the plugin serves it.
+- [`discover()`](api:yerd.YerdApp) takes `import.meta.glob`'s result, so every file under `src/routes/` registers its routes.
+- `entry` defaults to `/src/main.ts`, so `yerd()` with no options works for that path.
+- For production, `npx vite build` then `node dist/server/server.js` (see [deploying](11-deploying.md)).
 
 ## Run it without Vite
 
-Plain Node works too. Compile with `tsc`, then start a server module that calls `listen()`.
+Compile with `tsc`, then start a server module that calls `listen()`.
 
 ```ts
 // src/server.ts
@@ -121,14 +117,12 @@ npx tsc
 node dist/server.js
 ```
 
-Given a directory URL, `discover()` imports every `.js` file under it, recursively. That is why this path needs `tsc` first: Node can't run decorators or TSX straight from source yet.
-
-> [!NOTE]
-> `discover()` is a convenience, not a requirement. Any route module that gets imported registers its routes, so `import "./routes/home.js"` works just as well.
+- Given a directory URL, `discover()` imports every `.js` file under it, recursively. Node can't run decorators or TSX from source, hence `tsc` first.
+- `discover()` is optional: any imported route module registers its routes (`import "./routes/home.js"`).
 
 ## Add a layout
 
-A layout is a component that wraps every page. It gets the page as `children` and the page's metadata as `meta`.
+A layout is a component that wraps every page, getting the page as `children` and its metadata as `meta`.
 
 ```tsx
 // src/layouts.tsx
@@ -150,7 +144,7 @@ export function RootLayout({ children, meta }: LayoutProps) {
 }
 ```
 
-Register it on the app with `.layout()`:
+Register it with `.layout()`:
 
 ```ts
 // src/main.ts
@@ -163,7 +157,7 @@ export default yerd()
   .discover(import.meta.glob("./routes/**/*.{ts,tsx}", { eager: true }));
 ```
 
-Now every JSX response is wrapped in `RootLayout`, and yerd adds `<!doctype html>` because the outermost element is `<html>`. Set a page's title with route metadata:
+Every JSX response is now wrapped in `RootLayout`, with `<!doctype html>` added because the outermost element is `<html>`. Set a page's title with route metadata:
 
 ```tsx
 import { get, route } from "@toyz/yerd";
@@ -177,11 +171,11 @@ export class About {
 ```
 
 > [!NOTE]
-> Imports end in `.js` even though the file is `layouts.tsx`. That is how `nodenext` module resolution works: you import the file the compiler will emit.
+> Imports end in `.js` even for `layouts.tsx`: with `nodenext` resolution you import the file the compiler will emit.
 
 ## What you get
 
-yerd is one package with no runtime dependencies: a router, a TSX renderer that streams, request decorators with validation, DI, an event bus, sessions, server actions with a tiny client runtime, SSE and NDJSON streaming, and structured logging. Handlers return whatever is natural (a string, an object, JSX, a number) and yerd turns it into a response.
+yerd is one package with no runtime dependencies: a router, a streaming TSX renderer, request decorators with validation, DI, an event bus, sessions, server actions with a tiny client runtime, SSE and NDJSON streaming, and structured logging.
 
 New to yerd? [Your first app](13-your-first-app.md) builds a small app step by step. Otherwise, read on in roughly this order:
 
