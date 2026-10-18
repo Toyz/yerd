@@ -67,6 +67,7 @@ const sheet = css`
   .file { font: 0.76rem var(--mono); color: var(--text-faint); padding: 8px 18px 0; background: var(--code-bg); }
   .response { padding: 14px 18px 18px; border-top: 1px dashed var(--border-strong); min-height: 168px; }
   .req { font: 0.8rem var(--mono); color: var(--text-faint); margin-bottom: 8px; }
+  .exchange + .exchange { margin-top: 14px; padding-top: 12px; border-top: 1px dotted var(--border-strong); }
   .status { font: 600 0.84rem var(--mono); color: var(--text); }
   .status.bad { color: var(--warn); }
   .header-line { font: 0.8rem var(--mono); color: var(--text-dim); }
@@ -136,61 +137,85 @@ const sheet = css`
   }
 `;
 
-const ROUTE_TOP = `@route("/products/:id")
+const ROUTE_HEAD = `@route("/products/:id")
 class ProductPage {
   @param("id", { transform: toInt }) accessor id!: number;
   @inject(Shop) accessor shop!: Shop;
-
-  @get show() {
-    const product = this.shop.find(this.id);`;
-const ROUTE_BOTTOM = `  }
+`;
+const ROUTE_END = `  }
 }`;
 
-type Answer = {
-  label: string;
-  line: string;
+/** The handler around each tab's changed line. */
+const HANDLERS = {
+  show: `  @get show() {
+    const product = this.shop.find(this.id);
+    if (!product) return new NotFound("No such product");`,
+  find: `  @get show() {`,
+  remove: `  @del remove() {
+    this.shop.remove(this.id);`,
+};
+
+type Exchange = {
+  request: string;
   status: string;
   headers: string[];
   body: "card" | "empty" | string | string[];
 };
 
+type Answer = {
+  label: string;
+  handler: keyof typeof HANDLERS;
+  line: string;
+  exchanges: Exchange[];
+};
+
+const PRODUCT = "GET /products/7";
+
 const ANSWERS: Record<string, Answer> = {
   jsx: {
     label: "JSX",
+    handler: "show",
     line: "return <ProductCard product={product} />;",
-    status: "200 OK",
-    headers: ["content-type: text/html", "(inside your layouts, streamed)"],
-    body: "card",
+    exchanges: [{ request: PRODUCT, status: "200 OK", headers: ["content-type: text/html", "(inside your layouts, streamed)"], body: "card" }],
   },
   object: {
     label: "an object",
-    line: "return product;",
-    status: "200 OK",
-    headers: ["content-type: application/json"],
-    body: `{"id":7,"name":"Field notebook","price":24,"stock":3}`,
+    handler: "find",
+    line: 'return this.shop.find(this.id) ?? new NotFound("No such product");',
+    exchanges: [
+      { request: PRODUCT, status: "200 OK", headers: ["content-type: application/json"], body: `{"id":7,"name":"Field notebook","price":24,"stock":3}` },
+      { request: "GET /products/99", status: "404 Not Found", headers: ["content-type: application/json"], body: `{"error":"No such product","code":"not_found"}` },
+    ],
   },
   string: {
     label: "a string",
+    handler: "show",
     line: "return `${product.name}: ${product.stock} in stock`;",
-    status: "200 OK",
-    headers: ["content-type: text/plain"],
-    body: "Field notebook: 3 in stock",
+    exchanges: [{ request: PRODUCT, status: "200 OK", headers: ["content-type: text/plain"], body: "Field notebook: 3 in stock" }],
   },
   number: {
     label: "a number",
-    line: "return 404;",
-    status: "404 Not Found",
-    headers: ["content-length: 0"],
-    body: "empty",
+    handler: "remove",
+    line: "return 204;",
+    exchanges: [{ request: "DELETE /products/7", status: "204 No Content", headers: [], body: "empty" }],
   },
   stream: {
     label: "a stream",
+    handler: "show",
     line: "return this.shop.stockUpdates(product); // async iterable",
-    status: "200 OK",
-    headers: ["content-type: text/plain", "transfer-encoding: chunked"],
-    body: ["Field notebook: 3 left\n", "Field notebook: 2 left\n", "Field notebook: 2 left (one on hold)\n", "Field notebook: sold out\n"],
+    exchanges: [
+      {
+        request: PRODUCT,
+        status: "200 OK",
+        headers: ["content-type: text/plain", "transfer-encoding: chunked"],
+        body: ["Field notebook: 3 left\n", "Field notebook: 2 left\n", "Field notebook: 2 left (one on hold)\n", "Field notebook: sold out\n"],
+      },
+    ],
   },
 };
+
+/** The tallest handler's line count, so the code doesn't jump between tabs. */
+const CODE_LINES = ROUTE_HEAD.split("\n").length + Math.max(...Object.values(HANDLERS).map((h) => h.split("\n").length)) + 1 + ROUTE_END.split("\n").length;
 
 const FEATURES: Array<{ title: string; text: string; code: string; guide: string }> = [
   { title: "Routing", text: "A class per URL, a method per verb. Groups, guards and layouts nest the way your folders do.", code: "@route @get @post @group", guide: "routing" },
@@ -245,11 +270,11 @@ export class PageHome extends LoomElement {
 
   #code() {
     const a = ANSWERS[this.answer]!;
-    const top = highlight(ROUTE_TOP, "tsx").split("\n");
-    const bottom = highlight(ROUTE_BOTTOM, "tsx").split("\n");
+    const top = highlight(`${ROUTE_HEAD}\n${HANDLERS[a.handler]}`, "tsx").split("\n");
+    const bottom = highlight(ROUTE_END, "tsx").split("\n");
     const changed = highlight(`    ${a.line}`, "tsx");
     return (
-      <pre aria-label="A yerd route class">
+      <pre aria-label="A yerd route class" style={`min-height: ${CODE_LINES * 1.65}em`}>
         <code>
           {top.map((html) => <span class="line" rawHTML={html}></span>)}
           <span class="line changed" rawHTML={changed}></span>
@@ -261,6 +286,14 @@ export class PageHome extends LoomElement {
 
   #response() {
     const a = ANSWERS[this.answer]!;
+    return (
+      <div class="response" aria-live="polite">
+        {a.exchanges.map((x) => this.#exchange(x))}
+      </div>
+    );
+  }
+
+  #exchange(a: Exchange) {
     let body: unknown;
     if (a.body === "card") {
       body = (
@@ -292,8 +325,8 @@ export class PageHome extends LoomElement {
       body = <div class="body">{a.body}</div>;
     }
     return (
-      <div class="response" aria-live="polite">
-        <div class="req">GET /products/7</div>
+      <div class="exchange">
+        <div class="req">{a.request}</div>
         <div class={`status ${a.status.startsWith("2") ? "" : "bad"}`}>HTTP/1.1 {a.status}</div>
         {a.headers.map((h) => (
           <div class="header-line">{h}</div>
