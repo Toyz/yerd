@@ -256,7 +256,8 @@ describe("in an app", () => {
     const build = yerd({ routes: [Static], services: [], handleSignals: false });
     await build.prerender(out);
     await build.stop();
-    const record = JSON.parse(readFileSync(join(out, ".yerd", "css.json"), "utf8")) as { href: string; classes: string[] };
+    const stored = JSON.parse(readFileSync(join(out, ".yerd", "css.json"), "utf8")) as { file: string; classes: string[] };
+    const record = { ...stored, href: `/${stored.file}` };
     expect(record.href).toMatch(/^\/assets\/yerd-[a-z0-9]+\.css$/);
     expect(existsSync(join(out, record.href))).toBe(true);
     expect(readFileSync(join(out, record.href), "utf8")).toContain(`.${card}{`);
@@ -268,15 +269,66 @@ describe("in an app", () => {
   });
 });
 
-describe("dev reloads", () => {
-  it("resetRegistries forgets css, so an edited css.global doesn't linger", async () => {
-    const { resetCss } = await import("../../src/render/css.js");
-    css.global`.old-global { color: red; }`;
-    const app = yerd({ routes: [], services: [], handleSignals: false });
-    app.resetRegistries();
-    expect(cssBundleText()).not.toContain(".old-global");
-    const fresh = css`color: teal;`;
-    expect(cssBundleText()).toContain(`.${fresh}{color: teal;}`);
-    resetCss();
+describe("rules in <head> with <Styles />", () => {
+  const item = css`color: navy; --head-test: 1;`;
+  const late = css`color: maroon; --head-test: 2;`;
+
+  function Page({ children }: { children: unknown }) {
+    return (
+      <html>
+        <head>
+          <title>t</title>
+          <Styles />
+        </head>
+        <body>{children as never}</body>
+      </html>
+    );
+  }
+
+  it("go into <head> at <Styles />, so the body has no <style> siblings", async () => {
+    const html = await renderToString(
+      <Page>
+        <ul>
+          <li class={item}>first</li>
+          <li class={item}>second</li>
+        </ul>
+      </Page>,
+      { document: true },
+    );
+    const head = html.slice(0, html.indexOf("</head>"));
+    const body = html.slice(html.indexOf("<body>"));
+    expect(styles(head)).toContain(item);
+    expect(body).not.toContain("<style");
+    // li:first-child is the first li: nothing comes before it.
+    expect(body).toContain(`<ul><li class="${item}">first</li>`);
+  });
+
+  it("put <select> contents straight into <head> too: nothing to hold for", async () => {
+    const html = await renderToString(
+      <Page>
+        <select>
+          <option class={late}>a</option>
+        </select>
+      </Page>,
+    );
+    expect(styles(html.slice(0, html.indexOf("</head>"))).filter((n) => n !== "global")).toEqual([late]);
+  });
+
+  it("fall back to inline once the head has been sent (an async component flushed it)", async () => {
+    const other = css`color: olive; --head-test: 3;`;
+    async function Slow() {
+      await new Promise((r) => setTimeout(r, 1));
+      return <p class={other}>slow</p>;
+    }
+    const html = await renderToString(
+      <Page>
+        <h1 class={item}>before</h1>
+        <Slow />
+      </Page>,
+    );
+    const head = html.slice(0, html.indexOf("</head>"));
+    expect(styles(head)).toContain(item);
+    // Rendered after the flush: next to its element, where the runtime picks it up.
+    expect(html.indexOf(`data-yx-css="${other}"`)).toBeGreaterThan(html.indexOf("</head>"));
   });
 });

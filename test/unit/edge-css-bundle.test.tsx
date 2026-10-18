@@ -183,12 +183,15 @@ class LivePage {
 }
 
 interface CssRecord {
-  href: string;
+  file: string;
   classes: string[];
+  /** Where it's served with the default base: "/" + file. */
+  href: string;
 }
 
 function record(out: string): CssRecord {
-  return JSON.parse(readFileSync(join(out, ".yerd", "css.json"), "utf8")) as CssRecord;
+  const raw = JSON.parse(readFileSync(join(out, ".yerd", "css.json"), "utf8")) as Omit<CssRecord, "href">;
+  return { ...raw, href: `/${raw.file}` };
 }
 
 async function build(routes: Function[] = [StaticPage]): Promise<string> {
@@ -244,10 +247,10 @@ describe("prerender writes the bundle", () => {
     expect(existsSync(join(out, record(out).href))).toBe(true);
   });
 
-  it("writes css.json as plain JSON with only href and classes", async () => {
+  it("writes css.json as plain JSON with only file and classes", async () => {
     const out = await build();
     const parsed = JSON.parse(readFileSync(join(out, ".yerd", "css.json"), "utf8")) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(["classes", "href"]);
+    expect(Object.keys(parsed).sort()).toEqual(["classes", "file"]);
   });
 
   it("leaves the build's bundle in use for pages rendered after it in the same process", async () => {
@@ -259,7 +262,8 @@ describe("prerender writes the bundle", () => {
 });
 
 /** A client build directory as `vite build` leaves it, plus what prerender adds. */
-function clientDir(rec?: CssRecord, cssText = ".x{}"): { dir: string; manifest: string } {
+// An older-format record (an href): clientBuild still reads it.
+function clientDir(rec?: { href: string; classes: string[] }, cssText = ".x{}"): { dir: string; manifest: string } {
   const dir = tmp("client");
   mkdirSync(join(dir, ".vite"), { recursive: true });
   writeFileSync(join(dir, ".vite", "manifest.json"), "{}");

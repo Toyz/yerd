@@ -70,7 +70,7 @@ export interface YerdViteOptions {
 const SERVER_ENTRY = "virtual:yerd/server-entry";
 const PRERENDER_ENTRY = "virtual:yerd/prerender-entry";
 
-function serverEntrySource(entry: string): string {
+function serverEntrySource(entry: string, base: string): string {
   return [
     `import { existsSync } from "node:fs";`,
     `import { fileURLToPath } from "node:url";`,
@@ -83,7 +83,7 @@ function serverEntrySource(entry: string): string {
     ``,
     `const client = fileURLToPath(new URL("../client/", import.meta.url));`,
     `const manifest = new URL("../client/.vite/manifest.json", import.meta.url);`,
-    `if (existsSync(manifest)) app.clientBuild(client, manifest);`,
+    `if (existsSync(manifest)) app.clientBuild(client, manifest, { base: ${JSON.stringify(base)} });`,
     `else app.static("/", client);`,
     ``,
     `const server = await app.listen(Number(process.env.PORT ?? 3000), process.env.HOST || undefined);`,
@@ -97,12 +97,15 @@ function production(options: YerdViteOptions): Plugin {
   const outDir = options.outDir ?? "dist";
   const clientInputs = options.client ?? [];
   let root = process.cwd();
+  // Vite's base: where the client build is served from (assets, the css bundle).
+  let base = "/";
 
   return {
     name: "yerd:build",
     apply: "build",
     config(config) {
       root = config.root ?? process.cwd();
+      base = config.base ?? "/";
       return {
         builder: {
           async buildApp(builder) {
@@ -115,9 +118,9 @@ function production(options: YerdViteOptions): Plugin {
             const { mkdir } = await import("node:fs/promises");
             await mkdir(clientDir, { recursive: true });
             const mod = (await import(pathToFileURL(`${serverDir}/prerender.js`).href)) as {
-              default: { prerender(dir: string): Promise<string[]> };
+              default: { prerender(dir: string, options?: { base?: string }): Promise<string[]> };
             };
-            const written = await mod.default.prerender(clientDir);
+            const written = await mod.default.prerender(clientDir, { base });
             if (written.length > 0) console.log(`yerd: prerendered ${written.length} path(s): ${written.join(", ")}`);
           },
         },
@@ -148,7 +151,7 @@ function production(options: YerdViteOptions): Plugin {
     },
     load(id) {
       const app = entry.startsWith("/") ? `${root}${entry}` : entry;
-      if (id === `\0${SERVER_ENTRY}`) return serverEntrySource(app);
+      if (id === `\0${SERVER_ENTRY}`) return serverEntrySource(app, base);
       // Exports the app without listening, for build-time prerendering.
       if (id === `\0${PRERENDER_ENTRY}`) return `export { default } from ${JSON.stringify(app)};\n`;
       return null;

@@ -143,7 +143,8 @@ describe("the build plugin", () => {
     expect(code).toContain(`process.env["NODE_ENV"] ??= "production";`);
     expect(code).toContain(`const { default: app } = await import(${JSON.stringify(`${root}/src/app.ts`)});`);
     expect(code.indexOf("NODE_ENV")).toBeLessThan(code.indexOf("await import("));
-    expect(code).toContain(`if (existsSync(manifest)) app.clientBuild(client, manifest);`);
+    // Vite's base goes to clientBuild ("/" when the config sets none).
+    expect(code).toContain(`if (existsSync(manifest)) app.clientBuild(client, manifest, { base: "/" });`);
     expect(code).toContain(`else app.static("/", client);`);
     expect(code).toContain("app.listen(Number(process.env.PORT ?? 3000), process.env.HOST || undefined)");
   });

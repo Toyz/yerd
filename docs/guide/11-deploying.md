@@ -51,6 +51,8 @@ npx tsc --noEmit && npx vite build
 node dist/server/server.js
 ```
 
+Vite's `base` option carries through: with `base: "/app/"` the built server serves the client files under `/app/` and every asset URL (`assetUrl()`, `<Stylesheet>`, the `css` stylesheet from `<Styles />`) points there; with a full URL (`base: "https://cdn.example.com/"`) the links go to the CDN while the server still serves the files from `/` for the CDN to pull. Your routes keep their own paths either way.
+
 Vite doesn't type-check, so run `tsc --noEmit` first. The built server runs with `NODE_ENV=production` unless you set it to something else, so production behavior (JSON logs, no stack traces, the missing-secret warning) is the default. The build writes:
 
 ```text

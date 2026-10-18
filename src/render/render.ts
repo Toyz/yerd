@@ -14,10 +14,10 @@
 
 import { Fragment, isYerdNode, type Child, type YerdNode } from "../jsx/jsx-runtime.js";
 import { renderAttributes } from "./attrs.js";
-import { escapeHtml, isRawHtml } from "./escape.js";
+import { escapeHtml, isRawHtml, type RawHtml } from "./escape.js";
 import { formAction, isAction, isBoundAction } from "../actions/action.js";
 import { DYNAMIC_ID, Dynamic, type DynamicProps } from "./dynamic.js";
-import { classesIn, stylesFor } from "./css.js";
+import { Styles, classesIn, keyframesIn, stylesFor } from "./css.js";
 import { Local, bindingSpec, isBinding, localState, stateName, type Binding, type LocalProps } from "./local.js";
 
 const VOID_ELEMENTS = new Set([
@@ -73,6 +73,13 @@ interface State {
   insideLocal: number;
   /** css`` classes whose rules this render already sent. */
   cssSent: Set<string>;
+  /**
+   * Where <Styles /> sits in the buffer, while the buffer still holds it: rules
+   * go there, in <head>, instead of next to the elements (where an inline
+   * <style> would count as a sibling for :first-child and `h1 + p`). Gone once
+   * the head has been flushed.
+   */
+  cssAnchor: number | undefined;
   /** Inside a <select>, where the parser drops <style>: rules wait here for it to close. */
   cssHeld: Set<string> | undefined;
   /** Flushed chunks waiting for the stream's consumer. */
@@ -101,6 +108,8 @@ function flush(state: State): void {
   if (!state.buffer) return;
   state.chunks.push(state.buffer);
   state.buffer = "";
+  // The head (and <Styles /> in it) has gone out: later rules go inline.
+  state.cssAnchor = undefined;
   state.notify?.();
 }
 
@@ -152,6 +161,12 @@ function renderNode(node: YerdNode, state: State): Step {
   if (typeof type === "function") {
     if (type === Fragment) return renderChild(props.children, state);
     if (type === Dynamic) return renderDynamic(props as unknown as DynamicProps, state);
+    if (type === Styles) {
+      write(state, (Styles() as RawHtml).html);
+      // Rules this page uses go here from now on, while the head is still in the buffer.
+      if (state.dynamic !== "only" || state.insideDynamic > 0) state.cssAnchor = state.buffer.length;
+      return undefined;
+    }
     if (type === Local) return renderLocal(props as unknown as LocalProps<object>, state);
     // In "only" mode components outside a <Dynamic> still run (a Dynamic may
     // be anywhere inside them); only their output is dropped.
@@ -227,7 +242,7 @@ function renderNode(node: YerdNode, state: State): Step {
     if (!holdsCss) return;
     const held = state.cssHeld!;
     state.cssHeld = undefined;
-    if (held.size) write(state, stylesFor(held, state.cssSent));
+    if (held.size) writeStyles(state, stylesFor(held, state.cssSent));
   } : () => write(state, `</${type}>`);
   const step = renderChild(props.children, state);
   if (step) return step.then(close);
@@ -245,11 +260,25 @@ const OWN_CSS = new Set(["template", "noscript"]);
 
 /** css`` classes in class / className: their rules go just before the first element using them (or are held). */
 function writeClassStyles(props: Record<string, unknown>, state: State): void {
-  if (props.class === undefined && props.className === undefined) return;
-  const classes = classesIn([props.class, props.className]);
+  const classes = props.class !== undefined || props.className !== undefined ? classesIn([props.class, props.className]) : new Set<string>();
+  // `style={{ animation: `${pop} 1s` }}`: the keyframes go too.
+  if (props.style !== undefined) keyframesIn(props.style, classes);
   if (!classes.size) return;
-  if (state.cssHeld) for (const name of classes) state.cssHeld.add(name);
-  else write(state, stylesFor(classes, state.cssSent));
+  // In <head> there's nothing to hold for: <select>, <svg> and the rest don't matter there.
+  if (state.cssHeld && state.cssAnchor === undefined) for (const name of classes) state.cssHeld.add(name);
+  else writeStyles(state, stylesFor(classes, state.cssSent));
+}
+
+/** Rules into <head> at <Styles /> while it's still in the buffer, else inline here. */
+function writeStyles(state: State, html: string): void {
+  if (!html) return;
+  const at = state.cssAnchor;
+  if (at === undefined) {
+    write(state, html);
+    return;
+  }
+  state.buffer = state.buffer.slice(0, at) + html + state.buffer.slice(at);
+  state.cssAnchor = at + html.length;
 }
 
 /** An @action, a lambda calling one, or bind(...) of one. */
@@ -447,6 +476,7 @@ export async function* renderToStream(child: Child, options: RenderOptions = {})
     insideDynamic: 0,
     insideLocal: 0,
     cssSent: new Set(),
+    cssAnchor: undefined,
     cssHeld: undefined,
     chunks: [],
     notify: undefined,

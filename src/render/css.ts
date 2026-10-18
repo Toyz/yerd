@@ -179,6 +179,15 @@ export function classesIn(value: unknown, out: Set<string> = new Set()): Set<str
   return out;
 }
 
+const KEYFRAMES_NAME = /yx-k-[a-z0-9]+/g;
+
+/** Keyframes names in a `style` value (a string, or an object's string values), for `animation: ${pop} 1s`. */
+export function keyframesIn(style: unknown, out: Set<string> = new Set()): Set<string> {
+  const texts = typeof style === "string" ? [style] : style && typeof style === "object" ? Object.values(style).filter((v): v is string => typeof v === "string") : [];
+  for (const text of texts) for (const name of text.match(KEYFRAMES_NAME) ?? []) if (rules.has(name)) out.add(name);
+  return out;
+}
+
 /** The `<style>` for classes not sent yet on this page (and what they need), or "". Updates `sent`. */
 export function stylesFor(classes: Set<string>, sent: Set<string>): string {
   let html = "";

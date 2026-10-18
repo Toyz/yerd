@@ -349,6 +349,23 @@ function startPeriodic(run: (signal: AbortSignal) => unknown, ms: number, immedi
   };
 }
 
+/** Vite's `base` as a prefix for URLs: "/" (the default), "/app/", or a full URL ending in "/". "./" (relative) counts as "/". */
+function publicBase(base: string | undefined): string {
+  if (!base || base === "./" || base === ".") return "/";
+  return base.endsWith("/") ? base : `${base}/`;
+}
+
+/** Where the client build's files are mounted: the base's path, or "/" for a full URL (a CDN pulls from there). */
+function mountPath(base: string): string {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(base) ? "/" : base;
+}
+
+/** Read .yerd/css.json: `file` (current) or an older `href`, under the base. */
+function useCssRecord(path: string, base: string): void {
+  const record = JSON.parse(readFileSync(path, "utf8")) as { file?: string; href?: string; classes: string[] };
+  useCssBundle(record.file !== undefined ? base + record.file : record.href!, record.classes);
+}
+
 /**
  * A yerd application: routes, layouts, services and the server around them.
  * Create one with {@link yerd}; the configuration methods return the app, so
@@ -498,23 +515,27 @@ export class YerdApp {
   }
 
   /**
-   * Use a Vite client build: serve its files from `/` and resolve assetUrl() /
-   * <Stylesheet> through its manifest. The generated production server calls
-   * this; you rarely need to.
+   * Use a Vite client build: serve its files and resolve assetUrl() /
+   * <Stylesheet> / <Styles /> through its manifest. The generated production
+   * server calls this (with Vite's `base`); you rarely need to.
+   *
+   * `base` is where the files are served from: a path ("/app/") mounts them
+   * there; a full URL (a CDN) is used for links while the files are still
+   * served from "/", for the CDN to pull.
    *
    * ```ts
    * yerd().clientBuild("dist/client", "dist/client/.vite/manifest.json");
+   * yerd().clientBuild("dist/client", "dist/client/.vite/manifest.json", { base: "/app/" });
    * ```
    */
-  clientBuild(dir: string, manifest: string | URL): this {
-    useManifest(manifest);
+  clientBuild(dir: string, manifest: string | URL, options: { base?: string } = {}): this {
+    const base = publicBase(options.base);
+    useManifest(manifest, base);
     // css`` rules the build collected into one stylesheet (see prerender).
     const cssList = join(dir, ".yerd", "css.json");
-    if (existsSync(cssList)) {
-      const { href, classes } = JSON.parse(readFileSync(cssList, "utf8")) as { href: string; classes: string[] };
-      useCssBundle(href, classes);
-    } else resetCssBundle();
-    const mount = createMount("/", dir);
+    if (existsSync(cssList)) useCssRecord(cssList, base);
+    else resetCssBundle();
+    const mount = createMount(mountPath(base), dir);
     const list = join(dir, ".yerd", "prerendered.json");
     if (existsSync(list)) {
       const paths = JSON.parse(readFileSync(list, "utf8")) as Record<string, string>;
@@ -530,7 +551,7 @@ export class YerdApp {
    * for clientBuild(). Pages then link it through <Styles /> instead of
    * inlining rules. Nothing is written when the app has no css``.
    */
-  #writeCssBundle(outDir: string): void {
+  #writeCssBundle(outDir: string, base: string): void {
     const text = cssBundleText();
     if (!text) {
       // No css in this app: nothing to link, whatever an earlier build in this process left.
@@ -541,9 +562,10 @@ export class YerdApp {
     mkdirSync(join(outDir, "assets"), { recursive: true });
     mkdirSync(join(outDir, ".yerd"), { recursive: true });
     writeFileSync(join(outDir, file), text);
-    const record = { href: `/${file}`, classes: cssBundleClasses() };
+    // The file, not a URL: where it's served from is the running server's base.
+    const record = { file, classes: cssBundleClasses() };
     writeFileSync(join(outDir, ".yerd", "css.json"), JSON.stringify(record));
-    useCssBundle(record.href, record.classes);
+    useCssBundle(base + file, record.classes);
   }
 
   /**
@@ -554,14 +576,15 @@ export class YerdApp {
    * const written = await app.prerender("dist/client"); // ["/about", "/docs/intro", ...]
    * ```
    */
-  async prerender(outDir: string): Promise<string[]> {
+  async prerender(outDir: string, options: { base?: string } = {}): Promise<string[]> {
     await this.boot();
-    this.#writeCssBundle(outDir);
+    const base = publicBase(options.base);
+    this.#writeCssBundle(outDir, base);
     const allowed = this.#options.routes ? new Set(this.#options.routes) : undefined;
     const defs = routeRegistry.filter((d) => PRERENDER.from(d.metadata) && (!allowed || allowed.has(d.ctor)));
     if (defs.length === 0) return [];
     const manifest = join(outDir, ".vite", "manifest.json");
-    if (existsSync(manifest)) useManifest(manifest);
+    if (existsSync(manifest)) useManifest(manifest, base);
 
     this.#prerenderToken = randomBytes(16).toString("hex");
     const server = await this.listen(0, "127.0.0.1", { handleSignals: false });

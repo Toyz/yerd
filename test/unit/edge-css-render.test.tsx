@@ -92,15 +92,18 @@ describe("class shapes", () => {
     expect(html).not.toContain("<script");
   });
 
-  it("only looks at class and className, not other attributes that hold a name", async () => {
-    const html = await renderToString(<div data-class={card} aria-describedby={active} style={`animation: ${spin} 1s`} />);
+  it("looks at class, className and style, not other attributes that hold a name", async () => {
+    const html = await renderToString(<div data-class={card} aria-describedby={active} />);
     expect(sent(html)).toEqual([]);
   });
 
-  // Keyframes used from a style attribute (style={{ animation: `${spin} 1s` }})
-  // are never sent: only class/className are scanned. Sending them would mean
-  // scanning style values for registered names.
-  it.todo("sends keyframes referenced from an inline style attribute");
+  it.each([
+    ["a string", `animation: ${spin} 1s`],
+    ["an object", { animation: `${spin} 1s linear` }],
+  ])("sends keyframes referenced from a style attribute (%s)", async (_label, style) => {
+    const html = await renderToString(<div style={style as string} />);
+    expect(sent(html)).toEqual([spin]);
+  });
 
   it("writes the class attribute itself unchanged", async () => {
     const html = await renderToString(<div class={["btn", card, { [active]: false, on: true }]} />);

@@ -307,13 +307,13 @@ Where the rules go:
 
 | | Scoped rules | Global rules |
 | --- | --- | --- |
-| Development | a `<style>` just before the first element using the class, once per page or response; the runtime moves it into `<head>` and drops duplicates | written by `<Styles />` |
+| Development | into `<head>` at `<Styles />`, once per page; if the head has already been sent (see below), a `<style>` just before the first element using the class, which the runtime moves into `<head>` | written by `<Styles />` |
 | After `vite build` | one hashed stylesheet (`/assets/yerd-<hash>.css`, cached for a year), linked by `<Styles />`; nothing is inlined | in that stylesheet too |
 
-Pages keep streaming either way: in development the rules travel with the elements, so nothing has to wait for the whole page. An action's response repeats the rules of what it renders, so a Region that arrives later is styled too.
+A page is held in memory until its first async boundary (an async component, a `<Dynamic>`), so for most pages the head is still there when the body renders and every rule lands in `<head>`: structural selectors like `li:first-child` or `h1 + p` see only your elements, with or without JavaScript. Classes first used after the head has gone out get their `<style>` next to the element instead, which the runtime moves into `<head>`; until it runs, that `<style>` counts as a sibling. To keep structural selectors exact everywhere, use the class before the first async boundary, or ship a build (`vite build` inlines nothing). An action's response repeats the rules of what it renders, so a Region that arrives later is styled too.
 
 > [!NOTE]
-> Classes are found in `class` and `className` props. A class name inside `raw()` HTML isn't seen, so its rules aren't sent. A `<style>` can't sit inside a `<select>`, so rules for classes used inside one are written right after it closes.
+> Classes are found in `class` and `className` props (strings, arrays, flag objects, `raw()` values, `<Local>` bindings), and `keyframes` names in `style` (`style={{ animation: `${pop} 1s` }}`). A class name buried in other HTML isn't seen. Without `<Styles />`, or after the head has gone out, rules for classes inside `<select>`, `<colgroup>`, `<svg>` or `<math>` are written right after the element closes, where a `<style>` is parsed properly.
 
 ### Images
 
