@@ -2,25 +2,26 @@
 //
 //   npm install && npm run build        (build yerd first: `npm run build` at the repo root)
 //   node run.mjs [--frameworks yerd,fastify] [--scenarios json,ssr] [--duration 10]
-//                [--warmup 3] [--runs 3] [--connections 100] [--workers 1] [--write]
+//                [--warmup 3] [--runs 3] [--connections 100] [--workers 4] [--write]
+//                [--server-cpus 8,9 --client-cpus 10-15]   (Linux: pin with taskset)
 //
 // Each server runs in its own child process (NODE_ENV=production), is checked for correct
 // responses, then measured: one warmup, then `runs` measured runs per scenario; the run with
 // the median req/s is reported. A full run (no filters, default settings) writes results.json
 // and refreshes the table in README.md; partial runs only print, unless --write is given.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
-import autocannon from "autocannon";
+import { Worker } from "node:worker_threads";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const HOST = "127.0.0.1";
 const TOKEN = "Bearer bench-secret-token";
 
-const DEFAULTS = { duration: 10, warmup: 3, runs: 3, connections: 100, pipelining: 1, workers: 1 };
+const DEFAULTS = { duration: 10, warmup: 3, runs: 3, connections: 100, pipelining: 1, workers: 4 };
 
 const { values: args } = parseArgs({
   options: {
@@ -31,6 +32,8 @@ const { values: args } = parseArgs({
     runs: { type: "string" },
     connections: { type: "string" },
     workers: { type: "string" },
+    "server-cpus": { type: "string" },
+    "client-cpus": { type: "string" },
     write: { type: "boolean", default: false },
   },
 });
@@ -43,6 +46,15 @@ const settings = {
   pipelining: DEFAULTS.pipelining,
   workers: Number(args.workers ?? DEFAULTS.workers),
 };
+
+// Optional CPU pinning (Linux, taskset): keeps the server and the client on fixed cores, so
+// results don't swing with where the scheduler happens to put them (e.g. which CCD on a
+// two-die Ryzen). The client pins the whole harness process; worker threads inherit it.
+const serverCpus = args["server-cpus"];
+const clientCpus = args["client-cpus"];
+// The server would inherit the client's pinning, so both or neither.
+if (Boolean(serverCpus) !== Boolean(clientCpus)) throw new Error("pass --server-cpus and --client-cpus together");
+if (clientCpus) execFileSync("taskset", ["-a", "-pc", clientCpus, String(process.pid)], { stdio: "ignore" });
 
 // ---------------------------------------------------------------- frameworks
 
@@ -173,7 +185,9 @@ const writeResults = fullRun || args.write;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function start(framework) {
-  const child = spawn(process.execPath, [join(here, framework.entry)], {
+  const command = [process.execPath, join(here, framework.entry)];
+  if (serverCpus) command.unshift("taskset", "-c", serverCpus);
+  const child = spawn(command[0], command.slice(1), {
     cwd: here,
     env: { ...process.env, PORT: String(framework.port), NODE_ENV: "production", YERD_SECRET: "bench-secret-0123456789abcdef0123456789abcdef" },
     stdio: ["ignore", "pipe", "pipe"],
@@ -212,70 +226,66 @@ function stop(child) {
 
 // ---------------------------------------------------------------- measuring
 
-// autocannon's own latency histogram has 1 ms resolution, which flattens every fast server to
-// "p50 0 ms, p99 1 ms". So in single-thread mode every 2xx response time (a float, in ms) is
-// also collected here and the percentiles are computed from those.
-class Latencies {
-  values = new Float64Array(1 << 22);
-  length = 0;
-  add(ms) {
-    if (this.length === this.values.length) {
-      const bigger = new Float64Array(this.values.length * 2);
-      bigger.set(this.values);
-      this.values = bigger;
-    }
-    this.values[this.length++] = ms;
-  }
-  percentiles() {
-    const sorted = this.values.subarray(0, this.length).sort();
-    const at = (p) => sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)] ?? NaN;
-    return { p50: at(50), p99: at(99) };
-  }
-}
-
-function cannon(base, request, duration, latencies) {
-  return new Promise((resolve, reject) => {
-    const tracker = autocannon(
-      {
-        url: base + request.path,
-        method: request.method ?? "GET",
-        headers: request.headers,
-        body: request.body,
-        connections: settings.connections,
-        pipelining: settings.pipelining,
-        duration,
-        ...(settings.workers > 1 ? { workers: settings.workers } : {}),
-      },
-      (error, result) => (error ? reject(error) : resolve(result)),
-    );
-    if (latencies && settings.workers <= 1) {
-      tracker.on("response", (_client, status, _bytes, ms) => {
-        if (status >= 200 && status < 300) latencies.add(ms);
-      });
-    }
+// One autocannon thread tops out around 125k req/s on a fast machine, which would cap the fastest
+// servers at the client's speed. So the connections are split across `workers` worker threads
+// (cannon-worker.mjs), each running its own autocannon; they start together and their results are
+// summed. Each worker also records every 2xx response time, because autocannon's histogram rounds
+// latencies to whole milliseconds; p50/p99 come from all of them together.
+async function cannon(base, request, duration, collect) {
+  const n = Math.max(1, Math.min(settings.workers, settings.connections));
+  const options = (i) => ({
+    url: base + request.path,
+    method: request.method ?? "GET",
+    headers: request.headers,
+    body: request.body,
+    connections: Math.floor(settings.connections / n) + (i < settings.connections % n ? 1 : 0),
+    pipelining: settings.pipelining,
+    duration,
   });
+  const workers = Array.from({ length: n }, (_, i) => new Worker(join(here, "cannon-worker.mjs"), { workerData: { options: options(i), collect } }));
+  try {
+    const next = (worker) =>
+      new Promise((resolve, reject) => {
+        worker.once("message", resolve);
+        worker.once("error", reject);
+      });
+    await Promise.all(workers.map(next)); // all ready
+    const done = workers.map(next);
+    for (const worker of workers) worker.postMessage("go");
+    const parts = await Promise.all(done);
+    const failed = parts.find((p) => p.error);
+    if (failed) throw new Error(failed.error);
+    return parts;
+  } finally {
+    await Promise.all(workers.map((w) => w.terminate()));
+  }
 }
 
 const round = (n, digits = 2) => Math.round(n * 10 ** digits) / 10 ** digits;
 
-function summarize(result, latencies) {
-  const precise = latencies?.length ? latencies.percentiles() : undefined;
+function summarize(parts) {
+  const total = parts.reduce((sum, p) => sum + p.latencies.length, 0);
+  const all = new Float64Array(total);
+  let offset = 0;
+  for (const p of parts) {
+    all.set(p.latencies, offset);
+    offset += p.latencies.length;
+  }
+  all.sort();
+  const at = (p) => all[Math.min(all.length - 1, Math.max(0, Math.ceil((p / 100) * all.length) - 1))];
   return {
-    reqPerSec: Math.round(result.requests.average),
-    latencyP50: round(precise?.p50 ?? result.latency.p50),
-    latencyP99: round(precise?.p99 ?? result.latency.p99),
-    throughputMBs: round(result.throughput.average / 1e6),
-    errors: result.errors + result.non2xx,
+    reqPerSec: Math.round(parts.reduce((sum, p) => sum + p.reqPerSec, 0)),
+    latencyP50: round(at(50)),
+    latencyP99: round(at(99)),
+    throughputMBs: round(parts.reduce((sum, p) => sum + p.bytesPerSec, 0) / 1e6),
+    errors: parts.reduce((sum, p) => sum + p.errors, 0),
   };
 }
 
 async function measure(base, scenario) {
-  if (settings.warmup > 0) await cannon(base, scenario.request, settings.warmup);
+  if (settings.warmup > 0) await cannon(base, scenario.request, settings.warmup, false);
   const runs = [];
-  for (let i = 0; i < settings.runs; i++) {
-    const latencies = new Latencies();
-    runs.push(summarize(await cannon(base, scenario.request, settings.duration, latencies), latencies));
-  }
+  for (let i = 0; i < settings.runs; i++) runs.push(summarize(await cannon(base, scenario.request, settings.duration, true)));
   const sorted = [...runs].sort((a, b) => a.reqPerSec - b.reqPerSec);
   return { median: sorted[Math.floor((sorted.length - 1) / 2)], runs };
 }
@@ -286,7 +296,7 @@ const load = () => os.loadavg().map((n) => n.toFixed(2)).join(" ");
 const loadAtStart = load();
 console.log(
   `autocannon: ${settings.connections} connections, pipelining ${settings.pipelining}, ${settings.warmup}s warmup + ${settings.runs} x ${settings.duration}s` +
-    `${settings.workers > 1 ? `, ${settings.workers} workers` : ""}; load average ${loadAtStart}`,
+    `, client split across ${settings.workers} worker threads; load average ${loadAtStart}`,
 );
 
 const results = new Map(scenarios.map((s) => [s.id, []]));
@@ -393,8 +403,9 @@ const report = {
   frameworks: frameworks.map(({ id, name, version, url }) => ({ id, name, version, url })),
   scenarios: scenarios.map(({ id, title, description }) => ({ id, title, description, results: results.get(id) })),
   notes: [
-    "Single process per server, no clustering. Client (autocannon, one thread in the harness process) and server run on the same machine, so absolute numbers are machine-bound; compare ratios.",
-    `Each scenario: ${settings.warmup}s warmup, then ${settings.runs} runs of ${settings.duration}s with ${settings.connections} connections, pipelining ${settings.pipelining}, keep-alive on. The run with the median req/s is reported. MB/s is decimal (10^6 bytes).`,
+    "Single process per server, no clustering. Client and server run on the same machine, so absolute numbers are machine-bound; compare ratios.",
+    `Each scenario: ${settings.warmup}s warmup, then ${settings.runs} runs of ${settings.duration}s with ${settings.connections} connections in total, pipelining ${settings.pipelining}, keep-alive on. The run with the median req/s is reported. MB/s is decimal (10^6 bytes).`,
+    `The client is ${settings.workers} autocannon instances in worker threads sharing the ${settings.connections} connections, started together and summed: a single autocannon thread tops out around 125k req/s on this machine, which capped the fastest servers. p50/p99 are computed from every 2xx response's own time (autocannon's histogram rounds to whole milliseconds).`,
     "Every server runs with NODE_ENV=production and request logging off (yerd: logging({ filter: \"warn\" }); Fastify: logger false; Nest: logger false; the others log nothing by default).",
     "Validation for POST /echo: yerd a DTO class with is.string()/is.number() via @body; Fastify a JSON schema (Ajv); Nest class-validator DTO through the global ValidationPipe; Express, Koa, Hono and the node:http baseline the same small hand-written check. Every server rejects an invalid body with 400 before measuring.",
     "Body parsing: Express express.json(), Koa @koa/bodyparser, Hono c.req.json(), Fastify and Nest Fastify's built-in parser, yerd its built-in body reader.",
@@ -404,6 +415,9 @@ const report = {
     "The auth check compares the Authorization header with a fixed token: a createGuard guard in yerd, a CanActivate guard in Nest, a route onRequest hook in Fastify, route middleware in Express, Koa and Hono.",
     `NestJS ${pkgVersion("@nestjs/core")} uses @nestjs/platform-fastify (Fastify ${pkgVersion("fastify")} as bundled by Nest). Hono runs on @hono/node-server ${pkgVersion("@hono/node-server")}. Koa uses @koa/router ${pkgVersion("@koa/router")} and @koa/bodyparser ${pkgVersion("@koa/bodyparser")}. React ${pkgVersion("react")}.`,
     "node:http (baseline) is not a framework: a hand-rolled router on plain node:http, shown as a ceiling. 'vs best' percentages compare frameworks only.",
+    serverCpus
+      ? `CPU pinning (taskset): each server on CPUs ${serverCpus}, the client on CPUs ${clientCpus}, so results don't swing with where the scheduler puts them.`
+      : "No CPU pinning.",
     `1-minute/5-minute/15-minute load average: ${loadAtStart} at start, ${loadAtEnd} at end.`,
   ],
 };
