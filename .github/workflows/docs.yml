@@ -7,6 +7,11 @@ name: docs
 on:
   push:
     branches: [main]
+  # After a release publishes: the version pill and "since" badges count only
+  # versions npm has, and the push that tagged the release built before that.
+  workflow_run:
+    workflows: [release]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -20,6 +25,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -36,6 +42,17 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm ci
         working-directory: site
+      # npm can take a few minutes to serve a version it just accepted; the
+      # generator asks it which versions exist.
+      - name: Wait for npm to serve the new version
+        if: github.event_name == 'workflow_run'
+        run: |
+          version=$(node -p "require('./package.json').version")
+          for i in $(seq 1 30); do
+            if npm view "@toyz/yerd@$version" version >/dev/null 2>&1; then echo "npm has $version"; exit 0; fi
+            sleep 20
+          done
+          echo "npm still doesn't list $version; building anyway"
       - run: npm run build
         working-directory: site
       - uses: actions/upload-pages-artifact@v5
