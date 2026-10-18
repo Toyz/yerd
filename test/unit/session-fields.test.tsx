@@ -316,3 +316,20 @@ describe("pages for someone with a session", () => {
     expect(after.headers.get("cache-control")).toBe("private, no-cache");
   });
 });
+
+describe("session.as()", () => {
+  it("views a plain session through a shape class, or just a type", () => {
+    const plain = new Session(undefined, undefined);
+    const basket = plain.as(Basket);
+    expect(basket.items).toEqual([]);
+    basket.add("x");
+    expect(basket.count).toBe(1);
+    // The same view as @session(Basket) would get, and the same data underneath.
+    expect(plain.as(Basket)).toBe(basket);
+    expect(plain.get("items" as never)).toEqual(["x"]);
+    const typed = plain.as<{ theme?: "light" | "dark" }>();
+    typed.theme = "dark";
+    expect(plain.as<{ theme?: string }>().theme).toBe("dark");
+    expect(plain.state.dirty).toBe(true);
+  });
+});

@@ -88,3 +88,15 @@ export class WrongShape {
   // @ts-expect-error the accessor's shape must match the class
   @session(Basket) accessor basket!: Session<Cart>;
 }
+
+// session.as(): a typed view from a plain Session (auth hooks, components).
+export function viewFromPlain(plain: Session) {
+  const basket = plain.as(Basket);
+  basket.add("socks");
+  const n: number = basket.count;
+  const prefs = plain.as<{ theme?: "light" | "dark" }>();
+  prefs.theme = "dark";
+  // @ts-expect-error not a theme
+  prefs.theme = "blue";
+  return n;
+}

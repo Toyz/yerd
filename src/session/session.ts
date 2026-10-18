@@ -318,6 +318,8 @@ export function shapeSession<T extends object>(session: Session<object>, shape: 
 }
 
 export class SessionApi<D> {
+  /** What callers hold: this session behind its property proxy. */
+  #self!: Session<object>;
   #data: Data;
   /** The data as loaded (plus adopted defaults), to notice changes made in place (`session.cart.push(x)`). */
   #base: Data;
@@ -342,7 +344,30 @@ export class SessionApi<D> {
     this.#incomingFlash = bag(record?.flash);
     this.#isNew = record === undefined;
     this.#createdAt = createdAt;
-    return new Proxy(this, plain as ProxyHandler<this>);
+    this.#self = new Proxy(this, plain as ProxyHandler<this>) as unknown as Session<object>;
+    return this.#self as unknown as this;
+  }
+
+  /**
+   * This session seen through another shape: a class (its methods, getters
+   * and defaults, like `@session(Cart)`), or with no argument just a type.
+   * For code handed the plain Session: auth hooks, components, functions.
+   *
+   * ```ts
+   * createAuth<User>({
+   *   load: (id) => users.find(id),
+   *   onLogin(user, session) {
+   *     const cart = session.as(Cart);              // Session<Cart>: methods, defaults
+   *     cart.merge(savedCarts.load(user.id));
+   *   },
+   * });
+   *
+   * const prefs = currentContext().session.as<{ theme?: "light" | "dark" }>();
+   * prefs.theme ??= "light";
+   * ```
+   */
+  as<T extends object>(shape?: SessionShape<T>): Session<T> {
+    return (shape ? shapeSession(this.#self, shape) : this.#self) as unknown as Session<T>;
   }
 
   /** @internal */
