@@ -75,6 +75,9 @@
     "kitchen": "vite --config examples/kitchen-sink/vite.config.ts",
     "todo:build": "vite build --config examples/todo/vite.config.ts",
     "todo:start": "node examples/todo/dist/server/server.js",
+    "shop": "vite --config examples/shop/vite.config.ts",
+    "shop:build": "vite build --config examples/shop/vite.config.ts",
+    "shop:start": "node examples/shop/dist/server/server.js",
     "bench": "tsc -p tsconfig.bench.json && node bench/run.mjs",
     "prepublishOnly": "npm run build && npm run check && npm test"
   },

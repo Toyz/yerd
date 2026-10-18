@@ -91,6 +91,8 @@ each export and member first shipped in.
 - [docs/AUTH.md](docs/AUTH.md): sessions, auth, the security model.
 - [docs/DECORATORS.md](docs/DECORATORS.md): writing your own decorators.
 - [docs/BUILD.md](docs/BUILD.md): Vite, production builds, prerendering.
+- [examples/shop](examples/shop): the small shop the guides build, step by
+  step. `npm run shop` from a checkout.
 - [examples/todo](examples/todo): a full app (auth, actions, live sync,
   prerendered pages). `npm run todo` from a checkout.
 
