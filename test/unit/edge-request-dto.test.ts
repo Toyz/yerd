@@ -73,7 +73,7 @@ describe("is.int", () => {
     ["99999999999999999999999", { error: "Expected an integer" }],
     ["1.5", { error: "Expected an integer" }],
     ["1e3", { error: "Expected an integer" }],
-    [" 42 ", { error: "Expected an integer" }],
+    [" 42 ", { ok: 42 }],
     ["+1", { error: "Expected an integer" }],
     ["0x10", { error: "Expected an integer" }],
     ["", { error: "Expected an integer" }],

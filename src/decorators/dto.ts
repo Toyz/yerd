@@ -188,11 +188,11 @@ export const is = {
   /** A string, as is. No coercion from other types. */
   string: primitive<string>((v) => (typeof v === "string" ? v : INVALID), "a string"),
 
-  /** A safe integer, or a string of digits with an optional leading minus. */
+  /** A safe integer, or a string of digits with an optional leading minus (surrounding spaces allowed, like is.number). */
   int: primitive<number>((v) => {
     if (typeof v === "number") return Number.isSafeInteger(v) ? v : INVALID;
-    if (typeof v === "string" && INTEGER.test(v)) {
-      const n = Number(v);
+    if (typeof v === "string" && INTEGER.test(v.trim())) {
+      const n = Number(v.trim());
       return Number.isSafeInteger(n) ? n : INVALID;
     }
     return INVALID;

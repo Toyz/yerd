@@ -75,11 +75,17 @@ async function readAll(req: IncomingMessage, limit: number): Promise<Buffer> {
   }
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of req) {
-    const buffer = chunk as Buffer;
-    size += buffer.byteLength;
-    if (size > limit) throw new HttpError(413, `Request body is larger than ${limit} bytes`);
-    chunks.push(buffer);
+  try {
+    for await (const chunk of req) {
+      const buffer = chunk as Buffer;
+      size += buffer.byteLength;
+      if (size > limit) throw new HttpError(413, `Request body is larger than ${limit} bytes`);
+      chunks.push(buffer);
+    }
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    // The client hung up mid-upload: theirs to retry, not a crash to log as one.
+    throw new HttpError(400, "The request body was cut off", { cause: error });
   }
   return Buffer.concat(chunks, size);
 }
@@ -151,7 +157,8 @@ export async function readBody(req: IncomingMessage, limit = DEFAULT_BODY_LIMIT)
 
   if (type === "application/json" || type.endsWith("+json")) {
     try {
-      return { kind: "json", value: JSON.parse(raw.toString("utf8")) };
+      // RFC 8259 lets a parser ignore a leading byte order mark; some clients send one.
+      return { kind: "json", value: JSON.parse(raw.toString("utf8").replace(/^\uFEFF/, "")) };
     } catch {
       throw new HttpError(400, "Request body is not valid JSON");
     }

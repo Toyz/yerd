@@ -222,7 +222,7 @@ describe("@query with transforms", () => {
     ["int", "1.5", bad('Expected an integer, got "1.5"')],
     ["int", "1e3", bad('Expected an integer, got "1e3"')],
     ["int", "0x10", bad('Expected an integer, got "0x10"')],
-    ["int", "%2042%20", bad('Expected an integer, got " 42 "')],
+    ["int", "%2042%20", ok(42)],
     ["int", "%2B1", bad('Expected an integer, got "+1"')],
     ["int", "", bad('Expected an integer, got ""')],
     ["int", undefined, ok("(undefined)")],
@@ -331,7 +331,7 @@ describe("@param and @params", () => {
     ["/n/1001", bad("Must be from 1 to 1000 (got 1001)")],
     ["/n/abc", bad('Expected an integer, got "abc"')],
     ["/n/1.0", bad('Expected an integer, got "1.0"')],
-    ["/n/%201", bad('Expected an integer, got " 1"')],
+    ["/n/%201", { status: 200, body: { id: 1 } }],
     ["/n/99999999999999999999", bad("Integer out of range: 99999999999999999999")],
   ])("%s", async (path, expected) => {
     expect(await read(path)).toEqual(expected);

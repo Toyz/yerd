@@ -246,3 +246,11 @@ describe("@cookie and Set-Cookie over HTTP", () => {
     expect(r.headers.getSetCookie().join("\n")).not.toContain("evil.com");
   });
 });
+
+describe("serializeCookie with text that can't be encoded", () => {
+  it("refuses a lone surrogate with a TypeError, not a URIError", async () => {
+    const { serializeCookie } = await import("@toyz/yerd");
+    expect(() => serializeCookie("a", "x\uD800y")).toThrow(TypeError);
+    expect(() => serializeCookie("a", "x\uD800y")).toThrow(/isn't well-formed text/);
+  });
+});

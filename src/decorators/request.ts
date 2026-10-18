@@ -468,8 +468,10 @@ const INTEGER = /^-?\d+$/;
  * @param("id", { transform: toInt }) accessor id!: number;
  * ```
  */
-export const toInt: Transform<string, number> = (raw) => {
-  if (!INTEGER.test(raw)) throw new HttpError(400, `Expected an integer, got ${JSON.stringify(raw)}`);
+export const toInt: Transform<string, number> = (input) => {
+  // Trimmed, like toNumber: " 42 " from a form is 42.
+  const raw = input.trim();
+  if (!INTEGER.test(raw)) throw new HttpError(400, `Expected an integer, got ${JSON.stringify(input)}`);
   const n = Number(raw);
   if (!Number.isSafeInteger(n)) throw new HttpError(400, `Integer out of range: ${raw}`);
   return n;
@@ -543,7 +545,7 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export function uuid(version?: number): Validator<string> {
   return (value) => {
     if (!UUID.test(value)) return "Expected a UUID";
-    if (version !== undefined && value[14] !== version.toString(16)) return `Expected a version ${version} UUID`;
+    if (version !== undefined && value[14]!.toLowerCase() !== version.toString(16)) return `Expected a version ${version} UUID`;
     return true;
   };
 }

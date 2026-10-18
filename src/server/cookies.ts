@@ -20,7 +20,7 @@ export function parseCookies(header: string | undefined): Record<string, string>
   return out;
 }
 
-/** Attributes for a Set-Cookie header (ctx.setCookie(), @setCookie, serializeCookie()). */
+/** Attributes for a Set-Cookie header (ctx.setCookie(), serializeCookie()). */
 export interface CookieOptions {
   /** Lifetime in seconds (rounded down). Unset: a session cookie. */
   maxAge?: number;
@@ -61,7 +61,14 @@ function attribute(name: string, value: string): string {
  */
 export function serializeCookie(name: string, value: string, options: CookieOptions = {}): string {
   if (!NAME.test(name)) throw new TypeError(`Invalid cookie name: ${JSON.stringify(name)}`);
-  let cookie = `${name}=${encodeURIComponent(value)}`;
+  let encoded: string;
+  try {
+    encoded = encodeURIComponent(value);
+  } catch {
+    // A lone surrogate (from JSON input, say) can't be encoded as UTF-8.
+    throw new TypeError(`Invalid cookie value for ${name}: it isn't well-formed text`);
+  }
+  let cookie = `${name}=${encoded}`;
   if (options.maxAge !== undefined) {
     // Browsers ignore "Max-Age=NaN", which would quietly make a session cookie.
     if (!Number.isFinite(options.maxAge)) throw new TypeError(`Invalid cookie maxAge: ${options.maxAge}`);

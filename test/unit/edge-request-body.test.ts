@@ -264,10 +264,9 @@ describe("JSON bodies", () => {
     expect(JSON.parse(r.body)).toEqual({ kind: "none" });
   });
 
-  it("a UTF-8 byte order mark is not valid JSON (decoded as is)", async () => {
-    // RFC 8259 lets a parser ignore a BOM; yerd does not strip it. See the report's questions.
+  it("a leading UTF-8 byte order mark is ignored, as RFC 8259 allows", async () => {
     const bom = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('{"a":1}')]);
-    expect(await parsed("application/json", bom)).toEqual({ status: 400, body: "Request body is not valid JSON" });
+    expect(await parsed("application/json", bom)).toEqual({ status: 200, body: { kind: "json", value: { a: 1 } } });
   });
 
   it("invalid UTF-8 inside a string becomes U+FFFD rather than an error", async () => {
