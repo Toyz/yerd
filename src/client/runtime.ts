@@ -216,7 +216,7 @@ export function yerdRuntime(): void {
   /** Morph every Region in `html` into the matching element on the page. Returns how many matched. */
   function apply(html: string): number {
     const doc = new DOMParser().parseFromString(html, "text/html");
-    hoistStyles(doc);
+    hoistStyles(doc.querySelectorAll("style[data-yx-css]"));
     let applied = 0;
     for (const region of Array.from(doc.querySelectorAll("[data-yx-region]"))) {
       const target = region.id ? document.getElementById(region.id) : null;
@@ -231,7 +231,6 @@ export function yerdRuntime(): void {
     return applied;
   }
 
-  // Every navigation bumps `nav`; responses that arrive for an older one are dropped.
   const auto = document.querySelector("script[data-yx-auto]") !== null;
 
   /** Links the runtime navigates itself: same-origin pages, boosted (or anything, in auto mode). */
@@ -249,11 +248,12 @@ export function yerdRuntime(): void {
   /** Morph a whole page in: <body> and the title. */
   function showPage(html: string): void {
     const doc = new DOMParser().parseFromString(html, "text/html");
-    hoistStyles(doc);
+    hoistStyles(doc.querySelectorAll("style[data-yx-css]"));
     morph(document.body, document.importNode(doc.body, true));
     if (doc.title) document.title = doc.title;
   }
 
+  // Every navigation bumps `nav`; responses that arrive for an older one are dropped.
   let nav = 0;
   let navAbort: AbortController | undefined;
   // The path and query the DOM is showing; fragment changes don't count.
@@ -315,6 +315,37 @@ export function yerdRuntime(): void {
     return fetch(url, init);
   }
 
+  /**
+   * Make `html` the page. "push" adds `landed` as a new history entry
+   * (remembering where this one was scrolled, for Back) and scrolls to its
+   * fragment or the top; "restore" scrolls back to where this entry was
+   * (Back/Forward); "keep" stays put (the same page again).
+   */
+  function swapPage(html: string, landed: URL, how: "push" | "restore" | "keep"): void {
+    if (how === "push") {
+      history.replaceState({ ...(history.state as object | null), yx: true, scroll: window.scrollY }, "");
+      history.pushState({ yx: true }, "", landed.href);
+    }
+    page = location.pathname + location.search;
+    showPage(html);
+    if (how === "restore") {
+      const scroll = (history.state as { scroll?: unknown } | null)?.scroll;
+      if (typeof scroll === "number") window.scrollTo(0, scroll);
+    } else if (how === "push") {
+      let id = landed.hash.slice(1);
+      try {
+        id = decodeURIComponent(id);
+      } catch {
+        // not percent-encoded; use it as it is
+      }
+      const anchor = id ? document.getElementById(id) : null;
+      if (anchor) anchor.scrollIntoView();
+      else window.scrollTo(0, 0);
+    }
+    document.querySelector<HTMLElement>("[autofocus]")?.focus();
+    document.dispatchEvent(new CustomEvent("yx:applied", { detail: { regions: -1 } }));
+  }
+
   /** Boosted navigation: fetch a page and morph the whole <body> into it (focus and state survive where elements match). */
   async function load(url: string, push: boolean): Promise<void> {
     const target = new URL(url, location.href);
@@ -341,32 +372,9 @@ export function yerdRuntime(): void {
         location.assign(target.href);
         return;
       }
-      const html = got.text;
       // fetch drops the fragment; keep the one that was asked for.
       if (!landed.hash) landed.hash = target.hash;
-      if (push) {
-        // Remember where this page was scrolled, for Back.
-        history.replaceState({ ...(history.state as object | null), yx: true, scroll: window.scrollY }, "");
-        history.pushState({ yx: true }, "", landed.href);
-      }
-      page = location.pathname + location.search;
-      showPage(html);
-      if (!push) {
-        const scroll = (history.state as { scroll?: unknown } | null)?.scroll;
-        if (typeof scroll === "number") window.scrollTo(0, scroll);
-      } else {
-        let id = landed.hash.slice(1);
-        try {
-          id = decodeURIComponent(id);
-        } catch {
-          // not percent-encoded; use it as it is
-        }
-        const anchor = id ? document.getElementById(id) : null;
-        if (anchor) anchor.scrollIntoView();
-        else window.scrollTo(0, 0);
-      }
-      document.querySelector<HTMLElement>("[autofocus]")?.focus();
-      document.dispatchEvent(new CustomEvent("yx:applied", { detail: { regions: -1 } }));
+      swapPage(got.text, landed, push ? "push" : "restore");
     } catch {
       // A newer navigation aborted this one; it owns the page now.
       if (seq === nav) location.assign(target.href);
@@ -396,11 +404,16 @@ export function yerdRuntime(): void {
         refreshing = undefined;
         if (again) {
           again = false;
-          void refresh();
+          refreshLater();
         }
       }
     })();
     return refreshing;
+  }
+
+  /** refresh() for callers nobody waits on (a live message, a reconnect): a failure (offline) is logged, not thrown. */
+  function refreshLater(): void {
+    refresh().catch((error: unknown) => console.error("[yerd] couldn't refresh the page", error));
   }
 
   /**
@@ -468,10 +481,6 @@ export function yerdRuntime(): void {
     return { message: text, issues: [] };
   }
 
-  async function errorMessage(response: Response): Promise<string> {
-    return (await readFailure(response)).message;
-  }
-
   /**
    * Put each validation issue by its field: in [data-yx-error="<field>"] when
    * the form has one, and the field gets aria-invalid (the first is focused).
@@ -534,6 +543,59 @@ export function yerdRuntime(): void {
     else notify(STALE);
   }
 
+  /**
+   * What an action's response means, for a form and an element action alike:
+   * yx-location navigates there, yx-stale fetches the page fresh, a failure
+   * is shown (by its fields, for a form), and anything else is applied: the
+   * Regions in it, or a refresh when there are none (a 204, or no match).
+   * A plain form (auto mode; `plain` is the URL it posted to) shows whatever
+   * page the server landed on. True once the response's changes are on the page.
+   */
+  async function handleActionResponse(
+    response: Response,
+    { errorBox, form, signal, plain }: { errorBox: HTMLElement | null; form?: HTMLFormElement; signal?: AbortSignal; plain?: URL },
+  ): Promise<boolean> {
+    // A newer run of the same action took over.
+    if (signal?.aborted) return false;
+    // An action can change any page (signing in changes them all): nothing fetched before it is current.
+    prefetched.clear();
+    const location_ = response.headers.get("yx-location");
+    if (location_) {
+      await load(location_, true);
+      return false;
+    }
+    if (response.headers.get("yx-stale")) {
+      await recoverStale(errorBox);
+      return false;
+    }
+    // Whatever page the server answered with, after following its
+    // redirects, is the new page, errors included.
+    if (plain && (response.headers.get("content-type") ?? "").includes("text/html")) {
+      const html = await response.text();
+      const landed = new URL(response.url || plain.href);
+      const moved = landed.pathname + landed.search !== location.pathname + location.search;
+      swapPage(html, landed, moved ? "push" : "keep");
+      return false;
+    }
+    if (!response.ok) {
+      const { message, issues } = await readFailure(response);
+      const rest = form && issues.length ? showIssues(form, issues) : [message];
+      // The box is emptied too when every issue went to a field's own box,
+      // so an earlier submit's message doesn't linger beside the new ones.
+      if (errorBox) errorBox.textContent = rest.join(". ");
+      else if (rest.length) notify(rest.join(". "));
+      return false;
+    }
+    if (errorBox) errorBox.textContent = "";
+    if (response.status === 204) await refresh();
+    else {
+      const text = await response.text();
+      if (signal?.aborted) return false;
+      if (apply(text) === 0) await refresh();
+    }
+    return true;
+  }
+
   async function submit(form: HTMLFormElement, submitter: HTMLElement | null): Promise<void> {
     const question = form.getAttribute("data-yx-confirm");
     if (question && !confirm(question)) return;
@@ -573,47 +635,7 @@ export function yerdRuntime(): void {
     }
     try {
       const response = await fetch(url.href, { method: "POST", body, headers });
-      // An action can change any page (signing in changes them all): nothing fetched before it is current.
-      prefetched.clear();
-      const location_ = response.headers.get("yx-location");
-      if (location_) {
-        await load(location_, true);
-        return;
-      }
-      if (response.headers.get("yx-stale")) {
-        await recoverStale(errorBox);
-        return;
-      }
-      // A plain form (auto mode): whatever page the server answered with,
-      // after following its redirects, is the new page, errors included.
-      if (plain && (response.headers.get("content-type") ?? "").includes("text/html")) {
-        const html = await response.text();
-        const landed = new URL(response.url || url.href);
-        prefetched.clear();
-        if (landed.pathname + landed.search !== location.pathname + location.search) {
-          history.replaceState({ ...(history.state as object | null), yx: true, scroll: window.scrollY }, "");
-          history.pushState({ yx: true }, "", landed.href);
-          page = location.pathname + location.search;
-          window.scrollTo(0, 0);
-        }
-        showPage(html);
-        document.querySelector<HTMLElement>("[autofocus]")?.focus();
-        document.dispatchEvent(new CustomEvent("yx:applied", { detail: { regions: -1 } }));
-        return;
-      }
-      if (!response.ok) {
-        const { message, issues } = await readFailure(response);
-        const rest = issues.length ? showIssues(form, issues) : [message];
-        // The box is emptied too when every issue went to a field's own box,
-        // so an earlier submit's message doesn't linger beside the new ones.
-        if (errorBox) errorBox.textContent = rest.join(". ");
-        else if (rest.length) notify(rest.join(". "));
-        return;
-      }
-      if (errorBox) errorBox.textContent = "";
-      prefetched.clear();
-      if (response.status === 204) await refresh();
-      else if (apply(await response.text()) === 0) await refresh();
+      if (!(await handleActionResponse(response, { errorBox, form, plain: plain ? url : undefined }))) return;
       if (form.hasAttribute("data-yx-reset") && form.isConnected) {
         HTMLFormElement.prototype.reset.call(form);
         form.querySelector<HTMLElement>("[autofocus]")?.focus();
@@ -665,8 +687,6 @@ export function yerdRuntime(): void {
     void load(link.href, true);
   });
 
-  // Back/Forward: only entries this runtime made (or marked), and only when
-  // the page itself changed; fragment moves are left to the browser.
   // Back/Forward can restore a page from the browser's memory as it was when
   // left: before a sign-in, an order, a delete. Fetch it fresh instead.
   window.addEventListener("pageshow", (event) => {
@@ -676,6 +696,8 @@ export function yerdRuntime(): void {
     }
   });
 
+  // Back/Forward: only entries this runtime made (or marked), and only when
+  // the page itself changed; fragment moves are left to the browser.
   window.addEventListener("popstate", (event) => {
     const state = (event as PopStateEvent).state as { yx?: unknown } | null;
     if (!state?.yx || location.pathname + location.search === page) return;
@@ -687,6 +709,24 @@ export function yerdRuntime(): void {
   markEntry();
   window.addEventListener("hashchange", markEntry);
 
+  // Work that follows the page: run once it's parsed, then again after every
+  // change the runtime makes (yx:applied: an apply, a boost, a refresh). One
+  // query finds every hook's elements, rather than one query per hook.
+  type PageHook = { selector: string; run(found: Element[]): void };
+  const hooks: PageHook[] = [];
+  function onPage(selector: string, run: (found: Element[]) => void): void {
+    hooks.push({ selector, run });
+  }
+  function scanPage(): void {
+    const found = hooks.map((): Element[] => []);
+    for (const el of Array.from(document.querySelectorAll(hooks.map((hook) => hook.selector).join(",")))) {
+      hooks.forEach((hook, i) => {
+        if (el.matches(hook.selector)) found[i]!.push(el);
+      });
+    }
+    hooks.forEach((hook, i) => hook.run(found[i]!));
+  }
+
   // Prerendered pages ship skeletons ([data-yx-defer]) for their <Dynamic>
   // parts; fetch the real content in one request and morph it in. This runs
   // after every load and apply, so skeletons a morph brings back (Back, a
@@ -696,10 +736,10 @@ export function yerdRuntime(): void {
   const stuck = new WeakMap<Element, number>();
   let filling = -1;
   let ownFill = false;
-  async function fillDeferred(): Promise<void> {
+  async function fillDeferred(skeletons: Element[]): Promise<void> {
     if (ownFill) return;
     const seq = nav;
-    const parts = Array.from(document.querySelectorAll("[data-yx-defer]")).filter((el) => stuck.get(el) !== seq);
+    const parts = skeletons.filter((el) => stuck.get(el) !== seq);
     if (!parts.length || filling === seq) return;
     filling = seq;
     try {
@@ -720,52 +760,76 @@ export function yerdRuntime(): void {
       if (filling === seq) filling = -1;
     }
   }
-  document.addEventListener("yx:applied", () => void fillDeferred());
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => void fillDeferred());
-  else void fillDeferred();
+  onPage("[data-yx-defer]", (skeletons) => void fillDeferred(skeletons));
 
-  // One EventSource per live URL on the page. Sources whose element is gone
-  // are closed. When a dropped connection comes back the page refreshes, since
-  // messages may have been missed; one the browser gave up on is reopened,
-  // backing off.
-  const live = new Map<string, EventSource>();
-  function liveUrls(): Set<string> {
-    return new Set(Array.from(document.querySelectorAll("[data-yx-live]"), (el) => el.getAttribute("data-yx-live")!));
+  type Stream = { close(): void };
+
+  /**
+   * An EventSource that keeps coming back. The browser retries a dropped
+   * connection itself; one it gave up on (CLOSED: a restarting server, a
+   * refused room) is reopened here, backing off from 1s to 30s, and the
+   * backoff starts over once a connection opens. `reconnected` runs when a
+   * connection opens after one was lost: messages may have been missed.
+   */
+  function stream(url: string, onMessage: (event: MessageEvent<string>) => void, reconnected?: () => void): Stream {
+    let delay = 1000;
+    let lost = false;
+    let closed = false;
+    let source: EventSource;
+    const open = (): void => {
+      const current = (source = new EventSource(url));
+      current.onmessage = onMessage;
+      current.onopen = () => {
+        delay = 1000;
+        if (lost) reconnected?.();
+        lost = false;
+      };
+      current.onerror = () => {
+        lost = true;
+        // CLOSED (2): the browser won't retry this one itself.
+        if (current.readyState !== 2) return;
+        setTimeout(() => {
+          if (!closed && source === current) open();
+        }, delay);
+        delay = Math.min(delay * 2, 30000);
+      };
+    };
+    open();
+    return {
+      close() {
+        closed = true;
+        source.close();
+      },
+    };
   }
-  function openLive(url: string, delay: number, missed: boolean): void {
-    const source = new EventSource(url);
-    source.onmessage = () => {
-      prefetched.clear();
-      void refresh();
-    };
-    source.onopen = () => {
-      if (missed) void refresh();
-      missed = false;
-    };
-    source.onerror = () => {
-      missed = true;
-      // CLOSED (2): the browser won't retry this one itself.
-      if (source.readyState !== 2) return;
-      setTimeout(() => {
-        if (live.get(url) !== source) return;
-        live.delete(url);
-        if (liveUrls().has(url)) openLive(url, Math.min(delay * 2, 30000), true);
-      }, delay);
-    };
-    live.set(url, source);
-  }
-  function connectLive(): void {
-    const urls = liveUrls();
-    for (const [url, source] of live) {
-      if (urls.has(url)) continue;
-      source.close();
-      live.delete(url);
+
+  /** Close the streams no longer wanted and open the ones newly wanted, keeping the rest. */
+  function reconcile(streams: Map<string, Stream>, wanted: Set<string>, open: (url: string) => Stream): void {
+    for (const [url, current] of Array.from(streams)) {
+      if (wanted.has(url)) continue;
+      current.close();
+      streams.delete(url);
     }
-    for (const url of urls) if (!live.has(url)) openLive(url, 1000, false);
+    for (const url of wanted) if (!streams.has(url)) streams.set(url, open(url));
   }
-  document.addEventListener("yx:applied", connectLive);
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", connectLive);
-  else connectLive();
+
+  // One stream per live URL on the page, closed when its elements are gone.
+  // Every message refreshes the page's Regions, and so does a connection
+  // coming back, since messages may have been missed.
+  const live = new Map<string, Stream>();
+  onPage("[data-yx-live]", (found) => {
+    const urls = new Set(found.map((el) => el.getAttribute("data-yx-live")!));
+    reconcile(live, urls, (url) =>
+      stream(
+        url,
+        () => {
+          prefetched.clear();
+          refreshLater();
+        },
+        refreshLater,
+      ),
+    );
+  });
 
   // ── custom attributes ──
   // name -> the client half; element -> its connected attributes' handles.
@@ -1393,28 +1457,7 @@ export function yerdRuntime(): void {
         headers: files ? { yx: "1", accept: "text/html" } : { yx: "1", accept: "text/html", "content-type": "application/x-www-form-urlencoded" },
         signal: run.signal,
       });
-      if (run.signal.aborted) return;
-      prefetched.clear();
-      const location_ = response.headers.get("yx-location");
-      if (location_) {
-        await load(location_, true);
-        return;
-      }
-      if (response.headers.get("yx-stale")) {
-        await recoverStale(null);
-        return;
-      }
-      if (!response.ok) {
-        notify(await errorMessage(response));
-        return;
-      }
-      prefetched.clear();
-      if (response.status === 204) await refresh();
-      else {
-        const text = await response.text();
-        if (run.signal.aborted) return;
-        if (apply(text) === 0) await refresh();
-      }
+      await handleActionResponse(response, { errorBox: null, signal: run.signal });
     } catch (error) {
       if ((error as Error).name === "AbortError") return;
       notify(OFFLINE);
@@ -1454,8 +1497,8 @@ export function yerdRuntime(): void {
   /** Events an action trigger has already answered, so a trigger further up leaves them alone. */
   const triggered = new WeakSet<Event>();
 
-  function initTriggers(): void {
-    for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-yx-trigger]"))) {
+  function initTriggers(found: Element[]): void {
+    for (const el of found as HTMLElement[]) {
       const spec = triggerOf(el)!;
       const [kind = "click", option] = spec.split(" ");
       if (kind === "visible" || kind === "load") {
@@ -1518,19 +1561,18 @@ export function yerdRuntime(): void {
       });
     }
   }
-  document.addEventListener("yx:applied", initTriggers);
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initTriggers);
-  else initTriggers();
+  onPage("[data-yx-trigger]", initTriggers);
 
   // css`` rules arrive in <style data-yx-css> next to the first element that
   // uses them (in an action's response too). Keep one of each, in <head>, so
   // they outlive the element they came with and a morph can't drop them.
   // apply() and showPage() take them out of a response before morphing (some
   // sit outside every Region, before a class on the Region's own element, or
-  // in the new page's <head>, before a class on <body>).
-  function hoistStyles(from: ParentNode | null = document.body): void {
+  // in the new page's <head>, before a class on <body>); the page hook picks
+  // up the rest (the first page, markup put in by hand).
+  function hoistStyles(styles: Iterable<Element>): void {
     const kept = new Set(Array.from(document.head.querySelectorAll("style[data-yx-css]"), (style) => style.getAttribute("data-yx-css")));
-    for (const style of Array.from(from?.querySelectorAll("style[data-yx-css]") ?? [])) {
+    for (const style of Array.from(styles)) {
       const name = style.getAttribute("data-yx-css");
       if (kept.has(name)) style.remove();
       else {
@@ -1539,12 +1581,12 @@ export function yerdRuntime(): void {
       }
     }
   }
-  document.addEventListener("yx:applied", () => hoistStyles());
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => hoistStyles());
-  else hoistStyles();
+  onPage("body style[data-yx-css]", (strays) => {
+    if (strays.length) hoistStyles(strays);
+  });
 
-  function initLocals(): void {
-    for (const el of Array.from(document.querySelectorAll("yerd-local[data-yx-local]"))) {
+  function initLocals(found: Element[]): void {
+    for (const el of found) {
       let scope = scopes.get(el);
       if (!scope) {
         let state: Record<string, unknown>;
@@ -1570,9 +1612,7 @@ export function yerdRuntime(): void {
       applyBindings(scope);
     }
   }
-  document.addEventListener("yx:applied", initLocals);
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initLocals);
-  else initLocals();
+  onPage("yerd-local[data-yx-local]", initLocals);
 
   // ── server clock ──
   // `sync` animations and cues are timed on the server's clock. How far this
@@ -1743,7 +1783,7 @@ export function yerdRuntime(): void {
   // Source + cue id -> when it's over (server time): a reconnect replays what's still running, and each plays once.
   const heard = new Map<string, number>();
   const cueRuns = new WeakMap<Element, number>();
-  const cueSources = new Map<string, EventSource>();
+  const cueSources = new Map<string, Stream>();
   let cueQueued = false;
   const PUBLIC_CUES = "/_yerd/cues?";
   const roomOf = (el: Element): string => el.getAttribute("data-yx-cue-room") || "main";
@@ -1814,28 +1854,6 @@ export function yerdRuntime(): void {
     });
   }
 
-  function openCues(url: string, delay: number): void {
-    const source = new EventSource(url);
-    source.onmessage = (event: MessageEvent<string>) => {
-      try {
-        hear(JSON.parse(event.data) as CueMessage, url);
-      } catch {
-        // Not a cue.
-      }
-    };
-    source.onopen = () => {
-      delay = 1000;
-    };
-    source.onerror = () => {
-      // CLOSED (2): the browser won't retry this one itself (a restarting server, a refused room).
-      if (source.readyState !== 2) return;
-      setTimeout(() => {
-        if (cueSources.get(url) === source) openCues(url, Math.min(delay * 2, 30000));
-      }, delay);
-    };
-    cueSources.set(url, source);
-  }
-
   function connectCues(): void {
     cueQueued = false;
     const urls = new Set<string>();
@@ -1846,13 +1864,16 @@ export function yerdRuntime(): void {
       else rooms.add(roomOf(el));
     }
     if (rooms.size) urls.add(PUBLIC_CUES + Array.from(rooms).sort().map((room) => "room=" + encodeURIComponent(room)).join("&"));
-    for (const [url, source] of Array.from(cueSources)) {
-      if (urls.has(url)) continue;
-      source.close();
-      cueSources.delete(url);
-    }
     if (urls.size) void clockReady();
-    for (const url of urls) if (!cueSources.has(url)) openCues(url, 1000);
+    reconcile(cueSources, urls, (url) =>
+      stream(url, (event) => {
+        try {
+          hear(JSON.parse(event.data) as CueMessage, url);
+        } catch {
+          // Not a cue.
+        }
+      }),
+    );
   }
   function queueCues(): void {
     if (cueQueued) return;
@@ -1877,6 +1898,11 @@ export function yerdRuntime(): void {
       return { update: queueCues, disconnect: queueCues };
     });
   }
+
+  // Everything that follows the page is registered: run it on this page.
+  document.addEventListener("yx:applied", scanPage);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", scanPage);
+  else scanPage();
 }
 
 let source: string | undefined;

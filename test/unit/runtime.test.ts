@@ -427,4 +427,52 @@ describe("live", () => {
     yerd.page.apply('<div id="l" data-yx-region></div>');
     expect(FakeSource.all[1]!.closed).toBe(true);
   });
+
+  it("starts its backoff over once a reopened source connects", async () => {
+    FakeSource.all = [];
+    vi.stubGlobal("EventSource", FakeSource);
+    stubFetch();
+    vi.useFakeTimers();
+    document.body.innerHTML = '<div id="l" data-yx-region><span data-yx-live="/live/c"></span></div>';
+    yerd.page.apply("");
+    const giveUp = () => {
+      const source = FakeSource.all.at(-1)!;
+      source.readyState = 2;
+      source.onerror!();
+    };
+    giveUp();
+    vi.advanceTimersByTime(1000);
+    expect(FakeSource.all).toHaveLength(2);
+    giveUp();
+    vi.advanceTimersByTime(1999);
+    expect(FakeSource.all).toHaveLength(2);
+    vi.advanceTimersByTime(1);
+    expect(FakeSource.all).toHaveLength(3);
+    // This one connects (and refreshes, having missed messages): the next
+    // outage waits 1s again, not 4s, however many restarts came before.
+    FakeSource.all.at(-1)!.onopen!();
+    giveUp();
+    vi.advanceTimersByTime(1000);
+    expect(FakeSource.all).toHaveLength(4);
+    vi.useRealTimers();
+    yerd.page.apply('<div id="l" data-yx-region></div>');
+    expect(FakeSource.all[3]!.closed).toBe(true);
+    await flush();
+  });
+
+  it("logs a refresh the server can't be reached for, instead of rejecting unhandled", async () => {
+    FakeSource.all = [];
+    vi.stubGlobal("EventSource", FakeSource);
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    document.body.innerHTML = '<div id="l" data-yx-region><span data-yx-live="/live/d"></span></div>';
+    yerd.page.apply("");
+    const source = FakeSource.all[0]!;
+    source.onmessage!();
+    source.onerror!();
+    source.onopen!();
+    await flush();
+    expect(log).toHaveBeenCalledWith("[yerd] couldn't refresh the page", expect.any(TypeError));
+    yerd.page.apply('<div id="l" data-yx-region></div>');
+  });
 });
