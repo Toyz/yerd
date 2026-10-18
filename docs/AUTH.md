@@ -298,7 +298,7 @@ what makes `<button formaction={action}>` inside `<form action={other}>` call
 the button's action.
 
 **Signed args aren't authorization.** A token proves the server rendered
-those args, not that this user may act on them: `bind(this.remove, { id })`
+those args, not that this user may act on them: `action={() => this.remove({ id })}`
 still needs the action to check that `this.me` owns `id`. The todo example
 does this by scoping every query to the signed-in user.
 

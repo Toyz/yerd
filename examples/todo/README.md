@@ -72,7 +72,7 @@ with `resolve(TodoRepo)`.
 
 ## Reactivity
 
-- **Actions:** `<form action={this.add}>` and `bind(this.toggle, { id })` call
+- **Actions:** `<form action={this.add}>` and `<form action={() => actions.toggle({ id })}>` call
   route methods. Without JS: POST, then redirect back. With JS: the action
   returns `<Region>`s (list, toolbar, header count) that are morphed into the page.
 - **Boosted links:** filters and nav fetch the next page and morph it in, with history.

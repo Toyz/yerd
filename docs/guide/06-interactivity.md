@@ -92,6 +92,8 @@ function Counter({ count }: { count: number }) {
 }
 ```
 
+`<Region append>` in a response adds its children to the Region on the page instead of replacing them, and `prepend` puts them first: see [infinite scroll](#infinite-scroll).
+
 Updates are morphed into the page rather than swapped: elements are matched by `id` or `key`, so focus, scroll position, an open `<details>` and whatever the user is typing all survive. Return several Regions (in a fragment) and they all update in one round trip.
 
 ## What an action returns
@@ -107,10 +109,10 @@ Returning nothing is the easy default: every Region on the page refreshes. Retur
 
 ## Actions with arguments
 
-To pass data like an id, use [Form](api:yerd.Form) with `args`. The arguments travel inside the signed token, so a visitor can't change them, and TypeScript checks them against the action's first parameter: a wrong or missing field doesn't compile.
+To pass data like an id, write the call: `action={() => this.remove({ id })}`. It's an ordinary method call, so TypeScript checks the arguments like any other.
 
 ```tsx
-import { Form, Region, action, get, route, type Action } from "@toyz/yerd";
+import { Region, action, get, route, type Action } from "@toyz/yerd";
 
 const items = [{ id: 1, title: "Milk" }, { id: 2, title: "Eggs" }];
 
@@ -118,9 +120,9 @@ function Item({ item, remove }: { item: { id: number; title: string }; remove: A
   return (
     <li>
       {item.title}
-      <Form action={remove} args={{ id: item.id }}>
+      <form action={() => remove({ id: item.id })}>
         <button>Delete</button>
-      </Form>
+      </form>
     </li>
   );
 }
@@ -137,30 +139,125 @@ export class List {
 }
 ```
 
-Pass actions down to components typed as [Action](api:yerd.Action)`<Args>`. The signature proves the request came from a form you rendered; it does not prove the user may touch that id, so still check ownership in the action.
+The lambda runs while the page renders, but the action doesn't. yerd records which action it called and with what, and signs that into the form's token, so a visitor can't change the id. The signature proves the request came from a page you rendered. It doesn't prove the user may touch that id, so still check ownership in the action.
 
-`<Form>` renders a plain `<form>` and takes every other form attribute (`class`, `data-yx-confirm`, `enctype`, ...). It's shorthand for `<form action={bind(remove, { id })}>`: [bind](api:yerd.bind) is the same thing as a value, for the places a component doesn't fit, like a submit button's `formaction` below.
+- An action that takes no arguments can be passed as is: `action={this.add}`. One that takes arguments must be called; `action={this.remove}` doesn't compile.
+- Pass actions down to components typed as [Action](api:yerd.Action)`<Args>` and call them the same way.
+- An action that reads the form takes it from the lambda: `action={({ form }) => this.rename({ id }, form)}`.
+- [bind](api:yerd.bind)`(this.remove, { id })` is the same thing as a value, if you'd rather build it outside JSX.
+
+### What the lambda gets
+
+The lambda's one parameter has four things; take the ones you need.
+
+| | Is | Read |
+|---|---|---|
+| `el` | the element the action is on (the form, for a form) | when the action fires, in the browser |
+| `ref(selector)` | another element on the page, by CSS selector | when the action fires, in the browser |
+| `ctx` | the request rendering the page: params, query, session | now, on the server |
+| `form` | a stand-in to pass to actions that take a form | |
+
+```tsx
+<input action={({ el }) => this.search({ q: el.value })} trigger="input 250ms" />
+<button action={({ ref }) => this.move({ id, to: ref("#column").value })}>Move</button>
+<div action={({ ctx }) => this.more({ page: Number(ctx.query.get("page") ?? 1) + 1 })} trigger="visible" />
+```
+
+`el` and `ref()` offer `value`, `valueAsNumber`, `checked`, `selectedIndex`, `open`, `disabled`, `textContent`, `id`, `name`, `scrollTop`, `scrollLeft` and `dataset.*`. Their values don't exist yet when the page renders: the browser reads them when the action fires and sends them along. So pass them straight into the arguments. `el.value.trim()` or `` `${el.value}!` `` throws while rendering, with a message saying so. Do that work in the action instead.
+
+> [!NOTE]
+> Where `el` / `ref()` values go is signed: they can only fill the spots you put them in. What they contain comes from the browser, like any form field, so validate them. They arrive typed: `checked`, `open` and `disabled` as booleans, the numeric ones as numbers, the rest as strings. They need the client runtime; a plain form post can't fill them and gets a 400.
 
 ## Where actions work
 
-An action is a form submission, so it goes on the two things that submit one:
+`action` goes on any element, and `trigger` says when it fires.
 
-| Where | Use it for |
+| Where | Fires | Without JavaScript |
+|---|---|---|
+| `<form action={...}>` | on submit; the fields arrive as `ActionForm` | works: a normal POST |
+| `<button formaction={...}>` | when that button submits its form ("Save" and "Delete" side by side) | works |
+| `<form action={...} trigger="...">` | on submit, and also on the trigger (search as you type) | works on submit |
+| any element, `action={...}` | on `trigger`, default `"click"` | doesn't fire |
+
+Forms are still the default for anything that must work everywhere: a form posts with JavaScript off, so it works before (and without) the runtime. Everything else is the runtime posting the action for you, with the same token and the same responses: Regions morph in, a redirect navigates, nothing refreshes the page's Regions.
+
+### Triggers
+
+| `trigger` | Fires |
 |---|---|
-| `<form action={this.save}>` / `<Form action={this.remove} args={{ id }}>` | the usual case: the form's fields arrive as `ActionForm` |
-| `<button formaction={bind(this.remove, { id })}>` | a second action from the same form ("Save" and "Delete" side by side) |
+| `"click"` (default) | on click |
+| any DOM event: `"change"`, `"keyup"`, `"focusout"`, `"dblclick"`, a custom one... | when the element (or something inside it) fires it |
+| `"input 250ms"` | after the events stop for that long (debounced) |
+| `"keydown:Enter"` | only for that key |
+| `"visible"` | when the element scrolls into view (200px early), once per render |
+| `"load"` | as soon as the page has it, once per render |
+| `"every 5s"` | on a timer, while it's on the page and the tab is visible |
 
-That's deliberate: a form posts with JavaScript off, so every action works before (and without) the runtime. With the runtime, the same form is sent with `fetch` and the result morphed in. A button is just a one-button form; no fields needed:
+A newer run cancels an older one still in flight, so a typeahead never shows stale results. "Once per render" means a `visible` or `load` element fires again only when a response gives it a new action, which is how infinite scroll keeps going.
+
+### Typeahead
 
 ```tsx
-<Form action={this.archive} args={{ id }}><button>Archive</button></Form>
+@route("/people")
+export class People {
+  @get page() {
+    return (
+      <main>
+        <input type="search" placeholder="Search" action={({ el }) => this.search({ q: el.value })} trigger="input 200ms" />
+        <Region id="results" as="ul" />
+      </main>
+    );
+  }
+
+  @action search({ q }: { q: string }) {
+    const hits = q.trim() ? directory.filter((p) => p.name.toLowerCase().includes(q.trim().toLowerCase())) : [];
+    return <Region id="results" as="ul">{hits.map((p) => <li key={p.id}>{p.name}</li>)}</Region>;
+  }
+}
 ```
 
-For things that aren't a click on a submit button:
+### Infinite scroll
 
-- **On change** (a checkbox, a select): put `data-yx-submit` on the field and the runtime submits its form when it changes. Keep a submit button for JavaScript-off visitors.
-- **From your own script**: call `requestSubmit()` on a rendered action form; the runtime sends it like any other.
-- **No server at all**: use [Local](#local-state-no-server-at-all) state instead of an action.
+A `<Region append>` in a response adds its children to the end of the Region on the page instead of replacing them (`prepend` adds them first, for newest-on-top feeds). Children with an id or key that's already there are updated in place. Put a sentinel at the bottom that loads the next page when it scrolls into view, and send back a new sentinel each time:
+
+```tsx
+function More({ page, load }: { page: number; load: Action<{ page: number }> }) {
+  return (
+    <Region id="more">
+      {page <= LAST_PAGE ? (
+        <form action={() => load({ page })} trigger="visible">
+          <button>Load more</button>
+        </form>
+      ) : null}
+    </Region>
+  );
+}
+
+@route("/feed")
+export class Feed {
+  @get page() {
+    return (
+      <main>
+        <Region id="posts" as="ul">{posts(1).map((p) => <li key={p.id}>{p.title}</li>)}</Region>
+        <More page={2} load={this.more} />
+      </main>
+    );
+  }
+
+  @action more({ page }: { page: number }) {
+    return (
+      <>
+        <Region id="posts" as="ul" append>{posts(page).map((p) => <li key={p.id}>{p.title}</li>)}</Region>
+        <More page={page + 1} load={this.more} />
+      </>
+    );
+  }
+}
+```
+
+The sentinel is a form with a button, so without JavaScript it's a "Load more" button that works too.
+
+For things the triggers don't cover, `data-yx-submit` on a checkbox or select submits its form on change, `requestSubmit()` on a rendered action form sends it from your own script, and [Local](#local-state-no-server-at-all) state handles what never needs the server.
 
 ## Reading the form
 
@@ -222,7 +319,7 @@ Throw an [HttpError](api:yerd.HttpError) (or let `parse()` throw one) and, with 
 <form action={this.save}>
   <input name="title" />
   <button>Save</button>
-  <button formaction={bind(this.remove, { id: note.id })}>Delete</button>
+  <button formaction={() => this.remove({ id: note.id })}>Delete</button>
 </form>
 ```
 

@@ -1,4 +1,4 @@
-import { Form, Region, type Action, type ActionForm } from "@toyz/yerd";
+import { Region, type Action, type ActionForm } from "@toyz/yerd";
 import { Ago } from "./attributes.js";
 import type { Filter, Todo } from "./todos.js";
 
@@ -21,11 +21,11 @@ function TodoItem({ todo, actions }: { todo: Todo; actions: ListActions }) {
   return (
     <li key={todo.id} class={["todo", { done: todo.done }]}>
       {/* A real submit button, so toggling works without JavaScript too. */}
-      <Form action={actions.toggle} args={{ id: todo.id }}>
+      <form action={() => actions.toggle({ id: todo.id })}>
         <button class="check" aria-pressed={todo.done ? "true" : "false"} aria-label={todo.done ? `Mark "${todo.title}" as not done` : `Mark "${todo.title}" as done`}>
           ✓
         </button>
-      </Form>
+      </form>
       <div class="todo-main">
         <a class="todo-title" href={`/todos/${todo.id}`} data-yx-boost prefetch>{todo.title}</a>
         <span class="todo-sub">
@@ -40,16 +40,16 @@ function TodoItem({ todo, actions }: { todo: Todo; actions: ListActions }) {
           <span class="when-closed">Rename</span>
           <span class="when-open">Cancel</span>
         </summary>
-        <Form class="edit-form" action={actions.rename} args={{ id: todo.id }}>
+        <form class="edit-form" action={({ form }) => actions.rename({ id: todo.id }, form)}>
           <label class="visually-hidden" for={`title-${todo.id}`}>New title</label>
           <input class="input" id={`title-${todo.id}`} name="title" value={todo.title} required maxlength="140" />
           <button class="btn">Save</button>
           <span class="form-error" data-yx-error></span>
-        </Form>
+        </form>
       </details>
-      <Form action={actions.remove} args={{ id: todo.id }}>
+      <form action={() => actions.remove({ id: todo.id })}>
         <button class="btn btn-ghost btn-danger" aria-label={`Delete "${todo.title}"`}>Delete</button>
-      </Form>
+      </form>
     </li>
   );
 }
