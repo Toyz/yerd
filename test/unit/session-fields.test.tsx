@@ -281,3 +281,38 @@ describe("MemoryStore under the dev server", () => {
     expect(new MemoryStore({ name: "prod-test" }).get("id1")).toBeUndefined();
   });
 });
+
+@route("/whoami-page")
+class WhoAmIPage {
+  @session accessor session!: Session<{ name?: string }>;
+  @get page() {
+    return <p>{this.session.name ?? "guest"}</p>;
+  }
+}
+
+@route("/whoami-page/login")
+class WhoAmILogin {
+  @session accessor session!: Session<{ name?: string }>;
+  @post go() {
+    this.session.name = "ada";
+    return 204;
+  }
+}
+
+describe("pages for someone with a session", () => {
+  let server: RunningServer;
+  beforeAll(async () => {
+    server = await yerd({ routes: [WhoAmIPage, WhoAmILogin], services: [], handleSignals: false, secret: SECRET }).sessions().listen(0, "127.0.0.1");
+  });
+  afterAll(() => server.close());
+
+  it("aren't cacheable by shared caches or Back", async () => {
+    const c = client(server.url);
+    const before = await c.fetch("/whoami-page");
+    expect(before.headers.get("cache-control")).toBeNull();
+    await c.fetch("/whoami-page/login", { method: "POST" });
+    const after = await c.fetch("/whoami-page");
+    expect(await after.text()).toContain("ada");
+    expect(after.headers.get("cache-control")).toBe("private, no-cache");
+  });
+});

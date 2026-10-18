@@ -113,6 +113,8 @@ export class Theme {
 | `destroy()` | drop the session and its cookie; setting a value afterwards starts a fresh one |
 | `isNew`, `createdAt` | whether the request arrived without a session; when it was created |
 
+HTML pages sent to someone with a session get `Cache-Control: private, no-cache` (unless the handler set its own), so a shared cache or the browser's Back button can't show a signed-in page to the wrong person, or a signed-out page after signing in.
+
 Changes are saved after the handler runs, including ones made in place. A request that changed nothing sends no cookie (unless a rolling session is due for a refresh).
 
 > [!NOTE]

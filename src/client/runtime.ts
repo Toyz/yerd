@@ -541,6 +541,8 @@ export function yerdRuntime(): void {
     }
     try {
       const response = await fetch(url.href, { method: "POST", body, headers });
+      // An action can change any page (signing in changes them all): nothing fetched before it is current.
+      prefetched.clear();
       const location_ = response.headers.get("yx-location");
       if (location_) {
         await load(location_, true);
@@ -634,6 +636,15 @@ export function yerdRuntime(): void {
 
   // Back/Forward: only entries this runtime made (or marked), and only when
   // the page itself changed; fragment moves are left to the browser.
+  // Back/Forward can restore a page from the browser's memory as it was when
+  // left: before a sign-in, an order, a delete. Fetch it fresh instead.
+  window.addEventListener("pageshow", (event) => {
+    if ((event as PageTransitionEvent).persisted) {
+      prefetched.clear();
+      void load(location.href, false);
+    }
+  });
+
   window.addEventListener("popstate", (event) => {
     const state = (event as PopStateEvent).state as { yx?: unknown } | null;
     if (!state?.yx || location.pathname + location.search === page) return;
@@ -1312,6 +1323,7 @@ export function yerdRuntime(): void {
         signal: run.signal,
       });
       if (run.signal.aborted) return;
+      prefetched.clear();
       const location_ = response.headers.get("yx-location");
       if (location_) {
         await load(location_, true);

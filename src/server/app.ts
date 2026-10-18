@@ -1047,6 +1047,16 @@ export class YerdApp {
           out = errorResponse(error);
         }
       }
+      // A page for someone with a session shows their state (signed in, a cart):
+      // a shared cache, or Back from the browser's HTTP cache, mustn't replay it.
+      if (
+        context.loadedSession &&
+        (context.loadedSession.payload !== undefined || (out.cookies?.length ?? 0) > 0) &&
+        out.headers["cache-control"] === undefined &&
+        (out.headers["content-type"] ?? "").startsWith("text/html")
+      ) {
+        out.headers["cache-control"] = "private, no-cache";
+      }
       // Only streams need the abort signal (client gone, shutdown); plain bodies skip creating one.
       const streaming = out.body !== null && typeof out.body !== "string" && !(out.body instanceof Uint8Array);
       const longLived = out.headers[LONG_LIVED] !== undefined;

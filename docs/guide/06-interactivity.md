@@ -521,7 +521,7 @@ The `prefetch` prop warms the next page before the click.
 <section prefetch={{ url: "/api/stats", as: "json", on: "visible" }}>...</section>
 ```
 
-Boosted links use the runtime's own cache (entries live 15 seconds and are used once). Ordinary links get a `<link rel="prefetch">`. A JSON prefetch is served to `window.yerd.fetch(url)` from client code.
+Boosted links use the runtime's own cache (entries live 15 seconds and are used once). Ordinary links get a `<link rel="prefetch">`. A JSON prefetch is served to `window.yerd.fetch(url)` from client code. Every action empties the cache, so a page warmed before signing in (or before any change) is never shown after it. A page the browser restores from its back/forward memory is fetched again too.
 
 > [!WARNING]
 > Prefetches are real GET requests, sent before anyone clicks. GET handlers must not change anything. Prefetch requests carry a `yx-prefetch: 1` header if you need to tell them apart.

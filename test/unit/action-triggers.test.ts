@@ -405,5 +405,39 @@ describe("element actions", () => {
       expect(document.querySelector('[data-yx-error="title"]')!.textContent).toBe("");
       expect(document.querySelector("[name=title]")!.hasAttribute("aria-invalid")).toBe(false);
     });
+
+  });
+
+  describe("staleness", () => {
+    it("an action's redirect never lands on a page prefetched before it (signing in)", async () => {
+      const gets: string[] = [];
+      let signedIn = false;
+      vi.stubGlobal("fetch", vi.fn(async (url: string | URL, init: RequestInit = {}) => {
+        if (init.method === "POST") {
+          signedIn = true;
+          return new Response(null, { status: 200, headers: { "yx-location": "/home" } });
+        }
+        gets.push(String(url));
+        return html(`<html><head><title>t</title></head><body><nav id="who">${signedIn ? "ada" : "guest"}</nav></body></html>`);
+      }));
+      show(`<nav id="who">guest</nav><form id="f" action="/login" method="post" data-yx><button>Sign in</button></form>`);
+      (window as unknown as { yerd: { prefetch(url: string): void } }).yerd.prefetch("/home");
+      await flush();
+      document.querySelector<HTMLButtonElement>("#f button")!.click();
+      await flush();
+      expect(gets).toHaveLength(2);
+      expect(document.getElementById("who")!.textContent).toBe("ada");
+    });
+
+    it("a page restored by Back/Forward from the browser's memory is fetched fresh", async () => {
+      const fetch = stubFetch(() => html(`<html><head><title>t</title></head><body><nav id="who">fresh</nav></body></html>`));
+      show(`<nav id="who">stale</nav>`);
+      const event = new Event("pageshow");
+      Object.defineProperty(event, "persisted", { value: true });
+      window.dispatchEvent(event);
+      await flush();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(document.getElementById("who")!.textContent).toBe("fresh");
+    });
   });
 });
