@@ -1,6 +1,6 @@
 # Testing
 
-Testing with vitest: requests through the whole app with no server, sessions and action forms, events, fake services, and unit tests for services, guards and DTOs.
+The shop's suite walks every flow in these guides, sign-in and checkout included, in well under a second and with no port open. It's [`test/unit/shop-example.test.tsx`](https://github.com/Toyz/yerd/blob/main/test/unit/shop-example.test.tsx); this guide is a tour of it.
 
 ## Set up vitest
 
@@ -22,255 +22,229 @@ export default defineConfig({
 
 Use [yerdDecorators](api:vite.yerdDecorators), not the full `yerd()` plugin: tests don't need the dev server or the build.
 
+## The app under test
+
+The test builds the same app `main.ts` serves, from `createApp()`, with the routes it needs:
+
+```ts
+// test/shop.test.tsx
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { Events, ILogger, type LogRecord } from "@toyz/yerd";
+import { createApp } from "../src/app.js";
+import "../src/routes/products.js";
+import "../src/routes/cart.js";
+// ...checkout, auth, api
+
+const logs: LogRecord[] = [];
+const app = createApp({ handleSignals: false })
+  .services((s) => s.value(ILogger, { write: (record) => logs.push(record) }))
+  .logging({ filter: "info" });
+
+beforeAll(() => app.boot());
+afterAll(() => app.stop());
+```
+
+```text
+ Test Files  1 passed (1)
+      Tests  22 passed (22)
+   Duration  417ms (tests 60%, transform 22%, import 17%, worker 1%)
+```
+
+- `handleSignals: false` leaves Ctrl-C to vitest. `app.boot()` runs `@onBoot` hooks (the demo account's password is hashed there) and throws a `BootError` listing every wiring problem, so it's a test in itself.
+- Importing a route registers it; `yerd({ routes: [...], services: [...] })` takes only those classes instead. Vitest gives each file its own module graph, so nothing leaks between files.
+- Without `boot()`, the first request starts the app (timers, hosted services too); `stop()` it either way.
+- The logger lines are [below](#capturing-logs).
+
 ## No server at all: app.request()
 
-[app.request()](api:yerd.YerdApp/request) sends a request through the whole pipeline (middleware, sessions, guards, actions, error pages, streaming) in-process and returns a fetch `Response`. No port.
+[app.request()](api:yerd.YerdApp/request) sends a request through the whole pipeline (middleware, sessions, guards, actions, error pages, streaming) and returns a fetch `Response`.
 
 ```ts
-import { afterAll, expect, it } from "vitest";
-import { yerd } from "@toyz/yerd";
-import { Todos } from "../src/routes/todos.js";
+it("is a 404 for an unknown id: the error page for browsers, JSON for the rest", async () => {
+  const html = await app.request("/products/99", { headers: { accept: "text/html" } });
+  expect(html.status).toBe(404);
+  expect(await html.text()).toContain("Not on the shelves");
 
-const app = yerd({ routes: [Todos], services: [], handleSignals: false });
-afterAll(() => app.stop());
-
-it("adds a todo", async () => {
-  const res = await app.request("/todos", {
-    method: "POST",
-    body: JSON.stringify({ title: "milk" }),
-    headers: { "content-type": "application/json" },
-  });
-  expect(res.status).toBe(201);
-  expect(await (await app.request("/todos")).json()).toEqual({ todos: ["milk"] });
+  const json = await app.request("/products/99");
+  expect(json.status).toBe(404);
+  expect(await json.json()).toEqual({ error: "No product 99", code: "not_found", id: 99 });
 });
 ```
 
-- Paths resolve against `http://localhost`; pass a full URL for another host, or `https://...` to test TLS behaviour (`__Host-` cookies, `Secure`).
-- The response resolves once headers are written, so SSE and NDJSON can be read as they arrive. `reader.cancel()` is the client hanging up: the route's signal fires.
-- The first request starts the app (`@onBoot`, `@every`, hosted services), so `app.stop()` it afterwards.
-- `routes` and `services` limit the app to those classes; otherwise it picks up every decorated class the test imported.
-- [app.fetch(request)](api:yerd.YerdApp/fetch) takes a `Request` you built, and doubles as a handler for fetch-style runtimes.
+- Paths resolve against `http://localhost`. Pass a full `https://...` URL to test `Secure` and `__Host-` cookies.
+- The response resolves once headers are written, so SSE and NDJSON can be read as they arrive; `reader.cancel()` is the client hanging up. The shop reads its stock feed this way.
+- [app.fetch(request)](api:yerd.YerdApp/fetch) takes a `Request` you built.
 
-### A client that keeps cookies
+## Cookies and actions: app.client()
 
-[app.client()](api:yerd.YerdApp/client) is a small test browser: it keeps cookies, sends a same-origin `Origin` on writes, and can submit the action forms a page rendered.
+[app.client()](api:yerd.YerdApp/client) is a small test browser: it keeps cookies, sends a same-origin `Origin` on writes, and submits the action forms a page rendered.
 
 ```ts
-const client = app.client();
-await client.action("/login", { name: "ada", password: "hunter22" }); // the page's form, its token, your fields
-expect(await client.page("/account")).toContain("Signed in as ada");
-
-await client.request("/logout", { method: "POST" });
-expect(client.cookies.has("yerd_session")).toBe(false);
-```
-
-`client.action(page, fields, { index, to, script })` fetches `page`, takes its first action token (or the `index`-th), and posts it with your fields. By default it posts like the runtime (`yx` header: no redirects, JSON errors); `script: false` posts like a plain form.
-
-## A real server
-
-For tests about the network itself (keep-alive, a proxy, Playwright), listen on a free port.
-
-```ts
-import { afterAll, beforeAll, expect, it } from "vitest";
-import { yerd, type RunningServer } from "@toyz/yerd";
-import { Hello } from "../src/routes/hello.js";
-
-let server: RunningServer;
-beforeAll(async () => {
-  server = await yerd({ routes: [Hello], services: [], handleSignals: false }).listen(0, "127.0.0.1");
-});
-afterAll(() => server.close());
-
-it("says hello", async () => {
-  const res = await fetch(server.url + "/hello");
-  expect(res.status).toBe(200);
-  expect(await res.json()).toEqual({ hello: "world" });
-});
-```
-
-- `listen(0, "127.0.0.1")` picks a free port; `server.url` has it.
-- `handleSignals: false` leaves Ctrl-C to vitest.
-- `server.close()` runs the full shutdown.
-
-## Boot checks are tests too
-
-Captive dependencies, unknown guards and missing services fail at boot, so one test catches them all.
-
-```ts
-import { it } from "vitest";
-import { app } from "../src/app.js";
-
-it("boots", async () => {
-  await app.boot(); // throws a BootError listing every problem
-});
-```
-
-## Sessions and action forms
-
-Action tokens are bound to their session, so fetch the page and post its form with the same client:
-
-```ts
-import { afterAll, expect, it } from "vitest";
-import { yerd } from "@toyz/yerd";
-import { SignupPage } from "../src/routes/signup.js";
-
-const app = yerd({ routes: [SignupPage], services: [], handleSignals: false }).sessions();
-afterAll(() => app.stop());
-
-it("signs up", async () => {
+it("changes a quantity, validates it, and removes a line", async () => {
   const client = app.client();
-  const res = await client.action("/signup", { name: "ada", email: "ada@example.com", age: "36" });
-  expect(res.headers.get("yx-location")).toBe("/welcome");
-});
+  await client.action("/products/7", {});
 
-it("says what's wrong, by field", async () => {
-  const res = await app.client().action("/signup", { name: "a", email: "nope", age: "7" });
-  expect(res.status).toBe(400);
-  expect(await res.json()).toMatchObject({ issues: [{ path: "name" }, { path: "email" }, { path: "age" }] });
-});
+  const changed = await client.action("/cart", { qty: "3" }); // the first action on /cart: the quantity form
+  expect(await changed.text()).toContain('<span class="badge">3</span>');
 
-it("works without JavaScript too", async () => {
-  const client = app.client();
-  const res = await client.action("/signup", { name: "a", email: "nope", age: "7" }, { script: false });
-  expect(res.status).toBe(303); // back to the form
-  expect(await client.page("/signup")).toContain("Must be 2 to 40 characters");
+  const bad = await client.action("/cart", { qty: "-1" });
+  expect(bad.status).toBe(400);
+  expect(await bad.json()).toMatchObject({ issues: [{ path: "qty", message: "Must be from 0 to 99 (got -1)" }] });
+
+  const removed = await client.action("/cart", {}, { index: 1 }); // the remove button
+  expect(await removed.text()).toContain("Your cart is empty.");
 });
 ```
 
-| | Like the runtime (default) | `script: false`, like a plain form |
+`client.action(page, fields, { index, to, script })` fetches `page`, takes its first action token (or the `index`-th, counting forms and other elements in page order), and posts it with your fields. Signed-in flows reuse one client:
+
+```ts
+/** A client with one Field notebook (id 7) in the cart, signed in as the demo account. */
+async function shopperWithNotebook() {
+  const client = app.client();
+  await client.action("/products/7", {});
+  await client.action("/login?next=/checkout", DEMO_ACCOUNT);
+  return client;
+}
+```
+
+By default it posts like the runtime (a `yx` header); `script: false` posts like a plain form:
+
+| | Like the runtime (default) | `script: false` |
 | --- | --- | --- |
 | returns nothing | 204 | 303 back to the page |
 | returns JSX | 200, the JSX without layouts | 303 back to the page |
 | returns `redirect(url)` | 200 with a `yx-location` header | 303 to `url` |
 | throws a validation error | 400, JSON `{ error, issues }` | your error page (or the flash-and-redirect you wrote) |
 
-- A token rendered for one client and posted by another is a 403; worth a test of its own.
-- For pages behind `auth.required`, sign in once with `client.action("/login", {...})` and keep using that client.
+- Tokens are bound to the session, so a token from one client posted by another is a 403 ([action tokens](15-security.md#action-tokens)); worth a test of its own.
+- Values a lambda reads in the browser (`el.value`, `drag.data("id")`) travel as `_yxh0`, `_yxh1`, ... in first-read order: `client.action("/people", { _yxh0: "ada" })`. Without them the action answers 400.
 
-### Actions on other elements, and browser values
+## Events.waitFor()
 
-`client.action()` counts every action on the page, forms and other elements, in page order. Values a lambda reads in the browser (`el.value`, `ref("#x").checked`, `drag.data("id")`) travel as `_yxh0`, `_yxh1`, ... in first-read order, so pass them as fields:
+Checkout announces `OrderPlaced`. Start waiting before the request that emits it:
 
 ```ts
-it("searches as you type", async () => {
-  const res = await app.client().action("/people", { _yxh0: "ada" }); // the search input's el.value
-  expect(await res.text()).toContain("Ada Lovelace");
+it("places the order, announces it, takes the stock and empties the cart", async () => {
+  const client = await shopperWithNotebook();
+  const placed = app.container.get(Events).waitFor(OrderPlaced, { where: (e) => e.email === "ada@example.com", timeout: "2s" });
+
+  const res = await client.action("/checkout", { name: "Ada Lovelace", email: "ada@example.com", address: "12 St James's Square, London" });
+  expect(res.headers.get("yx-location")).toMatch(/^\/orders\/\d+$/);
+  expect((await placed).total).toBe(2400);
+  // ...the receipt page, the stock, the empty cart
 });
 ```
 
-Without them the action answers 400.
-
-## Testing events
-
-Create an `Events.waitFor()` before the request that emits; see [testing events](14-events.md#testing-events).
+More in [testing events](14-events.md#testing-events).
 
 ## Faking services
 
-`app.services()` registrations override `@service` ones for the same key:
+`app.services()` registrations win over `@service` ones for the same key. Empty shelves, to see the page say so:
 
 ```ts
-import { yerd } from "@toyz/yerd";
-import { Mailer, SmtpMailer } from "../src/mail.js";
-import { Signup } from "../src/routes/signup.js";
+/** Shelves with nothing on them. */
+class EmptyCatalog extends Catalog {
+  override search(): Product[] {
+    return [];
+  }
+}
 
-const sent: string[] = [];
-const fakeMailer: Mailer = {
-  async send(to) {
-    sent.push(to);
-  },
-};
+const app = createApp({ handleSignals: false }).services((s) => s.singleton(Catalog, EmptyCatalog));
 
-const app = yerd({ routes: [Signup], services: [SmtpMailer], handleSignals: false })
-  .sessions()
-  .services((s) => s.value(Mailer, fakeMailer));
-```
-
-It works for class keys too: `s.value(TodoRepo, new InMemoryTodoRepo())`, if the fake has the same shape.
-
-## Testing services directly
-
-[`app.scope()`](08-services.md#scripts-appscope) runs a function in a fresh request scope, so you can `resolve()` anything without HTTP.
-
-```ts
-import { expect, it } from "vitest";
-import { resolve, yerd } from "@toyz/yerd";
-
-it("keeps one basket per scope", async () => {
-  const app = yerd({ routes: [], services: [Basket], handleSignals: false });
-  const items = await app.scope(() => {
-    resolve(Basket).items.push("socks");
-    return resolve(Basket).items;
-  });
-  expect(items).toEqual(["socks"]);
-  await app.stop();
+it("says so when the shelves are empty", async () => {
+  const html = await (await app.request("/?q=pen", { headers: { accept: "text/html" } })).text();
+  expect(html).toContain("Nothing matches &quot;pen&quot;.");
 });
 ```
+
+```answer
+GET /?q=pen
+200 OK
+content-type: text/html; charset=utf-8
+
+<!doctype html><!-- ... --><main><form class="search" method="get" role="search"><!-- ... --></form><nav class="categories" aria-label="Categories"><!-- ... --></nav><p class="empty">Nothing matches &quot;pen&quot;.</p></main></body></html>
+```
+
+- `s.value(Mailer, fakeMailer)` registers a ready object; `s.singleton(Key, Impl)` a class built on first use.
+- A fake needs the same shape as the real one; extending it is the short way.
 
 ## Capturing logs
 
-Register an [ILogger](api:yerd.ILogger) that collects records. Under vitest the default level is `warn`, so set a filter.
+The shop registers an [ILogger](api:yerd.ILogger) that collects records (under vitest the default level is `warn`, hence the filter). The receipt is written after the response, so the test waits for it:
 
 ```ts
-import { expect, it } from "vitest";
-import { ILogger, yerd, type LogRecord } from "@toyz/yerd";
-
-const records: LogRecord[] = [];
-
-const app = yerd({ routes: [Hello], services: [], handleSignals: false })
-  .services((s) => s.value(ILogger, { write: (r) => records.push(r) }))
-  .logging({ filter: "info" });
-
-it("logs an access line", async () => {
-  const res = await app.request("/hello");
-  await new Promise((r) => setTimeout(r, 5)); // the access line is written after the response
-  const access = records.find((r) => r.target === "yerd::request" && r.kind === "span-exit");
-  expect(access?.fields).toEqual({ status: 200 });
-  expect(res.headers.get("x-request-id")).toBe(access?.spans[0]?.id);
-});
+const receiptSent = () => logs.find((r) => r.target === "Receipts" && r.fields?.order === event.orderId);
+for (let i = 0; i < 100 && !receiptSent(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+expect(receiptSent()?.fields).toMatchObject({ order: event.orderId, to: "ada@example.com", total: "$24.00" });
 ```
 
 See [logging](10-logging.md) for what's in a [LogRecord](api:yerd.LogRecord).
 
-## Guards and DTOs, no server
+## Services, guards and DTOs, no request
 
-A `createGuard` guard keeps its function as `.run`; call it with a stand-in context holding what the guard reads.
+[`app.scope()`](08-services.md#scripts-appscope) runs a function in a fresh request scope, so you can `resolve()` anything:
 
 ```ts
-import { expect, it } from "vitest";
-import { Forbidden, createGuard, type YerdContext } from "@toyz/yerd";
+const desk = await app.scope(() => resolve(Catalog).search({ category: "desk" }).map((p) => p.name));
+expect(desk).toEqual(["Desk lamp", "Brass ruler"]);
+```
 
+[parse](api:yerd.parse) checks a DTO: it returns the typed instance, or throws [ValidationFailed](api:yerd.ValidationFailed) with every issue:
+
+```ts
+expect(() => parse(CheckoutForm, { name: "A", email: "nope", address: "" })).toThrow(ValidationFailed);
+// issues: [{ path: "name", message: "Must be 2 to 80 characters (got 1)" },
+//          { path: "email", message: "Expected an email address" },
+//          { path: "address", message: "Can't be empty" }]
+```
+
+A `createGuard` guard keeps its function as `.run`; call it with a stand-in context holding what it reads:
+
+```ts
 const weekdays = createGuard("weekdays", (ctx) => {
   const day = new Date(ctx.headers.date ?? Date.now()).getDay();
   return (day !== 0 && day !== 6) || new Forbidden("Closed on weekends");
 });
 
-it("closes on weekends", async () => {
-  const saturday = { headers: { date: "Sat, 17 Oct 2026 12:00:00 GMT" } } as unknown as YerdContext;
-  const result = await weekdays.run(saturday);
-  expect(result).toBeInstanceOf(Forbidden);
-});
+const saturday = { headers: { date: "Sat, 17 Oct 2026 12:00:00 GMT" } } as unknown as YerdContext;
+expect(await weekdays.run(saturday)).toBeInstanceOf(Forbidden);
 ```
 
 A named `@guard` is a service method: `app.scope(() => resolve(Flags).beta(ctx))`.
 
-Check DTOs with [parse](api:yerd.parse), which returns the typed object or throws a 400 `YerdError` with the issues in `details`:
+## A real server
+
+For the network itself (keep-alive, a proxy), listen on a free port:
 
 ```ts
-import { expect, it } from "vitest";
-import { ValidationFailed, parse } from "@toyz/yerd";
+let server: RunningServer;
+beforeAll(async () => {
+  server = await createApp({ handleSignals: false }).listen(0, "127.0.0.1");
+});
+afterAll(() => server.close());
 
-it("validates signups", () => {
-  expect(parse(SignupForm, { name: "ada", password: "correct horse" })).toEqual({ name: "ada", password: "correct horse" });
-
-  try {
-    parse(SignupForm, { name: "a", password: "x" });
-    expect.unreachable();
-  } catch (error) {
-    expect(error).toBeInstanceOf(ValidationFailed);
-    expect((error as ValidationFailed).issues).toMatchObject([{ path: "name" }, { path: "password" }]);
-  }
+it("answers over TCP", async () => {
+  expect((await fetch(server.url + "/api/products/7")).status).toBe(200);
 });
 ```
 
-> [!NOTE]
-> Vitest gives each test file its own module graph, so routes defined in one test file don't leak into another.
+`listen(0)` picks a free port, `server.url` has it, and `server.close()` runs the full shutdown.
+
+## In a browser
+
+The runtime's side (morphs, no reloads, focus) needs a real browser. The shop's Playwright suite, [`test/e2e/shop.spec.ts`](https://github.com/Toyz/yerd/blob/main/test/e2e/shop.spec.ts), runs against the dev server and the production build:
+
+```ts
+test("adds to the cart, changes the quantity and removes it, without reloading", async ({ page }) => {
+  await page.goto("/products/2");
+  await markPage(page); // a marker on window that a reload would wipe
+  await page.getByRole("button", { name: "Add to cart" }).click();
+  await expect(page.locator("#cart-badge .badge")).toHaveText("1");
+  await stillSamePage(page);
+  // ...
+});
+```
+
+> [!TAKE]
+> Most of a yerd app is tested without a browser: forms are plain posts and pages are HTML, so `app.client()` covers them. Keep the browser suite for what only a browser does; it's the slow, flaky part.
