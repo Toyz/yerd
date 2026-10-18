@@ -8,6 +8,9 @@
  *   immutable; everything else revalidates.
  * - Precompressed siblings (`file.css.br`, `file.css.gz`) are served when the
  *   client accepts them.
+ * - A served file costs one stat: its symlink check and missing siblings are
+ *   remembered while it's unchanged. Build output (an immutable mount) isn't
+ *   stat'd again at all.
  */
 
 import { createReadStream } from "node:fs";
@@ -126,11 +129,44 @@ export interface StaticMount {
   options: StaticOptions;
   /** The root with symlinks resolved, found on first use. */
   realRoot?: Promise<string | undefined>;
+  /** Files never change while the process runs (a production build): what's found once is kept. */
+  immutable: boolean;
+  /** What's been found out about files served, by path on disk. */
+  files: Map<string, FileEntry>;
 }
 
-export function createMount(prefix: string, dir: string, options: StaticOptions = {}): StaticMount {
+/** A file as last seen: enough to tell it changed, and whether it's inside the mount. */
+interface Probe {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+  mtime: Date;
+  /** Symlinks resolved, still inside the mount. */
+  inside: boolean;
+}
+
+interface FileEntry {
+  file: Probe;
+  /** Precompressed siblings: what was found, null for none, missing for not looked yet. */
+  ".br"?: Probe | null;
+  ".gz"?: Probe | null;
+  /** When the siblings were last looked for. */
+  checked: number;
+}
+
+/** Most files remembered per mount; past it, the oldest are forgotten. */
+const FILES_MAX = 4096;
+/** How long a missing sibling stays missing, unless the file itself changes (mutable mounts). */
+const SIBLING_TTL = 2000;
+
+/**
+ * A mount for app.static(). `immutable` is for build output that can't
+ * change while the process runs: files are stat'd once, not per request.
+ */
+export function createMount(prefix: string, dir: string, options: StaticOptions = {}, immutable = false): StaticMount {
   const normalized = prefix === "/" ? "/" : `/${prefix.replace(/^\/+|\/+$/g, "")}/`;
-  return { prefix: normalized, root: resolve(dir), options };
+  return { prefix: normalized, root: resolve(dir), options, immutable, files: new Map() };
 }
 
 function defaultCacheControl(path: string): string {
@@ -156,9 +192,14 @@ function locate(mount: StaticMount, pathname: string): string | undefined {
   if (!mount.options.dotfiles && segments.some((s) => s.startsWith("."))) return undefined;
   if (mount.options.extensions && !mount.options.extensions.includes(extname(rest).toLowerCase())) return undefined;
   const file = join(mount.root, ...segments);
-  const rel = relative(mount.root, file);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel) || rel.split(sep).includes("..")) return undefined;
+  if (!within(mount.root, file)) return undefined;
   return file;
+}
+
+/** True when `path` is strictly inside `root` ("..env" is a name, not a way out). */
+function within(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
 /** True when `file`, symlinks resolved, is still inside the mount. */
@@ -173,8 +214,7 @@ async function insideRoot(mount: StaticMount, file: string): Promise<boolean> {
   } catch {
     return false;
   }
-  const rel = relative(root, real);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  return within(root, real);
 }
 
 /** Whether Accept-Encoding allows `encoding` (listed, or via *, and not with q=0). */
@@ -202,18 +242,65 @@ async function fileStat(path: string) {
 }
 
 /**
+ * `path` as it is now, reusing `cached` (and its symlink check) while the
+ * file is unchanged; on an immutable mount, anything already looked up.
+ * Null when there's no such file.
+ */
+async function probe(mount: StaticMount, path: string, cached: Probe | null | undefined): Promise<Probe | null> {
+  if (cached !== undefined && mount.immutable) return cached;
+  const info = await fileStat(path);
+  if (!info) return null;
+  if (cached && cached.ino === info.ino && cached.dev === info.dev && cached.size === info.size && cached.mtimeMs === info.mtimeMs) return cached;
+  return { dev: info.dev, ino: info.ino, size: info.size, mtimeMs: info.mtimeMs, mtime: info.mtime, inside: await insideRoot(mount, path) };
+}
+
+/** The file's entry, refreshed: a changed file starts over, siblings included. */
+async function lookup(mount: StaticMount, file: string): Promise<FileEntry | undefined> {
+  const { files } = mount;
+  let entry = files.get(file);
+  const found = await probe(mount, file, entry?.file);
+  if (!found) {
+    files.delete(file);
+    return undefined;
+  }
+  if (entry?.file !== found) {
+    entry = { file: found, checked: Date.now() };
+    files.delete(file);
+    files.set(file, entry);
+    if (files.size > FILES_MAX) files.delete(files.keys().next().value!);
+  }
+  return entry;
+}
+
+/** A precompressed sibling inside the mount, or null. A missing one isn't looked for on every request. */
+async function sibling(mount: StaticMount, file: string, entry: FileEntry, suffix: ".br" | ".gz"): Promise<Probe | null> {
+  const now = Date.now();
+  if (!mount.immutable && now - entry.checked > SIBLING_TTL) {
+    entry[".br"] = entry[".gz"] = undefined;
+    entry.checked = now;
+  }
+  // A sibling that's there is checked again (unless immutable): its size is the Content-Length.
+  if (entry[suffix] !== null) entry[suffix] = await probe(mount, file + suffix, entry[suffix]);
+  const found = entry[suffix];
+  return found?.inside ? found : null;
+}
+
+/**
  * Try to answer a GET/HEAD from a mount. Returns undefined when there's no
- * such file, so the caller can carry on (404, next mount, ...).
+ * such file, so the caller can carry on (404, next mount, ...). `headOnly`
+ * (a HEAD) answers with the headers and no body, so the file isn't opened.
  */
 export async function serveStatic(
   mount: StaticMount,
   pathname: string,
   headers: { "if-none-match"?: string | undefined; "accept-encoding"?: string | undefined },
+  headOnly = false,
 ): Promise<Outgoing | undefined> {
   const file = locate(mount, pathname);
   if (!file) return undefined;
-  const info = await fileStat(file);
-  if (!info || !(await insideRoot(mount, file))) return undefined;
+  const entry = await lookup(mount, file);
+  if (!entry?.file.inside) return undefined;
+  const info = entry.file;
 
   const etag = `W/"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
   const base: Record<string, string> = {
@@ -234,15 +321,15 @@ export async function serveStatic(
   const accept = headers["accept-encoding"] ?? "";
   for (const [encoding, suffix] of [["br", ".br"], ["gzip", ".gz"]] as const) {
     if (!acceptsEncoding(accept, encoding)) continue;
-    const compressed = await fileStat(file + suffix);
-    if (compressed && (await insideRoot(mount, file + suffix))) {
+    const compressed = await sibling(mount, file, entry, suffix);
+    if (compressed) {
       return {
         status: 200,
         headers: { ...base, "content-encoding": encoding, "content-length": String(compressed.size) },
-        body: createReadStream(file + suffix),
+        body: headOnly ? null : createReadStream(file + suffix),
       };
     }
   }
 
-  return { status: 200, headers: { ...base, "content-length": String(info.size) }, body: createReadStream(file) };
+  return { status: 200, headers: { ...base, "content-length": String(info.size) }, body: headOnly ? null : createReadStream(file) };
 }

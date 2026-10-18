@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,9 @@ writeFileSync(join(root, "index.html"), "<h1>home</h1>");
 writeFileSync(join(root, "docs", "index.html"), "<h1>docs</h1>");
 writeFileSync(join(root, "hello.txt"), "hello");
 writeFileSync(join(root, ".env"), "SECRET=1");
+writeFileSync(join(root, "..env-example"), "EXAMPLE=1");
+mkdirSync(join(root, "..cache"));
+writeFileSync(join(root, "..cache", "note.txt"), "cached");
 writeFileSync(join(root, "sub", ".git", "config"), "[core]");
 writeFileSync(join(root, "café.txt"), "unicode");
 writeFileSync(join(root, "with space.txt"), "spaced");
@@ -102,6 +105,12 @@ describe("static: path traversal and forbidden paths", () => {
     expect(await bodyOf(await serve("/.env", {}, { dotfiles: true }))).toBe("SECRET=1");
     expect(await serve("/../package.json", {}, { dotfiles: true })).toBeUndefined();
     expect(await serve("/%2e%2e/package.json", {}, { dotfiles: true })).toBeUndefined();
+  });
+
+  it("serves names that only start with two dots when dotfiles are on", async () => {
+    expect(await bodyOf(await serve("/..env-example", {}, { dotfiles: true }))).toBe("EXAMPLE=1");
+    expect(await bodyOf(await serve("/..cache/note.txt", {}, { dotfiles: true }))).toBe("cached");
+    expect(await serve("/..env-example")).toBeUndefined();
   });
 
   it("serves a symlink that stays inside the mount", async () => {
@@ -301,6 +310,68 @@ describe("static: precompressed siblings", () => {
     const out = await serve("/app.js.br");
     expect(out?.headers["content-encoding"]).toBeUndefined();
     expect(out?.headers["content-type"]).toBe("application/octet-stream");
+  });
+});
+
+describe("static: HEAD and what a mount remembers", () => {
+  // Files that change under the mount, in a folder of their own.
+  const dir = join(base, "changing");
+  mkdirSync(dir);
+  const write = (name: string, text: string) => writeFileSync(join(dir, name), text);
+  afterEach(() => vi.restoreAllMocks());
+
+  it("answers HEAD with the headers and no body, for plain and precompressed files", async () => {
+    const plain = await serveStatic(mount(), "/hello.txt", {}, true);
+    expect(plain?.status).toBe(200);
+    expect(plain?.body).toBeNull();
+    expect(plain?.headers["content-length"]).toBe("5");
+    const br = await serveStatic(mount(), "/app.js", { "accept-encoding": "br" }, true);
+    expect(br?.headers["content-encoding"]).toBe("br");
+    expect(br?.headers["content-length"]).toBe("2");
+    expect(br?.body).toBeNull();
+  });
+
+  it("sees a changed or deleted file on the next request", async () => {
+    const m = createMount("/", dir);
+    write("note.txt", "one");
+    const first = await serveStatic(m, "/note.txt", {});
+    expect(await bodyOf(first)).toBe("one");
+    write("note.txt", "three");
+    const second = await serveStatic(m, "/note.txt", {});
+    expect(second?.headers["content-length"]).toBe("5");
+    expect(second?.headers.etag).not.toBe(first?.headers.etag);
+    expect(await bodyOf(second)).toBe("three");
+    rmSync(join(dir, "note.txt"));
+    expect(await serveStatic(m, "/note.txt", {})).toBeUndefined();
+  });
+
+  it("doesn't look for a missing sibling on every request, but finds one added later", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const m = createMount("/", dir);
+    write("late.js", "plain");
+    expect((await serveStatic(m, "/late.js", { "accept-encoding": "br" }))?.headers["content-encoding"]).toBeUndefined();
+    write("late.js.br", "BR");
+    // Remembered as missing for a moment...
+    expect((await serveStatic(m, "/late.js", { "accept-encoding": "br" }))?.headers["content-encoding"]).toBeUndefined();
+    now += 5000;
+    // ...then looked for again.
+    const out = await serveStatic(m, "/late.js", { "accept-encoding": "br" });
+    expect(out?.headers["content-encoding"]).toBe("br");
+    expect(await bodyOf(out)).toBe("BR");
+    // A sibling that's there is checked each time: a removed one isn't served.
+    rmSync(join(dir, "late.js.br"));
+    expect(await bodyOf(await serveStatic(m, "/late.js", { "accept-encoding": "br" }))).toBe("plain");
+  });
+
+  it("an immutable mount (build output) stats a file once", async () => {
+    const m = createMount("/", dir, {}, true);
+    write("built.js", "built");
+    const first = await serveStatic(m, "/built.js", {}, true);
+    rmSync(join(dir, "built.js"));
+    const second = await serveStatic(m, "/built.js", {}, true);
+    expect(second?.status).toBe(200);
+    expect(second?.headers.etag).toBe(first?.headers.etag);
   });
 });
 
