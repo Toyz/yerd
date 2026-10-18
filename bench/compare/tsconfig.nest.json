@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "jsxImportSource": "react"
+  },
+  "include": ["servers/nest.ts"],
+  "exclude": []
+}

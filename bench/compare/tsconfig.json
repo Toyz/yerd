@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["ES2023", "esnext.decorators", "DOM"],
+    "types": ["node"],
+    "strict": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": "servers",
+    "jsx": "react-jsx",
+    "jsxImportSource": "@toyz/yerd"
+  },
+  "include": ["servers"],
+  "exclude": ["servers/nest.ts"]
+}

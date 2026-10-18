@@ -11,3 +11,4 @@ site/public/data/*
 # A made-up benchmark run, so the page can be worked on before the harness runs (dev only).
 !site/public/data/benchmarks.sample.json
 .claude/worktrees/
+bench/compare/node_modules/

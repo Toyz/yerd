@@ -17,5 +17,6 @@
     "jsx": "react-jsx",
     "jsxImportSource": "@toyz/yerd"
   },
-  "include": ["src", "test", "spikes", "examples", "bench"]
+  "include": ["src", "test", "spikes", "examples", "bench"],
+  "exclude": ["bench/compare"]
 }
