@@ -18,6 +18,8 @@
  * - [data-yx-error]     inside a form: where error messages from the server go;
  *                       [data-yx-error="field"] takes that field's validation message
  *                       (the field gets aria-invalid, and the first is focused)
+ * - style[data-yx-css]  css`` rules sent with the elements that use them: moved
+ *                       into <head>, one per class
  * - [data-yx-new]       set on elements a morph inserted (style entrance animations with it)
  * - [data-yx-action]    an action on any element: posted (with its data-yx-token)
  *                       when its data-yx-trigger fires: an event ("click",
@@ -1511,6 +1513,24 @@ export function yerdRuntime(): void {
   document.addEventListener("yx:applied", initTriggers);
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initTriggers);
   else initTriggers();
+
+  // css`` rules arrive in <style data-yx-css> next to the first element that
+  // uses them (in an action's response too). Keep one of each, in <head>, so
+  // they outlive the element they came with and a morph can't drop them.
+  function hoistStyles(): void {
+    const kept = new Set(Array.from(document.head.querySelectorAll("style[data-yx-css]"), (style) => style.getAttribute("data-yx-css")));
+    for (const style of Array.from(document.body?.querySelectorAll("style[data-yx-css]") ?? [])) {
+      const name = style.getAttribute("data-yx-css");
+      if (kept.has(name)) style.remove();
+      else {
+        kept.add(name);
+        document.head.appendChild(style);
+      }
+    }
+  }
+  document.addEventListener("yx:applied", hoistStyles);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", hoistStyles);
+  else hoistStyles();
 
   function initLocals(): void {
     for (const el of Array.from(document.querySelectorAll("yerd-local[data-yx-local]"))) {

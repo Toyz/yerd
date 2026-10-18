@@ -1,7 +1,7 @@
 import { STATUS_CODES, createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { once } from "node:events";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { brotliCompressSync, gzipSync } from "node:zlib";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -23,6 +23,7 @@ import { LONG_LIVED } from "../respond/stream.js";
 import { Channels } from "../live/channels.js";
 import { TestClient, answer } from "./in-process.js";
 import { compilePath } from "../log/paths.js";
+import { cssBundleClasses, cssBundleHash, cssBundleText, useCssBundle } from "../render/css.js";
 import { EventTransport, Events, HANDLES, ON_EVENT, eventName } from "../events/events.js";
 import { ACTIONS, ActionForm, CSRF_FIELD, checkActionToken, fillHoles, resolveSecrets, safeBack, verifyAction } from "../actions/action.js";
 import { CLASS_GUARDS, METHOD_GUARDS, guardRegistry, isGuardRef, resetGuardRegistry, type GuardSpec } from "../decorators/guards.js";
@@ -507,6 +508,12 @@ export class YerdApp {
    */
   clientBuild(dir: string, manifest: string | URL): this {
     useManifest(manifest);
+    // css`` rules the build collected into one stylesheet (see prerender).
+    const cssList = join(dir, ".yerd", "css.json");
+    if (existsSync(cssList)) {
+      const { href, classes } = JSON.parse(readFileSync(cssList, "utf8")) as { href: string; classes: string[] };
+      useCssBundle(href, classes);
+    }
     const mount = createMount("/", dir);
     const list = join(dir, ".yerd", "prerendered.json");
     if (existsSync(list)) {
@@ -515,6 +522,24 @@ export class YerdApp {
     }
     this.#mounts.push(mount);
     return this;
+  }
+
+  /**
+   * Every css`` rule the app registered (its modules are all loaded by now),
+   * as one hashed stylesheet in the client build, recorded in .yerd/css.json
+   * for clientBuild(). Pages then link it through <Styles /> instead of
+   * inlining rules. Nothing is written when the app has no css``.
+   */
+  #writeCssBundle(outDir: string): void {
+    const text = cssBundleText();
+    if (!text) return;
+    const file = `assets/yerd-${cssBundleHash(text)}.css`;
+    mkdirSync(join(outDir, "assets"), { recursive: true });
+    mkdirSync(join(outDir, ".yerd"), { recursive: true });
+    writeFileSync(join(outDir, file), text);
+    const record = { href: `/${file}`, classes: cssBundleClasses() };
+    writeFileSync(join(outDir, ".yerd", "css.json"), JSON.stringify(record));
+    useCssBundle(record.href, record.classes);
   }
 
   /**
@@ -527,6 +552,7 @@ export class YerdApp {
    */
   async prerender(outDir: string): Promise<string[]> {
     await this.boot();
+    this.#writeCssBundle(outDir);
     const allowed = this.#options.routes ? new Set(this.#options.routes) : undefined;
     const defs = routeRegistry.filter((d) => PRERENDER.from(d.metadata) && (!allowed || allowed.has(d.ctor)));
     if (defs.length === 0) return [];

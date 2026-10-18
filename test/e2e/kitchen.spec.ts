@@ -521,3 +521,29 @@ test("checkout: a validation error shows under its field, and the field is marke
   await expect(page.getByLabel("Address")).toBeFocused();
   await expect(page).toHaveURL(/\/cart$/);
 });
+
+test("scoped css: the rules arrive with the page and style the element", async ({ page, baseURL }, info) => {
+  await page.goto("/features");
+  const pill = page.locator(".page-title span").first();
+  await expect(pill).toHaveText("live");
+  const style = await pill.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { bg: s.backgroundColor, radius: s.borderTopLeftRadius, animation: s.animationName };
+  });
+  expect(style.bg).toBe("rgb(214, 69, 43)");
+  expect(style.radius).toBe("999px");
+  expect(style.animation).toMatch(/^yx-k-/);
+  // The global variable from css.global is defined.
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bazaar-glow").trim())).toBe("rgba(214, 69, 43, 0.5)");
+  const html = await (await page.request.get(`${baseURL}/features`)).text();
+  if (info.project.name.endsWith("prod")) {
+    // After vite build: one hashed stylesheet, nothing inlined.
+    expect(html).toMatch(/<link rel="stylesheet" href="\/assets\/yerd-[a-z0-9]+\.css">/);
+    expect(html).not.toContain("data-yx-css=");
+  } else {
+    // Dev: rules inline, moved into <head> by the runtime.
+    expect(html).toContain("data-yx-css=");
+    expect(await page.locator("body style[data-yx-css]").count()).toBe(0);
+    expect(await page.locator("head style[data-yx-css]").count()).toBeGreaterThanOrEqual(2);
+  }
+});

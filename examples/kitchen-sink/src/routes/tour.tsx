@@ -1,4 +1,4 @@
-import { get, inject, oneOf, query, route } from "@toyz/yerd";
+import { css, get, inject, keyframes, oneOf, query, route } from "@toyz/yerd";
 import { CATEGORIES, CATEGORY_IDS, Catalog, imageUrl, type CategoryId } from "../catalog.js";
 import { Shop } from "./shop.js";
 
@@ -156,16 +156,36 @@ const FEATURES: Array<[string, Feature[]]> = [
     { name: "Lazy images with srcset, eager hero", href: "/", how: "The hero is fetchpriority=high; product images load as you scroll." },
     { name: "A <picture> gallery", href: "/lookbook", how: "Sources by screen width, loaded lazily." },
     { name: "Stylesheet and assetUrl", href: "/", how: "Hashed by vite build: the stylesheet and the hero." },
+    { name: "Scoped css`` and keyframes", href: "/features", how: "The \"live\" pill at the top of this page: inlined once in dev, one hashed stylesheet after vite build (<Styles /> links it)." },
     { name: "Files from public/", href: "/humans.txt", how: "Served as they are, in dev and production." },
   ]],
 ];
+
+// Scoped CSS: a class name for these rules, sent only to pages that use it.
+const glow = keyframes`
+  from { box-shadow: 0 0 0 0 var(--bazaar-glow); }
+  to { box-shadow: 0 0 0 6px transparent; }
+`;
+const livePill = css`
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgb(214, 69, 43);
+  color: white;
+  font-size: 0.8rem;
+  font-weight: 600;
+  animation: ${glow} 1.6s ease-out infinite;
+  &::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+`;
 
 @route("/features", { group: Shop, meta: { title: "Feature tour", area: "features" } })
 export class Features {
   @get page() {
     return (
       <>
-        <h1 class="page-title">Feature tour</h1>
+        <h1 class="page-title">Feature tour <span class={livePill}>live</span></h1>
         <p class="meta-line">
           Every yerd feature this app uses, and where to see it. Back-office pages need a staff login: <code>ada</code> / <code>gnome-overlord</code>.
         </p>

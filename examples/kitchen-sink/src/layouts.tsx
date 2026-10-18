@@ -1,4 +1,7 @@
-import { Dynamic, Region, Scripts, Stylesheet, assetUrl, currentContext, raw, resolve, type ErrorPageProps, type LayoutProps } from "@toyz/yerd";
+import { Dynamic, Region, Scripts, Styles, Stylesheet, assetUrl, css, currentContext, raw, resolve, type ErrorPageProps, type LayoutProps } from "@toyz/yerd";
+
+// App-wide rules (not scoped): <Styles /> writes them, or links the build's stylesheet.
+css.global`:root { --bazaar-glow: rgba(214, 69, 43, 0.5); }`;
 import { Presence } from "./shop.js";
 import { Viewer } from "./viewer.js";
 import { LogoutRoute } from "./routes/auth.js";
@@ -56,6 +59,7 @@ export function RootLayout({ children, meta }: LayoutProps) {
         ) : null}
         <link rel="icon" href={assetUrl("src/hero.svg")} type="image/svg+xml" />
         <Stylesheet href="src/styles.css" />
+        <Styles />
         {/* Auto mode: every same-origin link and form goes through the runtime, no data-yx-* needed. */}
         {meta.scripts === false ? null : <Scripts auto />}
       </head>

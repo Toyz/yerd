@@ -251,6 +251,70 @@ import { Stylesheet, assetUrl } from "@toyz/yerd";
 
 In dev that's `/src/styles.css`, served by Vite. After `vite build` it's the hashed file (`/assets/styles-AbC123.css`), as long as the file is listed in the Vite plugin's `client` option. See [deploying](11-deploying.md).
 
+### Scoped CSS: css``
+
+[css](api:yerd.css) turns a block of rules into a class name, and a page gets those rules only if something on it uses the class. Styles live next to the component they style, with no stylesheet to keep in sync.
+
+```tsx
+import { css, keyframes, type Child } from "@toyz/yerd";
+
+const pop = keyframes`from { transform: scale(0.9); opacity: 0; }`;
+
+const card = css`
+  padding: 16px;
+  border-radius: 12px;
+  animation: ${pop} 0.2s ease-out;
+  &:hover { box-shadow: 0 4px 12px #0002; }
+  & h2 { margin: 0 0 8px; }
+`;
+
+export function Card({ title, children }: { title: string; children: Child }) {
+  return (
+    <section class={card}>
+      <h2>{title}</h2>
+      {children}
+    </section>
+  );
+}
+```
+
+- The class (`yx-1k3j9a...`) is a hash of the rules: the same on every server and every restart, so it can be cached and shared. The rules are written as `.yx-1k3j9a { ...your rules }`, so `&` is the element (native CSS nesting) and `& h2` its headings.
+- Use it like any class: `class={card}`, `class={[card, "wide"]}`, `class={{ [selected]: isSelected }}`. A flag that's off still sends its rules, since `<Local>` state may switch it on in the browser.
+- Interpolate another class to get its selector (`${card}:hover & { ... }`), a `keyframes` name for an animation (the keyframes go wherever the rule goes), anything else as text.
+- [css.global](api:yerd.css) is for rules that aren't scoped: resets, `body`, `:root` variables, `@font-face`.
+
+Put [`<Styles />`](api:yerd.Styles) in your root layout's `<head>`:
+
+```tsx
+css.global`
+  :root { --accent: #d6452b; }
+  body { margin: 0; font-family: system-ui, sans-serif; }
+`;
+
+export function RootLayout({ children }: LayoutProps) {
+  return (
+    <html>
+      <head>
+        <Styles />
+      </head>
+      <body>{children}</body>
+    </html>
+  );
+}
+```
+
+Where the rules go:
+
+| | Scoped rules | Global rules |
+| --- | --- | --- |
+| Development | a `<style>` just before the first element using the class, once per page or response; the runtime moves it into `<head>` and drops duplicates | written by `<Styles />` |
+| After `vite build` | one hashed stylesheet (`/assets/yerd-<hash>.css`, cached for a year), linked by `<Styles />`; nothing is inlined | in that stylesheet too |
+
+Pages keep streaming either way: in development the rules travel with the elements, so nothing has to wait for the whole page. An action's response repeats the rules of what it renders, so a Region that arrives later is styled too.
+
+> [!NOTE]
+> Classes are found in `class` and `className` props. A class name inside `raw()` HTML isn't seen, so its rules aren't sent. A `<style>` can't sit inside a `<select>`, so rules for classes used inside one are written right after it closes.
+
 ### Images
 
 Images are plain HTML, and the browser's loading hints are typed: `loading="lazy"` defers offscreen images and iframes, `decoding="async"` keeps decoding off the main thread, `fetchpriority="high"` hurries the one that matters (your hero image), and `srcset` / `sizes` / `<picture>` pick the right file for the screen.

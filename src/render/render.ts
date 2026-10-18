@@ -17,6 +17,7 @@ import { renderAttributes } from "./attrs.js";
 import { escapeHtml, isRawHtml } from "./escape.js";
 import { formAction, isAction, isBoundAction } from "../actions/action.js";
 import { DYNAMIC_ID, Dynamic, type DynamicProps } from "./dynamic.js";
+import { classesIn, stylesFor } from "./css.js";
 import { Local, bindingSpec, isBinding, localState, stateName, type Binding, type LocalProps } from "./local.js";
 
 const VOID_ELEMENTS = new Set([
@@ -70,6 +71,10 @@ interface State {
   insideDynamic: number;
   /** How many <Local> scopes we're inside; event handlers are shipped to the browser only there. */
   insideLocal: number;
+  /** css`` classes whose rules this render already sent. */
+  cssSent: Set<string>;
+  /** Inside a <select>, where the parser drops <style>: rules wait here for it to close. */
+  cssHeld: Set<string> | undefined;
   /** Flushed chunks waiting for the stream's consumer. */
   chunks: string[];
   /** Wakes the stream's consumer when a chunk is flushed. */
@@ -171,6 +176,17 @@ function renderNode(node: YerdNode, state: State): Step {
     return isVoid ? undefined : renderChild(props.children, state);
   }
 
+  // css`` classes: their rules go just before the first element using them.
+  if (props.class !== undefined || props.className !== undefined) {
+    const classes = classesIn([props.class, props.className]);
+    if (classes.size) {
+      if (state.cssHeld) for (const name of classes) state.cssHeld.add(name);
+      else write(state, stylesFor(classes, state.cssSent));
+    }
+  }
+  const holdsCss = type === "select" && !state.cssHeld;
+  if (holdsCss) state.cssHeld = new Set();
+
   let attrs = props;
   let hidden = "";
   if (type === "form") {
@@ -210,10 +226,15 @@ function renderNode(node: YerdNode, state: State): Step {
     write(state, `</${type}>`);
     return undefined;
   }
-  const close = `</${type}>`;
+  const close = holdsCss ? () => {
+    write(state, `</${type}>`);
+    const held = state.cssHeld!;
+    state.cssHeld = undefined;
+    if (held.size) write(state, stylesFor(held, state.cssSent));
+  } : () => write(state, `</${type}>`);
   const step = renderChild(props.children, state);
-  if (step) return step.then(() => write(state, close));
-  write(state, close);
+  if (step) return step.then(close);
+  close();
   return undefined;
 }
 
@@ -403,6 +424,8 @@ export async function* renderToStream(child: Child, options: RenderOptions = {})
     dynamic: options.dynamic,
     insideDynamic: 0,
     insideLocal: 0,
+    cssSent: new Set(),
+    cssHeld: undefined,
     chunks: [],
     notify: undefined,
   };
