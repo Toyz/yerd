@@ -100,7 +100,8 @@ describe("unseal refuses anything tampered", () => {
     ["one char", "a"],
     ["not base64 at all", "!!!!@@@@####$$$$%%%%^^^^&&&&****(((("],
     ["spaces", " ".repeat(64)],
-    ["percent-encoded", encodeURIComponent(raw.toString("base64"))],
+    // Always escaped, whatever characters this run's random iv produced ("%2F" is "/").
+    ["percent-encoded", `%2F${encodeURIComponent(raw.toString("base64"))}`],
     ["unicode", "é".repeat(64)],
     ["a JSON object", JSON.stringify({ user: "ada" })],
     ["exactly 28 zero bytes", Buffer.alloc(28).toString("base64url")],
