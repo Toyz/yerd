@@ -901,10 +901,17 @@ export function yerdRuntime(): void {
   // (data-yx-text, data-yx-bind) are re-applied from the state.
   type Scope = { el: Element; state: Record<string, unknown>; name: string; key?: string; storage?: Storage };
   const scopes = new WeakMap<Element, Scope>();
-  const wired = new WeakSet<Element>();
+  // The handler attributes each element has a listener for.
+  const wired = new WeakMap<Element, Set<string>>();
   // Persisted scopes by storage key, so scopes sharing a key stay in step.
   const byKey = new Map<string, Set<Scope>>();
   const STORE_PREFIX = "yerd-local:";
+
+  /** Saved state to merge: an object, or undefined for anything else (a string would spread its characters). */
+  function savedState(text: string): Record<string, unknown> | undefined {
+    const value: unknown = JSON.parse(text);
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  }
 
   function storageFor(el: Element): Storage | undefined {
     try {
@@ -918,7 +925,7 @@ export function yerdRuntime(): void {
     if (!scope.key || !scope.storage) return;
     try {
       const saved = scope.storage.getItem(STORE_PREFIX + scope.key);
-      if (saved) Object.assign(scope.state, JSON.parse(saved));
+      if (saved) Object.assign(scope.state, savedState(saved));
     } catch {
       // unreadable or blocked: keep the server's defaults
     }
@@ -949,7 +956,7 @@ export function yerdRuntime(): void {
     for (const scope of byKey.get(event.key.slice(STORE_PREFIX.length)) ?? []) {
       if (scope.storage !== event.storageArea) continue;
       try {
-        Object.assign(scope.state, JSON.parse(event.newValue));
+        Object.assign(scope.state, savedState(event.newValue));
       } catch {
         continue;
       }
@@ -1012,21 +1019,39 @@ export function yerdRuntime(): void {
     }
   }
 
+  function compile(scope: Scope, source: string): ((event: Event) => unknown) | undefined {
+    try {
+      return new Function(scope.name, `"use strict"; return (${source});`)(scope.state) as (event: Event) => unknown;
+    } catch (error) {
+      console.error("[yerd] a <Local> handler didn't compile:", source, error);
+      return undefined;
+    }
+  }
+
+  /**
+   * One listener per element and handler attribute. It runs the attribute as
+   * it is now: a morph that changes a handler's source gets it recompiled, one
+   * that removes it silences it, and one that adds a handler gets a listener.
+   */
   function wire(scope: Scope): void {
     for (const el of [scope.el, ...owned(scope, "*")]) {
-      if (wired.has(el)) continue;
-      const handlers = Array.from(el.attributes).filter((a) => a.name.startsWith("data-yx-on-"));
-      if (handlers.length === 0) continue;
-      wired.add(el);
-      for (const attr of handlers) {
-        let fn: (event: Event) => unknown;
-        try {
-          fn = new Function(scope.name, `"use strict"; return (${attr.value});`)(scope.state) as (event: Event) => unknown;
-        } catch (error) {
-          console.error("[yerd] a <Local> handler didn't compile:", attr.value, error);
-          continue;
-        }
-        el.addEventListener(attr.name.slice("data-yx-on-".length), (event) => {
+      const names = Array.from(el.attributes, (a) => a.name).filter((name) => name.startsWith("data-yx-on-"));
+      if (names.length === 0) continue;
+      const done = wired.get(el) ?? new Set<string>();
+      wired.set(el, done);
+      for (const name of names) {
+        if (done.has(name)) continue;
+        done.add(name);
+        let source = el.getAttribute(name)!;
+        let fn = compile(scope, source);
+        el.addEventListener(name.slice("data-yx-on-".length), (event) => {
+          const now = el.getAttribute(name);
+          if (now === null) return;
+          if (now !== source) {
+            source = now;
+            fn = compile(scope, now);
+          }
+          if (!fn) return;
           let result: unknown;
           try {
             result = fn(event);
