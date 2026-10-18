@@ -1,10 +1,10 @@
 # Logging
 
-This page covers yerd's logger: structured events, spans, `@instrument`, filtering with `YERD_LOG`, request ids, and sending logs somewhere other than the console.
+The logger: structured events, spans, `@instrument`, filtering with `YERD_LOG`, request ids, and custom sinks.
 
 ## Log something
 
-Import [log](api:yerd.log) and call a level. The second argument is structured fields, not string interpolation.
+Import [log](api:yerd.log) and call a level; the second argument is structured fields.
 
 ```ts
 import { log } from "@toyz/yerd";
@@ -22,11 +22,14 @@ log.error("charge failed", { orderId: 42, error: new Error("card declined") });
                     at ...
 ```
 
-Levels are `trace`, `debug`, `info`, `warn` and `error`. The `(app)` at the end is the target: `log` logs as `app`. An `Error` under the `error` field (or passed straight to `log.error(err)`) is logged with its stack. A call below the active level costs one cached lookup and builds nothing.
+- Levels: `trace`, `debug`, `info`, `warn`, `error`.
+- `(app)` is the target; `log` logs as `app`.
+- An `Error` under `error` (or passed straight to `log.error(err)`) is logged with its stack.
+- A call below the active level builds nothing.
 
 ## A logger per class
 
-`@logger` gives a class its own [Logger](api:yerd.Logger), with the class name as its target. Targets are what filters match on.
+`@logger` gives a class its own [Logger](api:yerd.Logger), targeted by the class name, which filters match on.
 
 ```ts
 import { logger, service, type Logger } from "@toyz/yerd";
@@ -54,28 +57,28 @@ export class Billing {
 | `span(name, fields, fn, level = "info")` | run `fn` inside a span: enter and exit records, duration, nesting across `await` |
 | `enabled(level)` | whether `level` would be written, to skip building expensive fields |
 
-`@logger("billing")` picks a target of your own. Lifetimes don't matter: a singleton's logger still logs into whichever request is running.
+`@logger("billing")` sets your own target. A singleton's logger still logs into whichever request is running.
 
 ## Requests are spans
 
-Every request gets a root span with an id, and every event logged while handling it carries that span, from any service. When the request finishes you get one access line.
+Every request gets a root span with an id that every event logged during it carries, ending with one access line:
 
 ```text
 12:04:01.239  INFO request{method=GET path=/todos/7} status=200 5.1ms
 ```
 
-- The access line is `info` for 2xx and 3xx, `warn` for 4xx and `error` for 5xx, at target `yerd::request`.
-- The request id is sent back as `x-request-id`. A well-formed incoming `x-request-id` (from your load balancer, say) is reused instead.
-- An incoming W3C `traceparent` header is continued: every record gets its trace id.
-- Handlers can read the id as `currentContext().requestId`.
-- Crashes are logged with their stack; the client only ever sees "Internal Server Error".
+- The access line is `info` for 2xx and 3xx, `warn` for 4xx, `error` for 5xx, at target `yerd::request`.
+- The id is sent back as `x-request-id`; a well-formed incoming `x-request-id` is reused.
+- An incoming W3C `traceparent` is continued: every record gets its trace id.
+- Handlers read the id as `currentContext().requestId`.
+- Crashes are logged with their stack; the client only sees "Internal Server Error".
 
 > [!NOTE]
-> The request span only exists while `yerd::request` is enabled at `info`. With `YERD_LOG=warn` there's no access line and no `x-request-id` header (though `requestId` still works in handlers).
+> The request span only exists while `yerd::request` is enabled at `info`. With `YERD_LOG=warn` there's no access line and no `x-request-id` header (`requestId` still works).
 
 ## @instrument
 
-[instrument](api:yerd.instrument) wraps a method in a span with its arguments as fields, plus the return value and duration on exit. A throw is logged at `error` and rethrown.
+[instrument](api:yerd.instrument) wraps a method in a span: arguments as fields, return value and duration on exit, throws logged at `error` and rethrown.
 
 ```ts
 import { instrument, service } from "@toyz/yerd";
@@ -112,11 +115,11 @@ export class UserRepo {
 | `ret` | `true` | record the return value on exit |
 | `err` | `true` | log a throw at `error` (it's always rethrown) |
 
-When the span's level is off, the method is called directly: no argument capture, no timing. Sync methods stay sync.
+When the level is off the method is called directly, and sync methods stay sync.
 
 ### Skipping, checked by the compiler
 
-`skip` takes parameter names, positions, and dotted paths into either, down through nested objects and arrays. The logged copy loses those fields; the real argument is untouched.
+`skip` takes parameter names, positions, and dotted paths into nested objects and arrays. Only the logged copy loses those fields.
 
 ```ts
 import { instrument } from "@toyz/yerd";
@@ -135,11 +138,12 @@ export class Accounts {
 }
 ```
 
-The paths are type-checked: `"input.billing.pin"` or `"1.headers.cookie"` is a compile error naming the field that doesn't exist. TypeScript can't see parameter *names*, only positions and types, so the part after a name is checked by the compiler and the name itself when the class loads (a misspelled name throws right there, before any request). Positional paths (`"0.password"`) are checked end to end.
+- Paths are type-checked: `"input.billing.pin"` is a compile error naming the missing field.
+- Parameter names themselves are checked when the class loads (a misspelling throws before any request); positional paths (`"0.password"`) are checked fully at compile time.
 
 ### Wildcards
 
-A path segment can be `*`, any one key (or array index), or `**`, any number of keys:
+A segment can be `*` (any one key or index) or `**` (any number of keys):
 
 ```ts
 @instrument({ level: "info", skip: ["card.*", "**.cvc", "*.password", "items.*.secret"] })
@@ -154,14 +158,15 @@ charge(card: Card, user: User, items: LineItem[]) { ... }
 | `items.*.secret` | `secret` in every item |
 | `0.*` | every field of the first argument |
 
-The compiler still checks what comes before the first wildcard: `"card.nope.*"` is an error when `card` has no `nope`, and a wildcard has to be a whole segment (`"card.num*"` is refused).
+- What comes before the first wildcard is still checked (`"card.nope.*"` errors).
+- A wildcard must be a whole segment (`"card.num*"` is refused).
 
 > [!TIP]
-> Argument names are read from the compiled function source, so keep server code unminified (the Vite plugin does). If a name ever trips you up (a bundler renamed it), positional paths don't depend on names at all.
+> Argument names come from the compiled source, so keep server code unminified (the Vite plugin does). Positional paths don't depend on names.
 
 ## Filtering with YERD_LOG
 
-`YERD_LOG` works like Rust's `RUST_LOG`: a default level, then overrides per target or per span.
+`YERD_LOG` works like Rust's `RUST_LOG`: a default level, then overrides per target or span.
 
 ```sh
 YERD_LOG=info                          # everything at info and above
@@ -171,16 +176,15 @@ YERD_LOG=info,[stripe]=trace           # everything inside a span named stripe
 YERD_LOG=off                           # nothing at all
 ```
 
-- A target directive covers the target and everything under it: `yerd` matches `yerd::request`. The most specific match wins, and a later directive for the same target replaces an earlier one (`$DEFAULTS,UserRepo=trace`).
-- A span directive (`[name]=level`) sets the level for everything logged inside a span with that name, whatever its target: louder (`info,[stripe]=trace`) or quieter (`debug,[healthcheck]=warn`). The innermost matching span decides.
-- Without `YERD_LOG`, the level is `info`, or `warn` when `NODE_ENV=test`.
-- A typo (`UserRepo=chatty`) is a boot error, not a silent no-op.
-
-yerd's own targets include `yerd::request`, `yerd::lifecycle` (hooks, hosted services, `@every`), `yerd::boot` and `yerd::stream`.
+- A target directive covers the target and its children (`yerd` matches `yerd::request`). The most specific match wins; a later directive for the same target replaces an earlier one.
+- `[name]=level` sets the level inside spans with that name, whatever the target, louder or quieter. The innermost matching span decides.
+- Default: `info`, or `warn` when `NODE_ENV=test`.
+- A typo (`UserRepo=chatty`) is a boot error.
+- yerd's targets include `yerd::request`, `yerd::lifecycle`, `yerd::boot` and `yerd::stream`.
 
 ## app.logging()
 
-Set the filter and output format in code with `app.logging()`.
+`app.logging()` sets the filter, format and redactions in code.
 
 ```ts
 import { yerd } from "@toyz/yerd";
@@ -197,14 +201,13 @@ export const app = yerd().logging({
 | `format` | `YERD_LOG_FORMAT`, else `pretty` on a terminal outside production, `json` otherwise | console output format |
 | `redact` | `[]` | field paths to mask as `"[redacted]"` in every record ([your own redactions](#your-own-redactions)) |
 
-> [!TIP]
-> `YERD_LOG` and `YERD_LOG_FORMAT` win over what you pass here, so the values in code are defaults that a deploy can still change without a rebuild.
-
-JSON output is one object per line (`t`, `level`, `target`, `msg`, plus `kind`, `fields`, `spans`, `ms`, `error` and `trace` when present), ready for any log shipper. Info and below go to stdout in batches; warnings and errors go to stderr immediately.
+- `YERD_LOG` and `YERD_LOG_FORMAT` win over these, so a deploy can change them without a rebuild.
+- JSON output is one object per line (`t`, `level`, `target`, `msg`, plus `kind`, `fields`, `spans`, `ms`, `error`, `trace` when present).
+- Info and below go to stdout in batches; warnings and errors to stderr immediately.
 
 ## Custom sinks
 
-Code always talks to `Logger`. Where records end up is the [ILogger](api:yerd.ILogger) service: register one and yerd uses it instead of its [ConsoleLogger](api:yerd.ConsoleLogger).
+Records go to the [ILogger](api:yerd.ILogger) service; register one to replace the [ConsoleLogger](api:yerd.ConsoleLogger).
 
 ```ts
 import { ILogger, service, type LogRecord } from "@toyz/yerd";
@@ -226,9 +229,9 @@ export class HttpLogger implements ILogger {
 
 - `write(record)` is synchronous and must not throw; a failing sink is reported to `console.error` and never breaks a request.
 - `flush()` is optional and runs when the app stops.
-- The sink must be a singleton (anything else is a boot error).
+- The sink must be a singleton.
 
-To keep the console and add your own, fan out with [teeLogger](api:yerd.teeLogger):
+Keep the console too with [teeLogger](api:yerd.teeLogger):
 
 ```ts
 import { ConsoleLogger, ILogger, teeLogger, yerd } from "@toyz/yerd";
@@ -238,26 +241,24 @@ export const app = yerd().services((s) =>
 );
 ```
 
-`ConsoleLogger` takes `format` and `color` (default: on for a terminal unless `NO_COLOR` is set).
+`ConsoleLogger` takes `format` and `color` (on for a terminal unless `NO_COLOR` is set).
 
 ## Redaction and limits
 
-Every field passes through a sanitizer before it reaches any sink, yours included.
+Every field is sanitized before any sink sees it.
 
 ```ts
 log.info("login", { user: "ada", password: "hunter2", headers: { authorization: "Bearer x" } });
 // fields: { user: "ada", password: "[redacted]", headers: { authorization: "[redacted]" } }
 ```
 
-- A key is redacted (`"[redacted]"`, at any depth, `@instrument` arguments included) when one of its words is a secret-sounding one: `password`, `pass`, `secret`, `token`, `auth`, `authorization`, `cookie`, `session`, `credential`, `signature`, `otp`, or `api key` / `private key`. Words are split on camelCase, `_`, `-` and `.`, and a trailing number is ignored (`password2`).
+- A key is redacted at any depth (`@instrument` arguments included) when one of its words is `password`, `pass`, `secret`, `token`, `auth`, `authorization`, `cookie`, `session`, `credential`, `signature`, `otp`, or `api key` / `private key`. Words split on camelCase, `_`, `-` and `.`; a trailing number is ignored (`password2`).
+- Whole words only: `csrfToken`, `x-api-key` and `sessionId` are redacted, `passengers` and `tokenizer` aren't.
 - Values are bounded: depth 4, strings 256 characters, arrays 20 items, objects 30 keys. Circular references, binary data and class instances are summarized.
-
-> [!NOTE]
-> Whole words, so `csrfToken`, `x-api-key` and `sessionId` (a session id is a credential) are redacted, but `passengers` and `tokenizer` aren't.
 
 ### Your own redactions
 
-Your data has secrets the word list can't guess: card numbers, emails, national ids. List their paths in `logging({ redact })`, with the same wildcards as `skip`, and they're masked in every record: plain logs, span fields, `@instrument` arguments, logs from libraries using yerd's logger.
+List paths for secrets the word list can't guess (card numbers, emails, national ids) in `logging({ redact })`, with the same wildcards as `skip`. They're masked in every record, including span fields, `@instrument` arguments and library logs.
 
 ```ts
 export const app = yerd().logging({
@@ -268,6 +269,6 @@ log.info("signup", { user: { email: "ada@example.com", name: "ada" }, card: { nu
 // fields: { user: { email: "[redacted]", name: "ada" }, card: { number: "[redacted]", brand: "visa" } }
 ```
 
-- Paths start at the record's fields (and a span's fields, which are the method's arguments by name), so `card.number` means a field called `card`. Use `**.` to match a key wherever it shows up.
-- Masked rather than removed, so you can still see the field was there.
-- `skip` decides what one method records; `redact` is the app-wide safety net. A malformed path stops the app at boot.
+- Paths start at the record's fields (a span's fields are its method's arguments by name); `**.` matches a key anywhere.
+- Fields are masked, not removed.
+- `skip` decides what one method records; `redact` is the app-wide net. A malformed path stops the boot.
