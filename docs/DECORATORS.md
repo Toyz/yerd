@@ -5,9 +5,13 @@ yerd's core only understands routes, verbs, DI and responses. Everything else
 `auth.role()`, later `@status` and `@cache`) is a decorator built with the
 **public** kit described here. The built-ins get no private hooks.
 
-**Status (2026-10-17):** `createAccessor`, `@args` and `createGuard` are
-built. `createWrapper`, `createMeta`, `compose`, `defineDecorator` and the
-isomorphic `@toyz/yerd/kit` are still design; their sections below say so.
+**Status (2026-10-18):** `createAccessor`, `@args` and `createGuard` are
+built, and so are the method and class builders (`methodFlag`,
+`methodValue`, `methodList`, `classFlag`, `classValue`, `classList`,
+`createMethodDecorator`) that every built-in method and class decorator is
+now made with. `createWrapper`'s `ctx`/`next` shape, reading metadata from
+`ctx` (`createMeta`), `compose`, `defineDecorator` and the isomorphic
+`@toyz/yerd/kit` are still design; their sections below say so.
 
 **The rule:** if a built-in decorator needs something the kit doesn't expose,
 the kit is missing a feature. Fix the kit, don't special-case the built-in.
@@ -15,17 +19,19 @@ the kit is missing a feature. Fix the kit, don't special-case the built-in.
 So yerd doesn't need to understand users. You write `@user` yourself in a few
 lines, or import the one in `@toyz/yerd/auth`, which is written the same way.
 
-## The four factories
+## The factories
 
 | Factory                | Makes                  | Examples                                      |
 |------------------------|------------------------|-----------------------------------------------|
 | `createAccessor`       | accessor decorators that read per-request values | `@auth.user`, `@tenant`, `@locale`, `@param` |
 | `createGuard`          | class/method gate, returns `true` or a response | `auth.required`, `auth.role()`, `@feature` |
-| `createWrapper` (planned) | around-advice for any method, onion order | `@instrument`, `@cache`, `@timed`, `@transaction`, `@rateLimit` |
-| `createMeta` (planned) | pure metadata markers other decorators read | `@public`, `@audit("billing")`      |
+| `methodFlag` / `methodValue` / `methodList`, `classFlag` / `classValue` / `classList` | metadata markers, read back by class | `@noLayout`, `@status(201)`, `@catches(A, B)`, `@prerender`, `@audit("billing")` |
+| `createMethodDecorator` | wrap a method, or check and register it where it's applied | `@get`, `@action`, `@instrument`, `@sse`, `@timed` |
+| `createWrapper` (planned) | around-advice with a request-aware `ctx` and `next()` | `@cache`, `@transaction`, `@rateLimit` |
+| `createMeta` (planned) | markers read from `ctx` during a request | `@public`, `@audit("billing")`      |
 
 Plus `compose(...)` to bundle decorators, and the low-level `defineDecorator`
-from PLAN.md for anything the four don't cover (both planned).
+from PLAN.md for anything these don't cover (both planned).
 
 ## Writing `@user` yourself
 
@@ -160,6 +166,10 @@ createGuard(label: string, run: (ctx: YerdContext) => GuardResult | Promise<Guar
 
 ## `createWrapper` (planned)
 
+Wrapping a method is built: `createMethodDecorator(name, { wrap })` returns
+a replacement for it (that's how `@instrument` and `@action` work). What's
+planned is the `ctx`/`next()` shape below on top of it.
+
 ```ts
 createWrapper((ctx: YerdContext, next: () => unknown, ...args: A) => unknown)
 ```
@@ -214,6 +224,10 @@ as fields, times the call, and logs to whatever `ILogger` is in DI. See
 [LOGGING.md](LOGGING.md).
 
 ## `createMeta` (planned)
+
+Storing markers is built (`methodValue` and friends, see the request data
+guide); what's planned is reading them from `ctx` during a request, which
+needs the matched handler on `ctx.route`.
 
 ```ts
 const audit = createMeta<string>("audit");

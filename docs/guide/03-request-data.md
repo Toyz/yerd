@@ -396,6 +396,62 @@ export class Product {
 
 For lower-level work, `currentContext()` gives the same context anywhere in a request, and [readBody](api:yerd.readBody) parses a raw `IncomingMessage` like `@body` does.
 
+## Method and class decorators
+
+The same kit makes method and class decorators that store a value you read back later; yerd's own `@get`, `@status`, `@catches`, `@prerender` and `@onBoot` are built this way.
+
+```tsx
+import { classValue, get, methodFlag, methodList, methodValue, post, route } from "@toyz/yerd";
+
+export const internal = methodFlag("internal");                   // @internal
+export const summary = methodValue<string>("summary", {           // @summary("...")
+  validate: (text) => (text.length <= 80 ? undefined : "keep it under 80 characters"),
+});
+export const tags = methodList<string>("tags");                   // @tags("a", "b"), stacks
+export const feature = classValue<string>("feature");             // @feature("beta") on a class
+
+@feature("beta")
+@route("/reports")
+export class Reports {
+  @get @summary("List reports") @tags("reports") list() { return []; }
+  @post @internal @tags("reports", "admin") rebuild() { return 204; }
+}
+```
+
+Read them by class (or its metadata), at startup or in tooling:
+
+```ts
+summary.get(Reports, "list");     // "List reports"
+tags.get(Reports, "rebuild");     // ["reports", "admin"]
+internal.has(Reports, "rebuild"); // true
+feature.get(Reports);             // "beta"
+
+const routes = [Home, Reports].filter((cls) => feature.get(cls) !== "beta" || process.env.BETA === "1");
+```
+
+For a decorator that changes what the method does, use [createMethodDecorator](api:yerd.createMethodDecorator) with `wrap`:
+
+```ts
+export const timed = createMethodDecorator("timed", {
+  bare: true,
+  wrap: (method, context) =>
+    async function (this: unknown, ...args: unknown[]) {
+      const started = performance.now();
+      try {
+        return await method.apply(this, args);
+      } finally {
+        log.info(`${String(context.name)} took ${Math.round(performance.now() - started)}ms`);
+      }
+    },
+});
+```
+
+- `methodFlag`, `methodValue`, `methodList`; `classFlag`, `classValue`, `classList`. Lists read top to bottom; for values the top one wins.
+- `validate` runs when the decorator is called; return a message to refuse the value.
+- `bare: () => value` makes a value decorator work uncalled too: `@cache` and `@cache(300)`.
+- Only public instance methods are accepted (`anyMember: true` on createMethodDecorator allows static and `#private`, for wrappers).
+- A subclass sees its parent's entries and adds its own; the parent's stay as they were.
+
 ## When input is bad
 
 yerd answers bad input before (or while) your handler reads it.
