@@ -119,6 +119,36 @@ describe("class bindings", () => {
   });
 });
 
+describe("state that isn't an object", () => {
+  // It rendered data-yx-local="undefined" (or "null", or a bare string), which the runtime can't use.
+  it.each([
+    [undefined, "undefined"],
+    [() => 1, "function"],
+    [Symbol("s"), "symbol"],
+    [null, "null"],
+    [3, "3"],
+    ["x", '"x"'],
+    [true, "true"],
+    [new Date(0), '"1970-01-01T00:00:00.000Z"'],
+  ])("refuses %s", async (state, shown) => {
+    await expect(renderToString(<Local state={state as never}>{() => <b />}</Local>)).rejects.toThrow(
+      `<Local> state must be an object, got ${shown}`,
+    );
+  });
+
+  it("takes an array", async () => {
+    expect(await renderToString(<Local state={[1, "a"]}>{(s) => <b>{s[1]}</b>}</Local>)).toBe(
+      `${scope("[1,&quot;a&quot;]")}<b><span data-yx-text="1">a</span></b></yerd-local>`,
+    );
+  });
+
+  it("refuses a bigint inside with the JSON message", async () => {
+    await expect(renderToString(<Local state={{ n: 1n }}>{() => <b />}</Local>)).rejects.toThrow(
+      /^<Local> state must be JSON \(plain objects, arrays, strings, numbers, booleans\): /,
+    );
+  });
+});
+
 describe("eq() and not()", () => {
   it("refuses eq(not(field), value): the runtime would compare the field itself", async () => {
     await expect(

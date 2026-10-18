@@ -284,6 +284,11 @@ function renderLocal(props: LocalProps<object>, state: State): Step {
   } catch (error) {
     throw new TypeError(`<Local> state must be JSON (plain objects, arrays, strings, numbers, booleans): ${(error as Error).message}`);
   }
+  // undefined, a function, null, a Date...: the runtime needs an object to
+  // hold fields (stringify gives undefined for some, which would render "undefined").
+  if (json === undefined || (json[0] !== "{" && json[0] !== "[")) {
+    throw new TypeError(`<Local> state must be an object, got ${json === undefined ? typeof initial : json}`);
+  }
   const name = stateName(children);
   const store = typeof persist === "string" ? { key: persist, storage: "local" } : persist;
   if (store && !store.key) throw new TypeError("<Local persist> needs a non-empty key");
