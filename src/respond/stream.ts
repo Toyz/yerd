@@ -73,8 +73,14 @@ export type Heartbeat =
       send?: ((info: HeartbeatInfo) => unknown) | string | number | boolean | null | object;
     };
 
-/** A heartbeat option as an interval and a function producing each beat's text. */
-function beating(option: Heartbeat | undefined, fallback: number, plain: string, format: (value: unknown) => string): { ms: number; beat: (info: HeartbeatInfo) => string } {
+/** A heartbeat option resolved: how often (0 is off), and a function producing each beat's text. */
+interface Beating {
+  ms: number;
+  beat: (info: HeartbeatInfo) => string;
+}
+
+/** Resolve a heartbeat option, throwing a TypeError for a bad one. */
+function beating(option: Heartbeat | undefined, fallback: number, plain: string, format: (value: unknown) => string): Beating {
   if (option === undefined || typeof option === "number") {
     const ms = option ?? fallback;
     if (!Number.isFinite(ms) || ms < 0) throw new TypeError(`heartbeat must be a number of ms (0 is off), got ${ms}`);
@@ -92,38 +98,75 @@ function beating(option: Heartbeat | undefined, fallback: number, plain: string,
   };
 }
 
+type Pulled<T> = { ok: true; result: IteratorResult<T> } | { ok: false; error: unknown };
+
 /**
  * Pull from `source`, yielding a heartbeat whenever it's quiet for `ms`.
  * Returns the source's items through `onItem`.
+ *
+ * One timer serves the whole stream (refresh() restarts it), and each pull's
+ * outcome is taken by its own then(), once. Racing every wait against the
+ * pending pull (or a long-lived tick) would add a reaction to that promise
+ * per beat (or per item) for as long as it stays pending.
  */
-async function* withHeartbeat<T>(source: AsyncIterable<T>, ms: number, beat: (info: HeartbeatInfo) => string, onItem: (item: T) => string): AsyncGenerator<string> {
+async function* withHeartbeat<T>(source: AsyncIterable<T>, { ms, beat }: Beating, onItem: (item: T) => string): AsyncGenerator<string> {
   const iterator = source[Symbol.asyncIterator]();
+  if (ms <= 0) {
+    try {
+      while (true) {
+        const result = await iterator.next();
+        if (result.done) return;
+        yield onItem(result.value);
+      }
+    } finally {
+      await iterator.return?.();
+    }
+  }
+
   const opened = Date.now();
   let lastItem = opened;
   let count = 0;
+  let pulled: Pulled<T> | undefined;
+  let due = false;
+  let wake: (() => void) | undefined;
+  const pull = (): void => {
+    pulled = undefined;
+    iterator.next().then(
+      (result) => {
+        pulled = { ok: true, result };
+        wake?.();
+      },
+      (error: unknown) => {
+        pulled = { ok: false, error };
+        wake?.();
+      },
+    );
+  };
+  const timer = setTimeout(() => {
+    due = true;
+    wake?.();
+  }, ms);
   try {
-    let pending = iterator.next();
+    pull();
     while (true) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const tick =
-        ms > 0
-          ? new Promise<"tick">((resolve) => {
-              timer = setTimeout(() => resolve("tick"), ms);
-            })
-          : undefined;
-      const result = await (tick ? Promise.race([pending, tick]) : pending);
-      clearTimeout(timer);
-      if (result === "tick") {
+      if (!pulled && !due) await new Promise<void>((resolve) => (wake = resolve));
+      wake = undefined;
+      if (pulled) {
+        if (!pulled.ok) throw pulled.error;
+        if (pulled.result.done) return;
+        lastItem = Date.now();
+        yield onItem(pulled.result.value);
+        pull();
+      } else {
         const now = Date.now();
         yield beat({ count: ++count, idleMs: now - lastItem, openMs: now - opened });
-        continue;
       }
-      if (result.done) return;
-      lastItem = Date.now();
-      yield onItem(result.value);
-      pending = iterator.next();
+      // The quiet period starts over once the reader is back for more.
+      due = false;
+      timer.refresh();
     }
   } finally {
+    clearTimeout(timer);
     await iterator.return?.();
   }
 }
@@ -155,11 +198,11 @@ export interface NdjsonOptions {
   errorLine?: boolean;
 }
 
-async function* ndjsonLines(source: AsyncIterable<unknown>, options: NdjsonOptions): AsyncGenerator<string> {
+const ndjsonLine = (item: unknown) => `${JSON.stringify(item) ?? "null"}\n`;
+
+async function* ndjsonLines(source: AsyncIterable<unknown>, heartbeat: Beating, options: NdjsonOptions): AsyncGenerator<string> {
   try {
-    const line = (item: unknown) => `${JSON.stringify(item) ?? "null"}\n`;
-    const { ms, beat } = beating(options.heartbeat, 0, "\n", line);
-    yield* withHeartbeat(source, ms, beat, line);
+    yield* withHeartbeat(source, heartbeat, ndjsonLine);
   } catch (error) {
     if (options.errorLine === false) throw error;
     yield `${JSON.stringify({ error: publicMessage(error) })}\n`;
@@ -167,9 +210,9 @@ async function* ndjsonLines(source: AsyncIterable<unknown>, options: NdjsonOptio
 }
 
 function ndjsonResponse(source: AsyncIterable<unknown>, options: NdjsonOptions = {}): YerdResponse {
-  // Checked here, where the mistake is: inside the stream it would surface after the headers went out.
-  beating(options.heartbeat, 0, "", String);
-  return new YerdResponse(200, { "content-type": "application/x-ndjson; charset=utf-8", ...STREAM_HEADERS }, ndjsonLines(source, options));
+  // Resolved here, where a mistake is: inside the stream it would surface after the headers went out.
+  const heartbeat = beating(options.heartbeat, 0, "\n", ndjsonLine);
+  return new YerdResponse(200, { "content-type": "application/x-ndjson; charset=utf-8", ...STREAM_HEADERS }, ndjsonLines(source, heartbeat, options));
 }
 
 // ── SSE ──
@@ -315,11 +358,10 @@ export interface SseOptions {
   errorEvent?: boolean;
 }
 
-async function* sseEvents(source: AsyncIterable<unknown>, options: SseOptions): AsyncGenerator<string> {
+async function* sseEvents(source: AsyncIterable<unknown>, heartbeat: Beating, options: SseOptions): AsyncGenerator<string> {
   if (options.retry !== undefined && Number.isFinite(options.retry)) yield `retry: ${Math.max(0, Math.floor(options.retry))}\n\n`;
   try {
-    const { ms, beat } = beating(options.heartbeat, 15000, ": ping\n\n", formatEvent);
-    yield* withHeartbeat(source, ms, beat, formatEvent);
+    yield* withHeartbeat(source, heartbeat, formatEvent);
   } catch (error) {
     if (options.errorEvent === false) throw error;
     yield formatEvent(event({ event: "error", data: { error: publicMessage(error) } }));
@@ -327,8 +369,8 @@ async function* sseEvents(source: AsyncIterable<unknown>, options: SseOptions): 
 }
 
 function sseResponse(source: AsyncIterable<unknown>, options: SseOptions = {}): YerdResponse {
-  beating(options.heartbeat, 15000, "", String);
-  return new YerdResponse(200, { "content-type": "text/event-stream; charset=utf-8", ...STREAM_HEADERS }, sseEvents(source, options));
+  const heartbeat = beating(options.heartbeat, 15000, ": ping\n\n", formatEvent);
+  return new YerdResponse(200, { "content-type": "text/event-stream; charset=utf-8", ...STREAM_HEADERS }, sseEvents(source, heartbeat, options));
 }
 
 // ── helper + decorator entry points ──
@@ -336,6 +378,24 @@ function sseResponse(source: AsyncIterable<unknown>, options: SseOptions = {}): 
 type StreamMethod = (this: any, ...args: any[]) => AsyncIterable<unknown>;
 type StreamDecorator = <M extends StreamMethod>(method: M, context: ClassMethodDecoratorContext) => M;
 
+
+/**
+ * The options form's argument must be options. A function here is nearly
+ * always a generator method passed uncalled (`return ndjson(this.rows)`),
+ * which would otherwise come back as a decorator and fail much later as
+ * "A handler returned [object Function]".
+ */
+function streamOptions<O>(helper: string, value: unknown): O | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "function") {
+    throw new TypeError(`${helper}() got a function: pass an async iterable (did you forget to call the generator?), or options`);
+  }
+  const proto = typeof value === "object" && value !== null ? Object.getPrototypeOf(value) : undefined;
+  if (proto !== Object.prototype && proto !== null) {
+    throw new TypeError(`${helper}() takes an async iterable or an options object, got ${value === null ? "null" : Array.isArray(value) ? "an array" : typeof value}`);
+  }
+  return value as O;
+}
 
 function wrapMethod(method: StreamMethod, respond: (source: AsyncIterable<unknown>) => YerdResponse): StreamMethod {
   return function (this: unknown, ...args: unknown[]) {
@@ -358,7 +418,8 @@ export function ndjson(options?: NdjsonOptions): StreamDecorator;
 export function ndjson(a?: unknown, b?: unknown): unknown {
   if (isAsyncIterable(a)) return ndjsonResponse(a, b as NdjsonOptions | undefined);
   if (typeof a === "function" && isDecoratorContext(b, "method")) return wrapMethod(a as StreamMethod, (s) => ndjsonResponse(s));
-  return (method: StreamMethod) => wrapMethod(method, (s) => ndjsonResponse(s, a as NdjsonOptions | undefined));
+  const options = streamOptions<NdjsonOptions>("ndjson", a);
+  return (method: StreamMethod) => wrapMethod(method, (s) => ndjsonResponse(s, options));
 }
 
 /**
@@ -387,5 +448,6 @@ export function sse(options?: SseOptions): StreamDecorator;
 export function sse(a?: unknown, b?: unknown): unknown {
   if (isAsyncIterable(a)) return sseResponse(a, b as SseOptions | undefined);
   if (typeof a === "function" && isDecoratorContext(b, "method")) return wrapMethod(a as StreamMethod, (s) => sseResponse(s));
-  return (method: StreamMethod) => wrapMethod(method, (s) => sseResponse(s, a as SseOptions | undefined));
+  const options = streamOptions<SseOptions>("sse", a);
+  return (method: StreamMethod) => wrapMethod(method, (s) => sseResponse(s, options));
 }
