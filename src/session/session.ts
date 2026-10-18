@@ -79,7 +79,16 @@ export interface MemoryStoreOptions {
   maxSize?: number;
   /** How often (ms, at most) a save also sweeps out expired sessions. Default 60s. */
   sweepInterval?: number;
+  /**
+   * Under the Vite dev server, stores with the same name share their records
+   * across app reloads, so editing a file doesn't sign everyone out. Default
+   * "default"; give two stores in one app different names.
+   */
+  name?: string;
 }
+
+/** Set by the Vite dev plugin; see src/vite. */
+const DEV_SERVER = Symbol.for("yerd.devAssets");
 
 /**
  * Data in this process, keyed by a hash of the cookie's random id. Expired
@@ -88,7 +97,7 @@ export interface MemoryStoreOptions {
 export class MemoryStore implements SessionStore {
   readonly kind = "id" as const;
   // Insertion order is save order: set() re-inserts, so the first entry is the least recently saved.
-  readonly #records = new Map<string, { record: SessionRecord; expires: number }>();
+  readonly #records: Map<string, { record: SessionRecord; expires: number }>;
   readonly #maxSize: number;
   readonly #sweepInterval: number;
   #lastSweep = Date.now();
@@ -97,6 +106,14 @@ export class MemoryStore implements SessionStore {
   constructor(options: MemoryStoreOptions = {}) {
     this.#maxSize = options.maxSize ?? Infinity;
     this.#sweepInterval = options.sweepInterval ?? 60_000;
+    const globals = globalThis as Record<symbol, unknown>;
+    if (globals[DEV_SERVER]) {
+      // The dev server re-imports the app on every change; the records outlive it.
+      const key = Symbol.for(`yerd.memoryStore:${options.name ?? "default"}`);
+      this.#records = (globals[key] ??= new Map()) as Map<string, { record: SessionRecord; expires: number }>;
+    } else {
+      this.#records = new Map();
+    }
   }
 
   #key(id: string): string {
@@ -250,6 +267,25 @@ function handler({ proto, defaults }: { proto: object | null; defaults: Data }):
 
 const plain = handler(NO_SHAPE);
 const views = new WeakMap<object, Map<SessionShape, object>>();
+const checkedShapes = new WeakSet<SessionShape>();
+
+/**
+ * Session members win over the shape's own (the proxy reads them first), so
+ * a shape method named like one (`clear()`, `delete()`, `flash()`) would
+ * silently call the session's instead: `cart.clear()` wiping the whole
+ * session, sign-in included. Refuse such a shape the first time it's used.
+ */
+function checkShape(shape: SessionShape, raw: object): void {
+  if (checkedShapes.has(shape)) return;
+  for (let proto = shape.prototype as object | null; proto && proto !== Object.prototype; proto = Object.getPrototypeOf(proto)) {
+    for (const key of Object.getOwnPropertyNames(proto)) {
+      if (key !== "constructor" && key in raw) {
+        throw new TypeError(`@session(${shape.name}): "${key}" is a Session member (session.${key}), so ${shape.name}'s own ${key} would never run; rename it`);
+      }
+    }
+  }
+  checkedShapes.add(shape);
+}
 
 /**
  * The session seen through a shape class: its methods and getters work on
@@ -263,6 +299,7 @@ export function shapeSession<T extends object>(session: Session<object>, shape: 
   if (!byShape) views.set(raw, (byShape = new Map()));
   let view = byShape.get(shape);
   if (!view) {
+    checkShape(shape, raw);
     // A fresh instance per request: its field values are this request's defaults.
     // (`coupon?: string` is an own field holding undefined: not a default.)
     const defaults = Object.fromEntries(Object.entries(new shape()).filter(([, v]) => v !== undefined));

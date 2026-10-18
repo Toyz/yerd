@@ -82,8 +82,15 @@ test("shows server validation errors next to the form", async ({ page }) => {
   await page.goto("/todos");
   await page.getByLabel("What needs doing?").fill("    ");
   await page.getByLabel("What needs doing?").press("Enter");
-  await expect(page.getByRole("alert").first()).toHaveText("Expected a length from 1 to 140, got 0");
+  await expect(page.getByRole("alert").first()).toHaveText("What needs doing: Can't be empty");
+  await expect(page.getByLabel("What needs doing?")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("What needs doing?")).toBeFocused();
   await expect(page.locator(".todo")).toHaveCount(0);
+  // Fixed and sent again: the marks go.
+  await page.getByLabel("What needs doing?").fill("milk");
+  await page.getByLabel("What needs doing?").press("Enter");
+  await expect(page.locator(".todo")).toHaveCount(1);
+  await expect(page.getByLabel("What needs doing?")).not.toHaveAttribute("aria-invalid", "true");
 });
 
 test("completes all, then clears completed after confirming", async ({ page }) => {

@@ -93,9 +93,9 @@ describe("DTO bodies", () => {
       error: "Validation failed",
       issues: [
         { path: "email", message: "that is not an email" },
-        { path: "age", message: "Expected a number from 13 to 120, got 7" },
+        { path: "age", message: "Must be from 13 to 120 (got 7)" },
         { path: "plan", message: "Expected one of free, pro" },
-        { path: "address.city", message: "Expected a length of at least 1, got 0" },
+        { path: "address.city", message: "Can't be empty" },
         { path: "tags[1]", message: "Expected a string" },
       ],
     });

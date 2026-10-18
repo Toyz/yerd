@@ -75,6 +75,7 @@ export class CartPage {
 - The class is never stored: only its data fields are, so keep them JSON (plain objects, arrays, strings, numbers, booleans).
 - Its constructor runs once per request (for the defaults) and takes no arguments.
 - No `#private` fields: `this` is the session, not an instance of the class.
+- Session members win, so a method or getter named like one (`clear`, `delete`, `flash`, `get`, ...) would never run: a shape with one is refused the first time it's used.
 - `@args(session(Cart))` gives a handler parameter the same view.
 
 ### App-wide keys
@@ -151,7 +152,7 @@ yerd().sessions({ store: new MemoryStore(), generateId: () => `sess_${randomUUID
 
 It may be async (a database sequence), must return a unique non-empty string, and is refused with a `CookieStore`, which has no ids. The id sits inside the sealed cookie so it can't be forged, but keep it unguessable anyway: a leaked store dump shouldn't name live sessions.
 
-`MemoryStore` takes `maxSize` (evicts the least recently saved past it; default no cap) and `sweepInterval` (how often, at most, a save also clears expired sessions; default 60 s). It's for dev, tests and single-process deploys. For anything else, implement [SessionStore](api:yerd.SessionStore): `kind: "id"` plus `get`, `set` and `destroy`.
+`MemoryStore` takes `maxSize` (evicts the least recently saved past it; default no cap) and `sweepInterval` (how often, at most, a save also clears expired sessions; default 60 s). It's for dev, tests and single-process deploys. Under the Vite dev server its sessions survive app reloads, so editing a file doesn't sign you out (stores share records by `name`, default `"default"`). For anything else, implement [SessionStore](api:yerd.SessionStore): `kind: "id"` plus `get`, `set` and `destroy`.
 
 Cookies are always `HttpOnly`, `SameSite=Lax` and `Path=/`.
 

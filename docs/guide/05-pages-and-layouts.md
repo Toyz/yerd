@@ -267,6 +267,8 @@ Images are plain HTML, and the browser's loading hints are typed: `loading="lazy
 </picture>
 ```
 
+In development, `assetUrl()` and `<Stylesheet>` warn in the terminal (once per file) when a file doesn't exist, when it's in `public/` but written with the folder (`assetUrl("public/x.svg")` instead of `assetUrl("x.svg")`), or when it isn't in the plugin's `client` option: those work in dev and break after `vite build`. In production, files from `public/` resolve as they are.
+
 Give images a `width` and `height` so the page doesn't jump as they load. Files in `public/` are served as they are; `assetUrl()` is for files Vite should fingerprint (list them in the plugin's `client` option).
 
 ## Prerendering

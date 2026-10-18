@@ -129,7 +129,7 @@ describe("action forms", () => {
     const add = await addToken();
     const r = await post({ _yx: add, title: "   " }, { yx: "1" });
     expect(r.status).toBe(400);
-    expect(await r.json()).toEqual({ error: "Validation failed", issues: [{ path: "title", message: "Expected a length from 1 to 50, got 0" }] });
+    expect(await r.json()).toEqual({ error: "Validation failed", issues: [{ path: "title", message: "Can't be empty" }] });
   });
 
   it("turns redirects into yx-location for scripts", async () => {

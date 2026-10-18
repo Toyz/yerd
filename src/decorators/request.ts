@@ -516,16 +516,19 @@ export function oneOf<const V extends string>(...values: V[]): Transform<string,
 
 /** Numbers within [min, max], inclusive. */
 export function between(min: number, max: number): Validator<number> {
-  return (n) => (n >= min && n <= max) || `Expected a number from ${min} to ${max}, got ${n}`;
+  return (n) => (n >= min && n <= max) || `Must be from ${min} to ${max} (got ${n})`;
 }
 
 /** String or array length within [min, max], inclusive. `max` defaults to unlimited. */
 export function length(min: number, max = Infinity): Validator<string | readonly unknown[]> {
-  return (value) =>
-    (value.length >= min && value.length <= max) ||
-    (max === Infinity
-      ? `Expected a length of at least ${min}, got ${value.length}`
-      : `Expected a length from ${min} to ${max}, got ${value.length}`);
+  return (value) => {
+    if (value.length >= min && value.length <= max) return true;
+    if (value.length === 0) return "Can't be empty";
+    const unit = typeof value === "string" ? "characters" : "items";
+    if (max === Infinity) return `Must be at least ${min} ${unit} (got ${value.length})`;
+    if (min <= 0) return `Must be at most ${max} ${unit} (got ${value.length})`;
+    return `Must be ${min} to ${max} ${unit} (got ${value.length})`;
+  };
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -553,6 +556,6 @@ export function email(): Validator<string> {
 export function matches(pattern: RegExp, message?: string): Validator<string> {
   return (value) => {
     pattern.lastIndex = 0;
-    return pattern.test(value) || (message ?? `Expected a value matching ${pattern}`);
+    return pattern.test(value) || (message ?? "Isn't in the expected format");
   };
 }

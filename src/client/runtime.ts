@@ -15,7 +15,9 @@
  * - a[data-yx-boost]    fetch the page, morph <body> into it, pushState
  *                       (also any link inside an element with data-yx-boost)
  * - [data-yx-live=url]  EventSource; every message refreshes the page's Regions
- * - [data-yx-error]     inside a form: where error messages from the server go
+ * - [data-yx-error]     inside a form: where error messages from the server go;
+ *                       [data-yx-error="field"] takes that field's validation message
+ *                       (the field gets aria-invalid, and the first is focused)
  * - [data-yx-new]       set on elements a morph inserted (style entrance animations with it)
  * - [data-yx-action]    an action on any element: posted (with its data-yx-token)
  *                       when its data-yx-trigger fires: an event ("click",
@@ -426,18 +428,64 @@ export function yerdRuntime(): void {
     noticeTimer = setTimeout(() => shown.remove(), 5000);
   }
 
-  /** A failed action's message: validation issues, a JSON error, or the text. */
-  async function errorMessage(response: Response): Promise<string> {
-    let message = (await response.text()) || response.statusText;
+  type Issue = { path: string; message: string };
+
+  /** A failed action's message and validation issues (a JSON error body), or its text. */
+  async function readFailure(response: Response): Promise<{ message: string; issues: Issue[] }> {
+    const text = (await response.text()) || response.statusText;
     if ((response.headers.get("content-type") ?? "").includes("json")) {
       try {
-        const data = JSON.parse(message) as { error?: string; issues?: Array<{ message: string }> };
-        message = data.issues?.length ? data.issues.map((i) => i.message).join(". ") : (data.error ?? message);
+        const data = JSON.parse(text) as { error?: string; issues?: Issue[] };
+        const issues = Array.isArray(data.issues) ? data.issues : [];
+        return { message: issues.length ? issues.map((i) => i.message).join(". ") : (data.error ?? text), issues };
       } catch {
         // not JSON after all; show it as text
       }
     }
-    return message;
+    return { message: text, issues: [] };
+  }
+
+  async function errorMessage(response: Response): Promise<string> {
+    return (await readFailure(response)).message;
+  }
+
+  /**
+   * Put each validation issue by its field: in [data-yx-error="<field>"] when
+   * the form has one, and the field gets aria-invalid (the first is focused).
+   * Returns the messages left for the form's own box, each labelled with its
+   * field (the field's <label>, or its name).
+   */
+  function showIssues(form: HTMLFormElement, issues: Issue[]): string[] {
+    const left: string[] = [];
+    let first: HTMLElement | undefined;
+    for (const { path, message } of issues) {
+      const named = path && path !== "(root)" ? form.elements.namedItem(path) : null;
+      const field = named instanceof RadioNodeList ? (named[0] as HTMLElement | undefined) : (named as HTMLElement | null);
+      if (field) {
+        field.setAttribute("aria-invalid", "true");
+        field.setAttribute("data-yx-invalid", "");
+        first ??= field;
+      }
+      const box = Array.from(form.querySelectorAll<HTMLElement>("[data-yx-error]")).find((b) => b.getAttribute("data-yx-error") === path);
+      if (box) {
+        box.textContent = message;
+        continue;
+      }
+      // "What needs doing?" or "Email *" reads better without its trailing marks.
+      const label = (field as HTMLInputElement | null)?.labels?.[0]?.textContent?.trim().replace(/[\s?:*]+$/, "");
+      left.push(path && path !== "(root)" ? `${label || path}: ${message}` : message);
+    }
+    first?.focus();
+    return left;
+  }
+
+  /** Clear what showIssues() put on a form. */
+  function clearIssues(form: HTMLFormElement): void {
+    for (const box of Array.from(form.querySelectorAll<HTMLElement>("[data-yx-error]"))) if (box.getAttribute("data-yx-error")) box.textContent = "";
+    for (const field of Array.from(form.querySelectorAll("[data-yx-invalid]"))) {
+      field.removeAttribute("aria-invalid");
+      field.removeAttribute("data-yx-invalid");
+    }
   }
 
   const STALE = "This page was out of date, so it's been refreshed. Please try again.";
@@ -480,7 +528,9 @@ export function yerdRuntime(): void {
     // on; action forms get yx-location instead (see below).
     const headers: Record<string, string> = form.hasAttribute("data-yx") ? { yx: "1", accept: "text/html" } : { accept: "text/html" };
     if (!multipart) headers["content-type"] = "application/x-www-form-urlencoded";
-    const errorBox = form.querySelector<HTMLElement>("[data-yx-error]");
+    // The form's own message box: [data-yx-error] with no field name.
+    const errorBox = Array.from(form.querySelectorAll<HTMLElement>("[data-yx-error]")).find((box) => !box.getAttribute("data-yx-error")) ?? null;
+    clearIssues(form);
     // Only buttons this submit disables are re-enabled after. The mark also
     // tells when a morph has since given a button the server's state instead.
     const buttons = Array.from(form.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input[type=submit]")).filter((b) => !b.disabled);
@@ -519,9 +569,12 @@ export function yerdRuntime(): void {
         return;
       }
       if (!response.ok) {
-        const message = await errorMessage(response);
-        if (errorBox) errorBox.textContent = message;
-        else notify(message);
+        const { message, issues } = await readFailure(response);
+        const rest = issues.length ? showIssues(form, issues) : [message];
+        if (rest.length) {
+          if (errorBox) errorBox.textContent = rest.join(". ");
+          else notify(rest.join(". "));
+        }
         return;
       }
       if (errorBox) errorBox.textContent = "";

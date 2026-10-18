@@ -201,6 +201,13 @@ function devServer(options: YerdViteOptions): Plugin {
       return { appType: "custom" };
     },
     configureServer(server: ViteDevServer) {
+      // For assetUrl() / <Stylesheet> in the app (its own module instance): warn
+      // about files that don't exist, or that `vite build` won't include.
+      (globalThis as Record<symbol, unknown>)[Symbol.for("yerd.devAssets")] = {
+        root: server.config.root,
+        publicDir: server.config.publicDir || false,
+        client: options.client ?? [],
+      };
       const markStale = () => {
         stale = true;
       };

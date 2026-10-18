@@ -163,7 +163,7 @@ describe("app", () => {
   it("rejects values a pipeline step refuses", async () => {
     const tooBig = await at("/search/99?q=x");
     expect(tooBig.status).toBe(400);
-    expect(await tooBig.text()).toBe("Expected a number from 1 to 50, got 99");
+    expect(await tooBig.text()).toBe("Must be from 1 to 50 (got 99)");
     const badSort = await at("/search/5?q=x&sort=sideways");
     expect(await badSort.text()).toBe('Expected one of asc, desc, got "sideways"');
   });

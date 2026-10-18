@@ -241,4 +241,43 @@ describe("@session(Shape)", () => {
     expect(one.state.dirty).toBe(true);
     expect(two.state.dirty).toBe(false);
   });
+
+  it("refuses a shape whose method a Session member would shadow", () => {
+    // session.clear() would win and wipe the whole session (sign-in included), not just the items.
+    class Clashing {
+      items: string[] = [];
+      clear() {
+        this.items = [];
+      }
+    }
+    class Base {
+      flash() {}
+    }
+    class Inherited extends Base {}
+    expect(() => shapeSession(new Session(undefined, undefined), Clashing)).toThrow(/"clear" is a Session member/);
+    expect(() => shapeSession(new Session(undefined, undefined), Inherited)).toThrow(/"flash" is a Session member/);
+    // Members that don't clash are fine, getters included.
+    expect(shapeSession(new Session(undefined, undefined), Basket).count).toBe(0);
+  });
+});
+
+describe("MemoryStore under the dev server", () => {
+  const DEV = Symbol.for("yerd.devAssets");
+  const record = { data: { a: 1 }, flash: {}, createdAt: Date.now() };
+
+  it("keeps sessions across app reloads (a new store with the same name)", () => {
+    (globalThis as Record<symbol, unknown>)[DEV] = { root: "/", publicDir: false, client: [] };
+    try {
+      new MemoryStore({ name: "reload-test" }).set("id1", record, 60_000);
+      expect(new MemoryStore({ name: "reload-test" }).get("id1")?.data).toEqual({ a: 1 });
+      expect(new MemoryStore({ name: "other" }).get("id1")).toBeUndefined();
+    } finally {
+      delete (globalThis as Record<symbol, unknown>)[DEV];
+    }
+  });
+
+  it("gives every store its own records otherwise", () => {
+    new MemoryStore({ name: "prod-test" }).set("id1", record, 60_000);
+    expect(new MemoryStore({ name: "prod-test" }).get("id1")).toBeUndefined();
+  });
 });

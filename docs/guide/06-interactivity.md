@@ -387,7 +387,27 @@ Give file forms `enctype="multipart/form-data"`: the runtime switches to multipa
 
 ### Errors
 
-Throw an [HttpError](api:yerd.HttpError) (or let `parse()` throw one) and, with JavaScript, its message is written into the form's `[data-yx-error]` element. Validation failures show each issue's message.
+Throw an [HttpError](api:yerd.HttpError) (or let `parse()` throw one) and, with JavaScript, its message is written into the form's `[data-yx-error]` element.
+
+Validation failures go by field. Each invalid field gets `aria-invalid="true"` (style it with `[aria-invalid="true"]`), the first one is focused, and its message goes:
+
+- into `[data-yx-error="title"]` if the form has a box for that field, or
+- into the form's own `[data-yx-error]`, labelled with the field: "Title: Can't be empty" (the field's `<label>`, or its name).
+
+```tsx
+<form action={this.save}>
+  <label for="title">Title</label>
+  <input id="title" name="title" />
+  <span class="field-error" data-yx-error="title"></span>
+
+  <label>Price <input name="price" /></label>
+
+  <p data-yx-error role="alert"></p> {/* "Price: Must be from 1 to 100 (got 0)" */}
+  <button>Save</button>
+</form>
+```
+
+Everything is cleared on the next submit.
 
 Where there's no `[data-yx-error]` (a form without one, an action on a button or input), the runtime shows the message in a small notice at the bottom of the page. It also does when the server can't be reached. To show notices your own way, listen for `yx:notice` and call `preventDefault()`; the message is `event.detail.message`.
 

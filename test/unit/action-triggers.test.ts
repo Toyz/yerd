@@ -362,5 +362,48 @@ describe("element actions", () => {
       expect([...(document.getElementById("avatar") as HTMLInputElement).files!].map((f) => f.name)).toEqual(["1.png"]);
       expect(document.getElementById("yx-notice")?.textContent).toMatch(/Only one file/);
     });
+
+  });
+
+  describe("validation errors", () => {
+    function issuesResponse(issues: Array<{ path: string; message: string }>) {
+      return new Response(JSON.stringify({ error: "Validation failed", issues }), { status: 400, headers: { "content-type": "application/json" } });
+    }
+
+    it("go to their field's box, mark the field, focus the first, and label the rest", async () => {
+      stubFetch(() => issuesResponse([
+        { path: "title", message: "Can't be empty" },
+        { path: "price", message: "Must be from 1 to 100 (got 0)" },
+        { path: "tags", message: "Must be at most 3 items (got 5)" },
+        { path: "(root)", message: "Something about the whole thing" },
+      ]));
+      show(`<form id="f" action="/p" method="post" data-yx>
+        <label for="title">Title *</label><input id="title" name="title"><span data-yx-error="title"></span>
+        <label>Price <input name="price"></label>
+        <input name="tags">
+        <p data-yx-error role="alert"></p><button>Save</button></form>`);
+      document.querySelector<HTMLButtonElement>("#f button")!.click();
+      await flush();
+      expect(document.querySelector('[data-yx-error="title"]')!.textContent).toBe("Can't be empty");
+      expect(document.querySelector("[data-yx-error=''], p[data-yx-error]")!.textContent).toBe(
+        "Price: Must be from 1 to 100 (got 0). tags: Must be at most 3 items (got 5). Something about the whole thing",
+      );
+      for (const name of ["title", "price", "tags"]) expect(document.querySelector(`[name=${name}]`)!.getAttribute("aria-invalid")).toBe("true");
+      expect(document.activeElement).toBe(document.getElementById("title"));
+    });
+
+    it("are cleared on the next submit", async () => {
+      let fail = true;
+      stubFetch(() => (fail ? issuesResponse([{ path: "title", message: "Can't be empty" }]) : new Response(null, { status: 204 })));
+      show(`<form id="f" action="/p" method="post" data-yx><input name="title"><span data-yx-error="title"></span><p data-yx-error></p><button>Save</button></form>`);
+      const button = document.querySelector<HTMLButtonElement>("#f button")!;
+      button.click();
+      await flush();
+      fail = false;
+      button.click();
+      await flush();
+      expect(document.querySelector('[data-yx-error="title"]')!.textContent).toBe("");
+      expect(document.querySelector("[name=title]")!.hasAttribute("aria-invalid")).toBe(false);
+    });
   });
 });
