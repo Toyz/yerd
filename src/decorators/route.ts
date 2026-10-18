@@ -4,7 +4,20 @@ import type { YerdContext } from "../server/context.js";
 import type { MediaType } from "../respond/negotiate.js";
 import { createKey } from "./keys.js";
 
-/** An HTTP method a handler can answer. "ALL" answers any method the route has no specific handler for. */
+/**
+ * An HTTP method a handler can answer. "ALL" answers any method the route has
+ * no specific handler for. `ctx.method` is a plain string (a client can send
+ * any method), so compare against a Verb list rather than casting blindly:
+ *
+ * ```ts
+ * const writes: Verb[] = ["POST", "PUT", "PATCH", "DELETE"];
+ *
+ * const maintenance: Middleware = async (ctx, next) => {
+ *   if (writes.includes(ctx.method as Verb)) throw new HttpError(503, "Read-only during maintenance");
+ *   return next();
+ * };
+ * ```
+ */
 export type Verb = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" | "ALL";
 
 export interface VerbEntry {
@@ -18,10 +31,36 @@ export interface VerbEntry {
  * A test that picks a handler for a request: truthy means "this handler serves
  * it". If its answer depends on a request header, build it with varies() so
  * responses carry the matching Vary header (isBot is built that way).
+ * A test that reads only the URL needs no Vary:
+ *
+ * ```tsx
+ * const preview: WhenTest = (ctx) => ctx.query.has("preview");
+ *
+ * @route("/dashboard")
+ * class Dashboard {
+ *   @get(preview) next() { return <NewDashboard />; }
+ *   @get page() { return <OldDashboard />; }
+ * }
+ * ```
  */
 export type WhenTest = ((ctx: YerdContext) => unknown) & { readonly vary?: string };
 
-/** A request test for `@get(when)`: a function, or a guard from createGuard() (passing means match). */
+/**
+ * A request test for `@get(when)`: a function (truthy means match), or a
+ * guard from createGuard() (letting the request through means match; a guard
+ * that fails here turns nobody away, the next handler gets the request).
+ *
+ * ```tsx
+ * const staff = createGuard("staff", (ctx) => ctx.headers["x-staff"] === "yes");
+ *
+ * @route("/report")
+ * class Report {
+ *   @get(staff) internal() { return <ReportPage withCosts />; }
+ *   @get((ctx) => ctx.query.has("preview")) draft() { return <ReportPage full />; }
+ *   @get page() { return <ReportPage />; }
+ * }
+ * ```
+ */
 export type When = WhenTest | GuardRef;
 
 /**
@@ -42,7 +81,20 @@ export function varies(header: string, test: (ctx: YerdContext) => unknown): Whe
   return Object.assign((ctx: YerdContext) => test(ctx), { vary: header.toLowerCase() });
 }
 
-/** A verb decorator: bare (`@get`) for the default handler, or called (`@get(isBot)`) for a variant. */
+/**
+ * The type of every verb decorator (get, post, put, patch, del, head,
+ * options, all): bare (`@get`) for the default handler, or called with a
+ * request test (`@get(isBot)`) for a variant. It never takes a path.
+ *
+ * ```tsx
+ * @route("/report")
+ * class Report {
+ *   @get page() { return <ReportPage />; }                         // bare: the default handler
+ *   @get(isBot) crawlable() { return <ReportPage full />; }        // a request test
+ *   @get(staffOnly) internal() { return <ReportPage withCosts />; } // a guard, used as a test
+ * }
+ * ```
+ */
 export interface VerbDecorator {
   // Order matters: the request-test form comes first so an inline test
   // (`@post(async (ctx) => ...)`) gets `ctx` typed from it.
@@ -75,7 +127,22 @@ export interface PageMeta {
   [key: string]: unknown;
 }
 
-/** What every layout component receives. */
+/**
+ * What every layout component receives: the page (or the next layout in) as
+ * `children`, and the request's merged page metadata. Register a layout with
+ * app.layout(), @layout, a group's `layout` option or `res(x, { layout })`.
+ *
+ * ```tsx
+ * function DocsLayout({ children, meta }: LayoutProps) {
+ *   return (
+ *     <div class="docs">
+ *       <h1>{meta.title ?? "Docs"}</h1>
+ *       {children}
+ *     </div>
+ *   );
+ * }
+ * ```
+ */
 export interface LayoutProps {
   /** The page (or the next layout in) to wrap. */
   children: import("../jsx/jsx-runtime.js").Child;
@@ -83,11 +150,32 @@ export interface LayoutProps {
   meta: PageMeta;
 }
 
-/** Options for @route. */
+/**
+ * Options for @route, its second argument.
+ *
+ * ```tsx
+ * @route("/users/:id", { group: Admin, meta: { title: "User" }, guards: [staffOnly] })
+ * class AdminUser {
+ *   @param("id") accessor id!: string;
+ *   @get page() { return <h1>User {this.id}</h1>; } // GET /admin/users/:id, inside the group's layout
+ * }
+ * ```
+ */
 export interface RouteOptions {
-  /** Name for `url()` building (later milestone). */
+  /** Reserved for building URLs by route name; nothing reads it yet. */
   name?: string;
-  /** Instance lifetime. Default "scoped": a fresh instance per request. */
+  /**
+   * Instance lifetime. Default "scoped": a fresh instance per request.
+   * Request accessors (@param, @query, ...) are correct under any lifetime,
+   * but plain fields on a singleton are shared by every request.
+   *
+   * ```tsx
+   * @route("/health", { lifetime: "singleton" })
+   * class Health {
+   *   @get check() { return { ok: true }; }
+   * }
+   * ```
+   */
   lifetime?: "singleton" | "scoped" | "transient";
   /** A @group class: its prefix, layout and meta apply to this route. */
   group?: Function;
@@ -97,7 +185,17 @@ export interface RouteOptions {
   guards?: GuardSpec[];
 }
 
-/** Options for @group. */
+/**
+ * Options for @group, its second argument.
+ *
+ * ```ts
+ * @group("/admin", { layout: AdminDocument, inheritLayouts: false, guards: [staffOnly], meta: { section: "admin" } })
+ * class Admin {}
+ *
+ * @group("/reports", { group: Admin }) // serves /admin/reports/..., still behind staffOnly
+ * class Reports {}
+ * ```
+ */
 export interface GroupOptions {
   /** Layout(s) wrapping every route in the group (inside outer groups' layouts), outermost first. */
   layout?: Component<LayoutProps> | Component<LayoutProps>[];
@@ -187,7 +285,19 @@ export const ACCEPTS = createKey<Map<string | symbol, string[]>>("accepts");
 
 /** Options for @prerender. */
 export interface PrerenderOptions {
-  /** Concrete paths for patterns with params: a list, or a function (it may use services via resolve()). */
+  /**
+   * Concrete paths for patterns with params: a list, or a function (it may be
+   * async and use services via resolve()). Each path must match the route.
+   *
+   * ```tsx
+   * @prerender({ paths: async () => (await resolve(Docs).slugs()).map((slug) => `/docs/${slug}`) })
+   * @route("/docs/:slug")
+   * class Doc {
+   *   @param("slug") accessor slug!: string;
+   *   @get page() { return <article>{this.slug}</article>; }
+   * }
+   * ```
+   */
   paths?: readonly string[] | (() => readonly string[] | Promise<readonly string[]>);
 }
 export const PRERENDER = createKey<PrerenderOptions>("prerender");
@@ -202,9 +312,19 @@ export const PRERENDER = createKey<PrerenderOptions>("prerender");
  * what it read, rather than freezing one request's data into a file. Patterns
  * with params need `paths`.
  *
- * ```ts
- * @prerender @route("/about") class About { ... }
- * @prerender({ paths: () => resolve(Docs).slugs().map((s) => `/docs/${s}`) }) @route("/docs/:slug") class Doc { ... }
+ * ```tsx
+ * @prerender
+ * @route("/about")
+ * class About {
+ *   @get page() { return <h1>About us</h1>; }
+ * }
+ *
+ * @prerender({ paths: ["/docs/intro", "/docs/setup"] })
+ * @route("/docs/:slug")
+ * class Doc {
+ *   @param("slug") accessor slug!: string;
+ *   @get page() { return <article>{this.slug}</article>; }
+ * }
  * ```
  */
 export function prerender(value: Function, context: ClassDecoratorContext): void;
@@ -225,7 +345,14 @@ export const routeRegistry: RouteDef[] = [];
 
 /**
  * Forget every registered route. Used by dev servers before re-importing the
- * app, so a reload doesn't register each route twice.
+ * app, so a reload doesn't register each route twice. Tooling only; an app
+ * at hand should use app.resetRegistries(), which also clears services,
+ * guards and attributes.
+ *
+ * ```ts
+ * resetRouteRegistry();
+ * await import(`./routes/index.js?t=${Date.now()}`); // routes register afresh
+ * ```
  */
 export function resetRouteRegistry(): void {
   routeRegistry.length = 0;
@@ -294,19 +421,158 @@ function verb(name: Verb): VerbDecorator {
  * ```
  */
 export const get = verb("GET");
-/** Handle POST requests to the route's pattern with this method. */
+/**
+ * Handle POST requests to the route's pattern with this method: typically
+ * creating something from a validated body. Cross-site browser POSTs are
+ * refused with a 403 before the handler runs (see the `csrf` option).
+ *
+ * ```tsx
+ * class NewTodo {
+ *   @is.string({ transform: trim, validate: length(1) }) title!: string;
+ * }
+ *
+ * @route("/todos")
+ * class Todos {
+ *   @inject(Db) accessor db!: Db;
+ *   @body(NewTodo) accessor input!: Promise<NewTodo>;
+ *
+ *   @post async create() {
+ *     const todo = this.db.todos.add(await this.input);
+ *     return res(todo, { status: 201, headers: { location: `/todos/${todo.id}` } });
+ *   }
+ * }
+ * ```
+ */
 export const post = verb("POST");
-/** Handle PUT requests to the route's pattern with this method. */
+/**
+ * Handle PUT requests to the route's pattern with this method: replacing a
+ * resource with the full representation in the body.
+ *
+ * ```tsx
+ * class TodoReplacement {
+ *   @is.string({ transform: trim, validate: length(1) }) title!: string;
+ *   @is.boolean() done!: boolean;
+ * }
+ *
+ * @route("/todos/:id")
+ * class TodoItem {
+ *   @inject(Db) accessor db!: Db;
+ *   @param("id", { transform: toInt }) accessor id!: number;
+ *   @body(TodoReplacement) accessor replacement!: Promise<TodoReplacement>;
+ *
+ *   @put async replace() {
+ *     return this.db.todos.replace(this.id, await this.replacement) ?? 404;
+ *   }
+ * }
+ * ```
+ */
 export const put = verb("PUT");
-/** Handle PATCH requests to the route's pattern with this method. */
+/**
+ * Handle PATCH requests to the route's pattern with this method: a partial
+ * update, so the DTO's fields are optional and a missing one stays as it is.
+ *
+ * ```tsx
+ * class TodoChanges {
+ *   @is.string({ optional: true, transform: trim }) title?: string;
+ *   @is.boolean({ optional: true }) done?: boolean;
+ * }
+ *
+ * @route("/todos/:id")
+ * class TodoItem {
+ *   @inject(Db) accessor db!: Db;
+ *   @param("id", { transform: toInt }) accessor id!: number;
+ *   @body(TodoChanges) accessor changes!: Promise<TodoChanges>;
+ *
+ *   @patch async update() {
+ *     return this.db.todos.update(this.id, await this.changes) ?? 404; // `{ "done": true }` keeps the title
+ *   }
+ * }
+ * ```
+ */
 export const patch = verb("PATCH");
-/** Handle DELETE requests to the route's pattern with this method (`delete` is a reserved word). */
+/**
+ * Handle DELETE requests to the route's pattern with this method (`delete`
+ * is a reserved word, hence `del`).
+ *
+ * ```tsx
+ * @route("/todos/:id")
+ * class TodoItem {
+ *   @inject(Db) accessor db!: Db;
+ *   @param("id", { transform: toInt }) accessor id!: number;
+ *
+ *   @del remove() {
+ *     return this.db.todos.remove(this.id) ? 204 : 404;
+ *   }
+ * }
+ * ```
+ */
 export const del = verb("DELETE");
-/** Handle HEAD requests with this method. Without one, HEAD runs the @get handler and drops the body. */
+/**
+ * Handle HEAD requests with this method. Rarely needed: without one, HEAD
+ * runs the @get handler and drops the body. Write one when producing the
+ * body just to throw it away is expensive.
+ *
+ * ```tsx
+ * @route("/files/*path")
+ * class Download {
+ *   @inject(Storage) accessor storage!: Storage;
+ *   @param("path") accessor path!: string;
+ *
+ *   @get async file() {
+ *     return res(await this.storage.read(this.path), { headers: { "content-type": mimeType(this.path) } });
+ *   }
+ *
+ *   // Answer from metadata instead of reading the whole file only to drop it.
+ *   @head async probe() {
+ *     const size = await this.storage.size(this.path);
+ *     if (size === undefined) return 404;
+ *     currentContext().setHeader("content-length", String(size));
+ *     return 200;
+ *   }
+ * }
+ * ```
+ */
 export const head = verb("HEAD");
-/** Handle OPTIONS requests to the route's pattern with this method. */
+/**
+ * Handle OPTIONS requests to the route's pattern with this method. Rarely
+ * needed: without one (or @all), OPTIONS gets a 405 whose Allow header lists the
+ * route's methods. The usual reason to write one is a CORS preflight.
+ *
+ * ```tsx
+ * @route("/api/todos")
+ * class TodosApi {
+ *   @inject(Db) accessor db!: Db;
+ *
+ *   @get list() { return this.db.todos.all(); }
+ *
+ *   // The preflight a browser sends before a cross-origin request.
+ *   @options preflight() {
+ *     return res(null, {
+ *       status: 204,
+ *       headers: {
+ *         "access-control-allow-origin": "https://app.example.com",
+ *         "access-control-allow-methods": "GET",
+ *         "access-control-max-age": "86400",
+ *       },
+ *     });
+ *   }
+ * }
+ * ```
+ */
 export const options = verb("OPTIONS");
-/** Handle every method the route has no specific handler for. */
+/**
+ * Handle every method the route has no specific handler for. A catch-all:
+ * with a splat pattern it answers a whole subtree, whatever the method.
+ *
+ * ```tsx
+ * @route("/api/v1/*rest")
+ * class RetiredApi {
+ *   @all gone(): never {
+ *     throw new HttpError(410, "API v1 is retired; use /api/v2");
+ *   }
+ * }
+ * ```
+ */
 export const all = verb("ALL");
 
 /**
@@ -317,12 +583,16 @@ export const all = verb("ALL");
  * group layouts. A layout already in the inherited chain isn't applied twice,
  * so a route may name its full chain for readability.
  *
- * ```ts
- * @layout(RootLayout, MarketingLayout)          // RootLayout is the app's anyway
- * @route("/about") class About { ... }
+ * ```tsx
+ * @layout(RootLayout, MarketingLayout) // RootLayout is the app's anyway
+ * @route("/about")
+ * class About {
+ *   @get page() { return <p>About us</p>; }
+ * }
  *
- * @route("/report/print") class ReportPrint {
- *   @get @layout(PrintLayout, { inherit: false }) page() { ... }
+ * @route("/report/print")
+ * class ReportPrint {
+ *   @get @layout(PrintLayout, { inherit: false }) page() { return <p>numbers</p>; }
  * }
  * ```
  *
@@ -371,7 +641,22 @@ export function accepts(...types: [MediaType, ...MediaType[]]) {
   };
 }
 
-/** Render this handler's JSX with no layouts at all (partials, fragments, embeds). */
+/**
+ * Render this handler's JSX with no layouts at all (partials, fragments,
+ * embeds). For one response only, return `bare(node)` instead.
+ *
+ * ```tsx
+ * // Fetched by a script and swapped into the page: no <html>, no nav.
+ * @route("/search/results")
+ * class SearchResults {
+ *   @query("q") accessor q = "";
+ *
+ *   @get @noLayout list() {
+ *     return <ul>{search(this.q).map((hit) => <li>{hit}</li>)}</ul>;
+ *   }
+ * }
+ * ```
+ */
 export function noLayout(_method: Function, context: ClassMethodDecoratorContext): void {
   const set = NO_LAYOUT.hasOwn(context.metadata) ? NO_LAYOUT.from(context.metadata)! : new Set(NO_LAYOUT.from(context.metadata));
   set.add(context.name);
@@ -382,12 +667,14 @@ export function noLayout(_method: Function, context: ClassMethodDecoratorContext
  * A route group: one prefix, layout and meta for many routes. Routes join with
  * `@route(path, { group: Admin })`; groups nest with `{ group: Parent }`.
  *
- * ```ts
+ * ```tsx
  * @group("/admin", { layout: AdminLayout, meta: { section: "admin" } })
  * class Admin {}
  *
  * @route("/users", { group: Admin }) // serves /admin/users
- * class AdminUsers { ... }
+ * class AdminUsers {
+ *   @get list() { return <h1>Users</h1>; }
+ * }
  * ```
  */
 export function group(prefix: string, options: GroupOptions = {}) {

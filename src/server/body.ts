@@ -1,15 +1,52 @@
 import type { IncomingMessage } from "node:http";
 import { HttpError } from "../respond/response.js";
 
-/** Text fields from a form body, by name. A name sent more than once becomes an array, in order. */
+/**
+ * Text fields from a form body, by name. A name sent more than once becomes
+ * an array, in order, so check for both:
+ *
+ * ```ts
+ * function tagsOf(fields: FormFields): string[] {
+ *   const tags = fields.tag ?? []; // several <input name="tag">: an array once two are sent
+ *   return Array.isArray(tags) ? tags : [tags];
+ * }
+ * ```
+ */
 export type FormFields = Record<string, string | string[]>;
-/** Uploaded files from a multipart form, by field name (a field can carry several). */
+/**
+ * Uploaded files from a multipart form, by field name (a field can carry
+ * several). In a route, @file / @files (or `is.file()` in a DTO) are the
+ * validated way to read them; this is the raw shape on `ctx.body()`.
+ *
+ * ```ts
+ * @post async upload() {
+ *   const parsed = await currentContext().body();
+ *   if (parsed.kind !== "form") return 415;
+ *   const files: FormFiles = parsed.files;
+ *   const photos = files.photo ?? []; // <input type="file" name="photo" multiple>
+ *   return { uploaded: photos.map((f) => ({ name: f.name, bytes: f.size })) };
+ * }
+ * ```
+ */
 export type FormFiles = Record<string, File[]>;
 
 /**
  * A request body, parsed by its Content-Type: JSON (`application/json`,
  * `+json`), NDJSON, url-encoded or multipart forms, `text/*`, else raw bytes.
- * `none` when the request has no body. Malformed JSON is a 400.
+ * `none` when the request has no body. Malformed JSON is a 400. Switch on
+ * `kind` to narrow `value`:
+ *
+ * ```ts
+ * @post async receive() {
+ *   const parsed: ParsedBody = await currentContext().body();
+ *   switch (parsed.kind) {
+ *     case "json": return { got: "json", value: parsed.value };
+ *     case "form": return { got: "form", fields: Object.keys(parsed.value) };
+ *     case "none": return 400;
+ *     default: return 415;
+ *   }
+ * }
+ * ```
  */
 export type ParsedBody =
   | { kind: "none"; value: undefined }
@@ -34,7 +71,21 @@ function parseLine(line: string, lineNumber: number): unknown {
 /**
  * Stream a newline-delimited JSON request body, one parsed value per line,
  * as it arrives. Blank lines are skipped. No whole-body limit; each line is
- * capped at `maxLine` bytes (413 beyond that).
+ * capped at `maxLine` bytes (413 beyond that), and a line that isn't JSON is
+ * a 400 naming it (both thrown as HttpError). Inside a yerd route use
+ * ctx.lines() or `@args(ndjsonBody(Dto))`; this is for a plain node:http
+ * handler.
+ *
+ * ```ts
+ * createServer(async (req, res) => {
+ *   let count = 0;
+ *   for await (const row of readNdjson(req)) {
+ *     await db.rows.insert(row);
+ *     count++;
+ *   }
+ *   res.end(`imported ${count}`);
+ * }).listen(3001);
+ * ```
  */
 export async function* readNdjson(req: IncomingMessage, maxLine = DEFAULT_BODY_LIMIT): AsyncGenerator<unknown> {
   const decoder = new TextDecoder();
@@ -144,9 +195,18 @@ export function formFields(params: URLSearchParams): FormFields {
 }
 
 /**
- * Read and parse a request body by content type: JSON, URL-encoded form, any
- * text/* as a string, anything else as bytes. Bodies over `limit` bytes are a
- * 413; malformed JSON is a 400.
+ * Read and parse a request body by content type: JSON, NDJSON, URL-encoded or
+ * multipart form, any text/* as a string, anything else as bytes. Bodies over
+ * `limit` bytes (default 1 MiB) are a 413; malformed JSON is a 400 (both
+ * thrown as HttpError). Inside a yerd route use ctx.body() or @body; this is
+ * for a plain node:http handler.
+ *
+ * ```ts
+ * createServer(async (req, res) => {
+ *   const body = await readBody(req, 64 * 1024);
+ *   res.end(body.kind === "json" ? "thanks" : "send JSON");
+ * }).listen(3001);
+ * ```
  */
 export async function readBody(req: IncomingMessage, limit = DEFAULT_BODY_LIMIT): Promise<ParsedBody> {
   if (!hasBody(req)) return { kind: "none", value: undefined };

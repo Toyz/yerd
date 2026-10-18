@@ -49,9 +49,26 @@ import { REQUEST_SPAN, bindLogging, endRequestSpan, startRequestSpan, type LogBi
 const lifecycleLog = new Logger("yerd::lifecycle");
 const requestLog = new Logger("yerd::request");
 
-/** Options for {@link yerd} / `new YerdApp()`. Every field is optional. */
+/**
+ * Options for {@link yerd} / `new YerdApp()`. Every field is optional.
+ *
+ * ```ts
+ * const app = yerd({
+ *   bodyLimit: 10 * 1024 * 1024, // photo uploads
+ *   trustProxy: true,            // behind nginx, which sets X-Forwarded-*
+ *   trustedOrigins: ["https://admin.example.com"],
+ * });
+ * ```
+ */
 export interface YerdOptions {
-  /** Only serve these route classes. Defaults to every class decorated with @route. */
+  /**
+   * Only serve these route classes. Defaults to every class decorated with
+   * @route. Tests list theirs, so routes imported for other reasons stay out.
+   *
+   * ```ts
+   * const server = await yerd({ routes: [Hello], services: [], handleSignals: false }).listen(0, "127.0.0.1");
+   * ```
+   */
   routes?: Function[];
   /** Only register these @service / @hosted classes. Defaults to all of them. */
   services?: Function[];
@@ -59,12 +76,24 @@ export interface YerdOptions {
   bodyLimit?: number;
   /** How long close() waits for in-flight requests and background work, in ms. Default 10000. */
   shutdownTimeout?: number;
-  /** Close gracefully on SIGINT / SIGTERM. Default true. */
+  /**
+   * Close gracefully on SIGINT / SIGTERM, then exit. Default true. Turn it
+   * off when something else owns the process's signals.
+   *
+   * ```ts
+   * yerd({ handleSignals: false }); // under a test runner, Ctrl-C stays the runner's
+   * ```
+   */
   handleSignals?: boolean;
   /**
    * Signs action tokens and seals sessions. At least 32 bytes each; a list
    * rotates (newest first). Defaults to YERD_SECRET (comma separated), else a
    * random per-process secret.
+   *
+   * ```ts
+   * // Rotating: new tokens use the first, old ones still verify with the second.
+   * yerd({ secret: [process.env.NEW_SECRET!, process.env.OLD_SECRET!] });
+   * ```
    */
   secret?: string | string[];
   /** How long a rendered action form stays valid, in seconds. Default 86400 (a day). */
@@ -108,7 +137,24 @@ interface Handler {
   classGuards: GuardSpec[];
 }
 
-/** Middleware wraps guards and the handler (or action) for every routed request. */
+/**
+ * Middleware wraps guards and the handler (or action) for every routed
+ * request. Call `next()` to run them and get the response, which you may
+ * change before returning it, or throw (an HttpError, say) to answer
+ * without running them. Install it with app.use().
+ *
+ * ```ts
+ * // How long the app took, as a Server-Timing header (shown in the browser's dev tools).
+ * const timing: Middleware = async (ctx, next) => {
+ *   const started = performance.now();
+ *   const out = await next();
+ *   out.headers["server-timing"] = `app;dur=${(performance.now() - started).toFixed(1)}`;
+ *   return out;
+ * };
+ *
+ * yerd().use(timing);
+ * ```
+ */
 export type Middleware = (ctx: YerdContext, next: () => Promise<Outgoing>) => Promise<Outgoing>;
 
 interface ResolvedGuard {
@@ -131,7 +177,22 @@ function pickHandler(all: HandlerGroup, accept: string | undefined): Handler | u
   return chosen === undefined ? undefined : variants[chosen];
 }
 
-/** Props for app.errorPage(). */
+/**
+ * Props for app.errorPage().
+ *
+ * ```tsx
+ * function ErrorPage({ status, message }: ErrorPageProps) {
+ *   return (
+ *     <main class="error">
+ *       <h1>{status === 404 ? "Nothing here" : "Something went wrong"}</h1>
+ *       <p>{message}</p>
+ *     </main>
+ *   );
+ * }
+ *
+ * yerd().layout(RootLayout).errorPage(ErrorPage);
+ * ```
+ */
 export interface ErrorPageProps {
   /** The HTTP status being sent, e.g. 404 or 500. */
   status: number;
@@ -160,17 +221,59 @@ export interface ErrorPageProps {
 
 type Next = (error?: unknown) => void;
 
-/** What app.listen() resolves to once the server is accepting connections. */
+/**
+ * What app.listen() resolves to once the server is accepting connections.
+ * Tests keep one per file:
+ *
+ * ```ts
+ * let server: RunningServer;
+ * server = await yerd({ routes: [Hello], services: [], handleSignals: false }).listen(0, "127.0.0.1");
+ * const res = await fetch(`${server.url}/hello`);
+ * await server.close();
+ * ```
+ */
 export interface RunningServer {
-  /** The underlying node:http server. */
+  /**
+   * The underlying node:http server, for settings and events yerd doesn't wrap.
+   *
+   * ```ts
+   * server.server.requestTimeout = 30_000;
+   * ```
+   */
   readonly server: Server;
   /** The base URL, `http://<host>:<port>`, with the real port when listening on port 0. Host defaults to localhost. */
   readonly url: string;
-  /** Graceful: stop accepting, end streams, let requests finish, stop background work, dispose services. */
+  /**
+   * Graceful: stop accepting, end streams, let requests finish, stop
+   * background work, dispose services. listen() already does this on SIGINT
+   * and SIGTERM unless `handleSignals` is false; then it's yours to call.
+   *
+   * ```ts
+   * const server = await yerd({ handleSignals: false }).listen(3000);
+   * process.on("SIGTERM", async () => {
+   *   await server.close();
+   *   process.exit(0);
+   * });
+   * ```
+   */
   close(): Promise<void>;
 }
 
-/** Thrown by boot validation; lists every problem at once. */
+/**
+ * Thrown by boot validation (app.boot(), and so the first listen(), start()
+ * or request); lists every problem at once: unknown guards, missing
+ * services, captive dependencies, @param names the pattern lacks, duplicate
+ * routes.
+ *
+ * ```ts
+ * try {
+ *   await app.boot();
+ * } catch (error) {
+ *   if (error instanceof BootError) for (const problem of error.problems) console.error(problem);
+ *   process.exit(1);
+ * }
+ * ```
+ */
 export class BootError extends Error {
   /** `problems`: one message per thing that's wrong; the error message lists them all. */
   constructor(readonly problems: string[]) {
@@ -283,20 +386,51 @@ export class YerdApp {
   #tornDown: Promise<void> | undefined;
   #lifecycle: { abort: AbortController; hosted: Promise<unknown>[]; periodic: Periodic[]; shutdown: Array<() => unknown> } | undefined;
 
-  /** Prefer {@link yerd}, which does the same. Throws if a `trustedOrigins` entry isn't a valid URL. */
+  /**
+   * Prefer {@link yerd}, which does the same. Throws if a `trustedOrigins` entry isn't a valid URL.
+   *
+   * ```ts
+   * const app = new YerdApp({ bodyLimit: 2 * 1024 * 1024 }); // same as yerd({ ... })
+   * ```
+   */
   constructor(options: YerdOptions = {}) {
     this.#options = options;
     this.#trustedOrigins = new Set((options.trustedOrigins ?? []).map((o) => new URL(o).origin));
   }
 
-  /** Root layout(s), outermost first, wrapping every JSX response (outside group and route layouts). */
+  /**
+   * Add a root layout, wrapping every JSX response (outside group and route
+   * layouts). Call it again for more: the first call is outermost.
+   *
+   * ```ts
+   * yerd().layout(RootLayout);
+   * ```
+   */
   layout(component: Component<LayoutProps>): this {
     if (this.#router) throw new Error("layout() must be called before the app starts");
     this.#layouts.push(component);
     return this;
   }
 
-  /** Turn on sessions (cookie store by default). See SessionOptions. */
+  /**
+   * Turn on sessions: until this is called, `@session` and `ctx.session`
+   * throw. With no options, data is sealed into the cookie (CookieStore,
+   * 14 days idle, 30 at most); see SessionOptions for stores, lifetimes and
+   * cookie settings. Session ids come from `generateId` when given (an id
+   * store only, like MemoryStore; it may be async), else 32 random bytes.
+   * Options that can't work (`generateId` with a cookie store, an invalid
+   * cookie name) throw here rather than on the first request.
+   *
+   * ```ts
+   * import { randomUUID } from "node:crypto";
+   *
+   * export const app = yerd().sessions({
+   *   store: new MemoryStore({ maxSize: 10_000 }),
+   *   generateId: () => `sess_${randomUUID()}`,
+   *   maxAge: 2 * 60 * 60 * 1000, // two idle hours
+   * });
+   * ```
+   */
   sessions(options: SessionOptions = {}): this {
     if (this.#router) throw new Error("sessions() must be called before the app starts");
     checkSessionOptions(options);
@@ -307,14 +441,29 @@ export class YerdApp {
   /**
    * Middleware around every routed request (inside guards' error handling,
    * outside guards and handlers). Accepts a function or anything with a
-   * `middleware` function, like the object createAuth() returns.
+   * `middleware` function, like the object createAuth() returns. Several run
+   * in the order added, the first outermost.
+   *
+   * ```ts
+   * yerd().sessions().use(timing).use(auth);
+   * ```
    */
   use(middleware: Middleware | { middleware: Middleware }): this {
     this.#middleware.push(typeof middleware === "function" ? middleware : middleware.middleware);
     return this;
   }
 
-  /** Guards in front of every route, before group and route guards. */
+  /**
+   * Guards in front of every route (and action), before group and route guards.
+   *
+   * ```ts
+   * const readOnlyMode = createGuard("readOnlyMode", (ctx) =>
+   *   ctx.method === "GET" || ctx.method === "HEAD" || new HttpError(503, "Read-only for a moment"),
+   * );
+   *
+   * yerd().guard(readOnlyMode);
+   * ```
+   */
   guard(...specs: GuardSpec[]): this {
     if (this.#router) throw new Error("guard() must be called before the app starts");
     this.#appGuards.push(...specs);
@@ -339,6 +488,10 @@ export class YerdApp {
    * Use a Vite client build: serve its files from `/` and resolve assetUrl() /
    * <Stylesheet> through its manifest. The generated production server calls
    * this; you rarely need to.
+   *
+   * ```ts
+   * yerd().clientBuild("dist/client", "dist/client/.vite/manifest.json");
+   * ```
    */
   clientBuild(dir: string, manifest: string | URL): this {
     useManifest(manifest);
@@ -355,6 +508,10 @@ export class YerdApp {
   /**
    * Render every @prerender route to `outDir` (the client build directory).
    * The yerd Vite plugin calls this after `vite build`. Returns the paths written.
+   *
+   * ```ts
+   * const written = await app.prerender("dist/client"); // ["/about", "/docs/intro", ...]
+   * ```
    */
   async prerender(outDir: string): Promise<string[]> {
     await this.boot();
@@ -453,6 +610,14 @@ export class YerdApp {
    * Render errors (404s, thrown HttpErrors, crashes) as an HTML page inside the
    * root layouts, for requests that accept HTML. API clients still get text or
    * JSON. Internal error messages are never shown.
+   *
+   * ```tsx
+   * function ErrorPage({ status, message }: ErrorPageProps) {
+   *   return <main><h1>{status}</h1><p>{message}</p></main>;
+   * }
+   *
+   * yerd().layout(RootLayout).errorPage(ErrorPage);
+   * ```
    */
   errorPage(component: Component<ErrorPageProps>): this {
     if (this.#router) throw new Error("errorPage() must be called before the app starts");
@@ -496,6 +661,11 @@ export class YerdApp {
    * Import route modules so their decorators register. Accepts a directory URL
    * (every .js file under it, recursively) or the object returned by
    * `import.meta.glob(..., { eager: true })`, whose modules are already loaded.
+   *
+   * ```ts
+   * yerd().discover(import.meta.glob("./routes/*.tsx", { eager: true })); // with Vite
+   * yerd().discover(new URL("./routes/", import.meta.url));             // compiled with tsc, recursive
+   * ```
    */
   discover(source: URL | Record<string, unknown>): this {
     if (source instanceof URL) this.#pending.push(importDirectory(source));
@@ -508,6 +678,11 @@ export class YerdApp {
    * (the Vite plugin calls it): a bundler may load yerd once for the app's
    * code and again for its own, so the app is the reliable way to reach the
    * registries the routes actually wrote to.
+   *
+   * ```ts
+   * app.resetRegistries();
+   * await import(`./routes/index.js?t=${Date.now()}`); // re-registers into a clean slate
+   * ```
    */
   resetRegistries(): void {
     resetRouteRegistry();
@@ -516,13 +691,29 @@ export class YerdApp {
     resetAttributeRegistry();
   }
 
-  /** The DI container. Available after boot(). */
+  /**
+   * The DI container. Available after boot(); throws before. Inside a
+   * request, prefer @inject or resolve().
+   *
+   * ```ts
+   * await app.boot();
+   * const mailer = app.container.get(Mailer);
+   * ```
+   */
   get container(): Container {
     if (!this.#container) throw new Error("The app hasn't booted yet");
     return this.#container;
   }
 
-  /** Run `fn` inside a fresh DI scope (scoped services resolve), disposed afterwards. For scripts and tests. */
+  /**
+   * Run `fn` inside a fresh DI scope (scoped services resolve), disposed
+   * afterwards. For scripts and tests. Boots the app, but doesn't start it:
+   * no @onBoot hooks run unless you call start() first.
+   *
+   * ```ts
+   * const todos = await app.scope(() => resolve(Db).todos.all());
+   * ```
+   */
   async scope<T>(fn: () => T | Promise<T>): Promise<T> {
     await this.boot();
     const scope = new Scope();
@@ -533,7 +724,17 @@ export class YerdApp {
     }
   }
 
-  /** Build the route table and the container, and validate both. Runs once; later calls are no-ops. */
+  /**
+   * Build the route table and the container, and validate both, throwing a
+   * BootError that lists every problem. Runs once; later calls are no-ops.
+   * One test that boots the app catches wiring mistakes before a deploy.
+   *
+   * ```ts
+   * it("boots", async () => {
+   *   await app.boot();
+   * });
+   * ```
+   */
   async boot(): Promise<void> {
     if (this.#router) return;
     await Promise.all(this.#pending);
@@ -746,6 +947,16 @@ export class YerdApp {
   /**
    * Boot, run @onBoot hooks, start @hosted services and @every timers.
    * listen() calls this; call it yourself to run background work without HTTP.
+   *
+   * ```ts
+   * // worker.ts: @hosted services and @every jobs, no server
+   * const worker = yerd({ routes: [] });
+   * await worker.start();
+   * process.on("SIGTERM", async () => {
+   *   await worker.stop();
+   *   process.exit(0);
+   * });
+   * ```
    */
   start(): Promise<void> {
     if (this.#stopping) return Promise.reject(new Error("This app was stopped; create a new one to start again"));
@@ -802,7 +1013,15 @@ export class YerdApp {
   /**
    * Stop background work, end long-lived streams, run @onShutdown hooks
    * (newest first) and dispose singletons. Waits for a start that's still in
-   * progress. An app can't be started again after it stops.
+   * progress. An app can't be started again after it stops. Use it for an
+   * app you start()ed yourself; a listen()ing app stops through close().
+   *
+   * ```ts
+   * // A one-off script: run with @onBoot hooks done, then dispose everything.
+   * await app.start();
+   * await app.scope(() => resolve(Reports).sendNightly());
+   * await app.stop();
+   * ```
    */
   stop(): Promise<void> {
     this.#stopping ??= (async () => {
@@ -868,6 +1087,14 @@ export class YerdApp {
   /**
    * Node request handler. With `next` (connect-style middleware, e.g. Vite's
    * dev server), unmatched paths are passed on instead of answered with 404.
+   * Starts the app on the first request. Prefer listen() for a server of
+   * your own: it adds graceful shutdown.
+   *
+   * ```ts
+   * import { createServer } from "node:http";
+   *
+   * createServer(app.handle).listen(3000);
+   * ```
    */
   handle = async (req: IncomingMessage, res: ServerResponse, next?: Next): Promise<void> => {
     try {

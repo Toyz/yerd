@@ -46,7 +46,23 @@ const MIME: Record<string, string> = {
   ".zip": "application/zip",
 };
 
-/** The Content-Type yerd serves for a file, by extension (case-insensitive); application/octet-stream when unknown. */
+/**
+ * The Content-Type yerd serves for a file, by extension (case-insensitive);
+ * application/octet-stream when unknown. Text types carry `charset=utf-8`.
+ * Handy when a route sends files itself:
+ *
+ * ```ts
+ * @route("/uploads/:name")
+ * class Upload {
+ *   @param("name") accessor name!: string;
+ *
+ *   @get async file() {
+ *     const bytes = await readFile(join(uploads, this.name));
+ *     return res(bytes, { headers: { "content-type": mimeType(this.name) } }); // "image/png" for a .png
+ *   }
+ * }
+ * ```
+ */
 export function mimeType(path: string): string {
   return MIME[extname(path).toLowerCase()] ?? "application/octet-stream";
 }
@@ -59,17 +75,45 @@ export function mimeType(path: string): string {
  */
 const HASHED = /[-.](?=[\w-]*[A-Za-z])(?=[\w-]*[A-Z0-9])[\w-]{8,}\.[a-z0-9]+$/;
 
-/** Options for app.static(). */
+/**
+ * Options for app.static().
+ *
+ * ```ts
+ * yerd()
+ *   .static("/src", "src", { extensions: [".css", ".svg"] })
+ *   .static("/downloads", "files", { index: false, cacheControl: () => "public, max-age=3600" });
+ * ```
+ */
 export interface StaticOptions {
-  /** Serve files whose name starts with "." (default false). */
+  /**
+   * Serve files and folders whose name starts with "." (default false). Only
+   * names inside the directory count: a `/.well-known` mount prefix doesn't
+   * need it. Turning it on serves every dotfile there, so keep secrets out.
+   *
+   * ```ts
+   * app.static("/", "public", { dotfiles: true }); // public/.well-known/security.txt
+   * ```
+   */
   dotfiles?: boolean;
   /** Serve `index.html` for a request to a directory (`/`, `/docs/`). Default true. */
   index?: boolean;
-  /** Only serve these extensions, e.g. [".css"] when pointing at a source folder. */
+  /**
+   * Only serve these extensions (lower case, with the dot), e.g. [".css"]
+   * when pointing at a source folder.
+   *
+   * ```ts
+   * app.static("/src", "src", { extensions: [".css", ".svg"] }); // never the .ts next to them
+   * ```
+   */
   extensions?: string[];
   /**
-   * Cache-Control for files. Default: a year + immutable for hashed names,
-   * "no-cache" (revalidate with the ETag) for the rest.
+   * Cache-Control for files, given each file's path on disk. Default: a year
+   * + immutable for hashed names, "no-cache" (revalidate with the ETag) for
+   * the rest.
+   *
+   * ```ts
+   * app.static("/", "public", { cacheControl: (path) => (path.endsWith(".html") ? "no-cache" : "public, max-age=86400") });
+   * ```
    */
   cacheControl?: (path: string) => string;
   /** Serve files that are symlinks pointing outside the mount's directory (default false). */

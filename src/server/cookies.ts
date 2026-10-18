@@ -1,5 +1,20 @@
 /** Cookie parsing and Set-Cookie serialization (RFC 6265), by hand. */
 
+/**
+ * Parse a Cookie request header into name -> value, percent-decoded (a value
+ * that isn't valid percent-encoding is kept as sent). The first of a repeated
+ * name wins; an absent header gives `{}`. Inside a request ctx.cookies (or
+ * @cookie) already has this; use it where yerd doesn't parse for you, like
+ * a WebSocket upgrade on the underlying server.
+ *
+ * ```ts
+ * const server = await yerd().listen(3000);
+ * server.server.on("upgrade", (req, socket) => {
+ *   const { sid } = parseCookies(req.headers.cookie);
+ *   if (!sid) socket.destroy();
+ * });
+ * ```
+ */
 export function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = Object.create(null);
   if (!header) return out;
@@ -20,21 +35,47 @@ export function parseCookies(header: string | undefined): Record<string, string>
   return out;
 }
 
-/** Attributes for a Set-Cookie header (ctx.setCookie(), serializeCookie()). */
+/**
+ * Attributes for a Set-Cookie header (ctx.setCookie(), ctx.deleteCookie(),
+ * `res(x, { cookies })`, serializeCookie()). Unset fields take the defaults:
+ * Path=/, HttpOnly, SameSite=Lax, no Secure, a session cookie.
+ *
+ * ```ts
+ * // Read by the page's own script to pick a theme before first paint, so not httpOnly.
+ * const themeCookie: CookieOptions = { maxAge: 60 * 60 * 24 * 365, httpOnly: false };
+ *
+ * currentContext().setCookie("theme", "dark", themeCookie);
+ * ```
+ */
 export interface CookieOptions {
-  /** Lifetime in seconds (rounded down). Unset: a session cookie. */
+  /** Lifetime in seconds (rounded down). Unset: a session cookie, gone when the browser closes. */
   maxAge?: number;
   /** Absolute expiry. Max-Age wins in browsers when both are set. */
   expires?: Date;
   /** Default "/". */
   path?: string;
-  /** Unset: host-only (this exact host, no subdomains). */
+  /**
+   * Unset: host-only (this exact host, no subdomains). Set it to share a
+   * cookie with subdomains.
+   *
+   * ```ts
+   * ctx.setCookie("region", "eu", { domain: "example.com" }); // also sent to app.example.com
+   * ```
+   */
   domain?: string;
   /** Send only over HTTPS. Default false; browsers require it with sameSite "None". */
   secure?: boolean;
   /** Hide the cookie from client-side JavaScript. Default true. */
   httpOnly?: boolean;
-  /** Default "Lax". */
+  /**
+   * Default "Lax": sent on top-level navigation from other sites, not on
+   * their subrequests. "None" (sent everywhere, e.g. an embed in another
+   * site's iframe) needs `secure: true`.
+   *
+   * ```ts
+   * ctx.setCookie("embed", token, { sameSite: "None", secure: true });
+   * ```
+   */
   sameSite?: "Strict" | "Lax" | "None";
 }
 

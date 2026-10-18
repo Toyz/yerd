@@ -45,7 +45,26 @@ function userAgentOf(input: YerdContext | string | undefined): string {
 
 const test = (input: YerdContext | string | undefined): boolean => BOTS.test(userAgentOf(input));
 
-/** True when the request (or a User-Agent string) looks like a crawler or a link-preview fetcher. */
+/**
+ * True when the request (or a User-Agent string) looks like a crawler or a
+ * link-preview fetcher. As `@get(isBot)` it picks a handler variant (and
+ * adds `Vary: User-Agent`); called directly it's a plain check:
+ *
+ * ```tsx
+ * @route("/products/:id")
+ * class ProductPage {
+ *   @inject(Db) accessor db!: Db;
+ *   @param("id") accessor id!: string;
+ *
+ *   @get page() {
+ *     if (!isBot(currentContext())) this.db.views.count(this.id); // count people, not crawlers
+ *     return <Product id={this.id} />;
+ *   }
+ * }
+ *
+ * isBot("Mozilla/5.0 (compatible; Googlebot/2.1)"); // true
+ * ```
+ */
 export const isBot: ((input: YerdContext | string | undefined) => boolean) & { readonly vary?: string } = Object.assign(
   test,
   { vary: varies("user-agent", test).vary },
