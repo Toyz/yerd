@@ -287,9 +287,10 @@ export function fillHoles(args: unknown, holes: HoleSource[] | undefined, fields
       const raw = fields[`_yxh${index}`];
       const text = Array.isArray(raw) ? raw[0] : raw;
       if (!source || text === undefined) throw new HttpError(400, "This action reads the page when it fires, which needs JavaScript");
-      const field = source[source.length - 1]!;
-      if (source.at(-2) !== "dataset" && BOOLEAN_FIELDS.has(field)) return text === "true";
-      if (source.at(-2) !== "dataset" && NUMBER_FIELDS.has(field)) return Number(text);
+      // The path after the element: [field], or ["dataset", name] (always a string).
+      const path = source.slice(source[0] === "ref" ? 2 : 1);
+      if (path.length === 1 && BOOLEAN_FIELDS.has(path[0]!)) return text === "true";
+      if (path.length === 1 && NUMBER_FIELDS.has(path[0]!)) return Number(text);
       return text;
     }
     return Object.fromEntries(Object.entries(record).map(([k, v]) => [k, fill(v)]));
