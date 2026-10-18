@@ -1,42 +1,66 @@
 # Pages and layouts
 
-How TSX becomes HTML: components, attributes, layouts, error pages, assets, prerendering and per-request `<Dynamic>` parts.
+The shop gets its look: a layout with a cart badge, components, page titles, a narrow column for forms, and an error page.
 
 ## A page is just JSX
 
-Return JSX from a handler and yerd renders it to HTML inside your layouts. There's no React: TSX compiles against yerd's own JSX runtime and streams a plain HTML string.
+The product page returns JSX, and yerd renders it to HTML inside the layouts. There's no React: TSX compiles against yerd's own JSX runtime and streams a plain HTML string.
 
 ```tsx
-import { get, route } from "@toyz/yerd";
-
-@route("/hello")
-export class Hello {
-  @get page() {
-    return <h1>Hello from yerd</h1>;
-  }
+// src/routes/products.tsx
+@get page() {
+  const product = this.catalog.find(this.id);
+  setMeta({ title: product.name, description: product.description });
+  return (
+    <article class="product">
+      <h1>{product.name}</h1>
+      <p>{product.description}</p>
+      <Price cents={product.price} />
+      <Stock stock={product.stock} />
+      <form action={this.add}>
+        <button disabled={product.stock === 0}>Add to cart</button>
+      </form>
+      {/* Every stock change on the channel refreshes this page's Regions. */}
+      <div data-yx-live={`/products/${product.id}/stock`} hidden></div>
+    </article>
+  );
 }
 ```
 
-- `tsconfig.json` needs `"jsx": "react-jsx"` and `"jsxImportSource": "@toyz/yerd"` (see [getting started](01-getting-started.md)).
-- When the first element is `<html>`, `<!doctype html>` is added in front.
+```answer
+GET /products/7
+200 OK
+content-type: text/html; charset=utf-8
+
+<!doctype html><html lang="en"><head><!-- ... --></head><body><!-- ... --><main><article class="product"><h1>Field notebook</h1><p>Waterproof paper for notes in the rain.</p><span class="price">$24.00</span><p class="stock" aria-live="polite" id="stock" data-yx-region>12 in stock</p><form action="/products/7" method="post" data-yx><input type="hidden" name="_yx" value="eyJjIjoiUHJvZHVjdFBhZ2Ui..."><button>Add to cart</button></form><div data-yx-live="/products/7/stock" hidden></div></article></main></body></html>
+```
+
+- `tsconfig.json` needs `"jsx": "react-jsx"` and `"jsxImportSource": "@toyz/yerd"` ([Getting started](01-getting-started.md#configure-typescript)).
+- `disabled={false}` drops the attribute; `hidden` with no value is a bare attribute. The rules are [below](#what-renders-how).
+- `action={this.add}` renders a form posting to the page with a signed token ([Interactivity](06-interactivity.md)).
+
+> [!TAKE]
+> TSX is the template engine. Templates are TypeScript: components are functions, props are typed, a misspelled attribute fails the build, and there's no second language to learn. The trade-off is that nothing runs in the browser as React would: interactivity comes from actions and Regions, and small client code where you need it.
 
 ## Components
 
-A component is a function from props to JSX; children arrive as `children`, typed with [Child](api:yerd.Child).
+A component is a function from props to JSX; children arrive as `children`, typed with [Child](api:yerd.Child). The shop's are small:
 
 ```tsx
-import type { Child } from "@toyz/yerd";
-
-function Card({ title, children }: { title: string; children?: Child }) {
-  return (
-    <section class="card">
-      <h2>{title}</h2>
-      {children}
-    </section>
-  );
+// src/components.tsx
+export function Price({ cents }: { cents: number }) {
+  return <span class="price">{formatPrice(cents)}</span>;
 }
 
-const page = <Card title="Inbox">Nothing new.</Card>;
+export function ProductCard({ product }: { product: Product }) {
+  return (
+    <li class="card">
+      <a href={`/products/${product.id}`}>{product.name}</a>
+      <Price cents={product.price} />
+      {product.stock === 0 ? <span class="sold-out">Sold out</span> : null}
+    </li>
+  );
+}
 ```
 
 Components can be `async`. They're awaited in place, and everything above them is flushed to the browser first:
@@ -138,47 +162,79 @@ import { json } from "@toyz/yerd";
 
 ## Layouts
 
-A layout is a component that receives [LayoutProps](api:yerd.LayoutProps) (the page as `children`, plus `meta`). Register the root layout with `app.layout()`.
+Every page needs the same header with the brand, the cart badge and the account link. A layout is a component that receives [LayoutProps](api:yerd.LayoutProps): the page as `children`, plus `meta`.
 
 ```tsx
-import { Scripts, Stylesheet, yerd, type LayoutProps } from "@toyz/yerd";
-
-function RootLayout({ children, meta }: LayoutProps) {
+// src/layouts.tsx
+/** The document. Every HTML response goes through it, error pages included. */
+export function RootLayout({ children, meta }: LayoutProps) {
+  // Middleware only runs for matched routes, so on a 404 for an unknown path auth never looked: nobody is signed in there.
+  const me = currentContext().route.target ? auth.current() : undefined;
   return (
     <html lang="en">
       <head>
         <meta charset="utf-8" />
-        <title>{meta.title ? `${meta.title} | My app` : "My app"}</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>{meta.title ? `${meta.title} · Paperyard` : "Paperyard"}</title>
         <Stylesheet href="src/styles.css" />
         <Scripts />
       </head>
-      <body>{children}</body>
+      <body>
+        <header class="top">
+          <a class="brand" href="/">Paperyard</a>
+          <CartBadge count={cartCount()} />
+          {me ? (
+            // A POST, not a link: a prefetch or a crawler must not sign anyone out.
+            <form class="account" method="post" action="/logout">
+              {me.name} <button class="link">Sign out</button>
+            </form>
+          ) : (
+            <a class="account" href="/login">Sign in</a>
+          )}
+        </header>
+        <main>{children}</main>
+      </body>
     </html>
   );
 }
-
-const app = yerd().layout(RootLayout);
 ```
 
-- Layouts can be async, resolve services and read the session.
+```ts
+// src/app.ts
+yerd(options).layout(RootLayout).errorPage(ErrorPage) // ...
+```
+
+```answer
+GET /
+200 OK
+content-type: text/html; charset=utf-8
+
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Shop · Paperyard</title><link rel="stylesheet" href="/src/styles.css"><script type="module" src="/_yerd/runtime.js"></script></head><body><header class="top"><a class="brand" href="/">Paperyard</a><a href="/cart" class="cart-badge" id="cart-badge" data-yx-region>Cart <span class="badge">0</span></a><a class="account" href="/login">Sign in</a></header><main><!-- ... --></main></body></html>
+```
+
+- `<!doctype html>` is added because the outermost element is `<html>`.
+- Layouts are components: they can be async, `resolve()` services and read the session (`currentContext().session`), as `cartCount()` does.
 - They only wrap JSX: JSON, strings and streams go out untouched.
 
 ### Page metadata
 
-`meta` is a [PageMeta](api:yerd.PageMeta) merged from the route's group, the route, and the handler's [setMeta](api:yerd.setMeta) calls.
+`meta` is a [PageMeta](api:yerd.PageMeta) merged from the route's group, the route, and the handler's [setMeta](api:yerd.setMeta) calls. The list has a fixed title; a product page's title is only known once the product is:
 
 ```tsx
-import { get, param, route, setMeta } from "@toyz/yerd";
+// src/routes/products.tsx
+@route("/", { meta: { title: "Shop" } })
+export class ProductList { /* ... */ }
 
-@route("/posts/:slug", { meta: { title: "Blog" } })
-export class Post {
-  @param("slug") accessor slug!: string;
+// in ProductPage.page():
+setMeta({ title: product.name, description: product.description });
+```
 
-  @get page() {
-    setMeta({ title: `Post ${this.slug}`, description: "A post" });
-    return <article>...</article>;
-  }
-}
+```answer
+GET /products/7
+200 OK
+content-type: text/html; charset=utf-8
+
+<!doctype html><html lang="en"><head><!-- ... --><title>Field notebook · Paperyard</title><!-- ... --></head><!-- ... --></html>
 ```
 
 Add your own typed fields with declaration merging:
@@ -193,81 +249,113 @@ declare module "@toyz/yerd" {
 
 ### Nested layouts
 
-`@layout()` on a route class, a handler method or a `@group` class nests layouts inside the root layout, outermost first.
+Sign-in, checkout and the receipt are forms, and read better in a narrow column. The `Narrow` layout nests inside `RootLayout`; it can sit on one route or on a whole group:
 
 ```tsx
-import { get, layout, noLayout, route, type LayoutProps } from "@toyz/yerd";
-
-function DocsLayout({ children }: LayoutProps) {
-  return <div class="docs"><nav>...</nav>{children}</div>;
-}
-function PrintLayout({ children }: LayoutProps) {
-  return <html><body class="print">{children}</body></html>;
-}
-
-@route("/docs")
-@layout(DocsLayout)
-export class Docs {
-  @get page() { return <h1>Docs</h1>; } // RootLayout > DocsLayout
-}
-
-@route("/docs/print")
-@layout(PrintLayout, { inherit: false })
-export class DocsPrint {
-  @get page() { return <h1>Docs</h1>; } // PrintLayout only
-}
-
-@route("/docs/toc")
-export class DocsToc {
-  @get @noLayout toc() { return <ul><li>Intro</li></ul>; } // no layouts at all
+// src/layouts.tsx
+/** A narrow column for forms: sign-in, checkout, the order receipt. */
+export function Narrow({ children }: LayoutProps) {
+  return <div class="narrow">{children}</div>;
 }
 ```
 
-- `{ inherit: false }` drops the root layout from the chain.
+```tsx tab="On a route"
+// src/routes/auth.tsx
+@route("/login", { meta: { title: "Sign in" } })
+@layout(Narrow)
+export class LoginPage {
+  // ...
+}
+```
+
+```answer
+GET /login
+200 OK
+content-type: text/html; charset=utf-8
+
+<!doctype html><!-- ... --><main><div class="narrow"><h1>Sign in</h1><form action="/login" method="post" data-yx><!-- ... --></form><!-- ... --></div></main></body></html>
+```
+
+```tsx tab="On a group"
+// src/routes/checkout.tsx
+@group("/", { guards: [auth.required], layout: Narrow })
+export class Account {}
+
+@route("/checkout", { group: Account, meta: { title: "Check out" } })
+export class CheckoutPage {
+  // ...
+}
+```
+
+```answer
+GET /checkout
+200 OK
+cache-control: private, no-cache
+content-type: text/html; charset=utf-8
+
+<!doctype html><!-- ... --><main><div class="narrow"><h1>Check out</h1><!-- ... --></div></main></body></html>
+```
+
+- [@layout()](api:yerd.layout) goes on a route class (every handler), a handler method, or a `@group` class; the chain runs outermost first ([routing](02-routing.md#layouts-anywhere)).
+- `{ inherit: false }` drops the outer layouts: `@layout(PrintLayout, { inherit: false })` for a page that's its own document.
+- [@noLayout](api:yerd.noLayout) on a handler drops every layout, for fragments.
 - A layout already in the chain is never applied twice.
-- Groups are covered in [routing](02-routing.md).
 
 ## Error pages
 
-With an error page, 404s, thrown [YerdError](api:yerd.YerdError)s and crashes render as HTML inside your root layouts. It gets [ErrorPageProps](api:yerd.ErrorPageProps): `status`, a safe-to-show `message`, and the thrown `error`.
+A wrong product id should still look like the shop. With an error page, 404s, thrown [YerdError](api:yerd.YerdError)s and crashes render as HTML inside the root layout. It gets [ErrorPageProps](api:yerd.ErrorPageProps): `status`, a safe-to-show `message`, and the thrown `error`.
 
 ```tsx
-import { YerdError, yerd, type ErrorPageProps } from "@toyz/yerd";
-
-function ErrorPage({ status, message, error }: ErrorPageProps) {
+// src/layouts.tsx
+/** app.errorPage(): 404s and crashes render here, inside RootLayout. */
+export function ErrorPage({ status, message }: ErrorPageProps) {
   return (
-    <main class="error">
-      <h1>{status === 404 ? "Nothing here" : "Something went wrong"}</h1>
+    <section class="error-page">
+      <p class="status">{status}</p>
+      <h1>{status === 404 ? "Not on the shelves" : "Something went wrong"}</h1>
       <p>{message}</p>
-      {/* The real error, for you: only outside production. */}
-      {process.env.NODE_ENV !== "production" && error instanceof Error && !(error instanceof YerdError) ? <pre>{error.stack}</pre> : null}
-      <a href="/">Home</a>
-    </main>
+      <a href="/">Back to the shop</a>
+    </section>
   );
 }
+```
 
-const app = yerd().layout(RootLayout).errorPage(ErrorPage);
+```answer
+GET /products/99
+404 Not Found
+content-type: text/html; charset=utf-8
+
+<!doctype html><html lang="en"><head><!-- ... --><title>No product 99 · Paperyard</title><!-- ... --></head><body><!-- ... --><main><section class="error-page"><p class="status">404</p><h1>Not on the shelves</h1><p>No product 99</p><a href="/">Back to the shop</a></section></main></body></html>
 ```
 
 - Only requests that accept HTML get the page; API clients still get text or JSON.
-- `message` is the YerdError's message below 500, else the status text (`Internal Server Error`).
+- `message` is the YerdError's message below 500, else the status text (`Internal Server Error`). `meta.title` is the message unless the route set a title.
 - Use `error` to tell cases apart (`error instanceof NotSignedIn`). Don't print its message or stack in production: it can hold secrets, SQL or paths.
-- `meta.title` is the message unless the route set a title.
+- A 404 for an unknown path matched no route, so middleware (auth's included) never ran and `ctx.route.target` is undefined. A layout that asks who's signed in checks that first, as `RootLayout` does.
 
 ## Assets
 
-[Stylesheet](api:yerd.Stylesheet) and [assetUrl](api:yerd.assetUrl) take a source path and give the right URL in dev and production.
+The shop has one stylesheet. [Stylesheet](api:yerd.Stylesheet) and [assetUrl](api:yerd.assetUrl) take a source path and give the right URL in dev and production.
 
 ```tsx
-import { Stylesheet, assetUrl } from "@toyz/yerd";
-
-<head>
-  <Stylesheet href="src/styles.css" />
-  <link rel="icon" href={assetUrl("src/favicon.svg")} />
-</head>
+// src/layouts.tsx, in <head>
+<Stylesheet href="src/styles.css" />
 ```
 
-- In dev that's `/src/styles.css`, served by Vite. After `vite build` it's the hashed file (`/assets/styles-AbC123.css`), if the file is listed in the Vite plugin's `client` option (see [deploying](11-deploying.md)).
+```ts
+// vite.config.ts
+plugins: [yerd({ entry: "/src/main.ts", client: ["src/styles.css"] })],
+```
+
+```answer
+GET /
+200 OK
+content-type: text/html; charset=utf-8
+
+<!doctype html><html lang="en"><head><!-- ... --><link rel="stylesheet" href="/src/styles.css"><!-- ... --></head><!-- ... --></html>
+```
+
+- In dev that's the source file, served by Vite. After `vite build` it's the hashed file (`/assets/styles-<hash>.css`, cached for a year), because it's listed in the plugin's `client` option ([deploying](11-deploying.md)).
 - Files in `public/` are served as they are; write `assetUrl("x.svg")`, not `"public/x.svg"`.
 - In dev, both warn once per file when it doesn't exist, is written with `public/`, or isn't in `client`: those break after `vite build`.
 
