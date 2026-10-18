@@ -18,7 +18,7 @@ export { YerdKey, createKey, localKey, registeredKeys, findLocalStore, metadataO
 export { is, parse, dto, type Issue, type Spec, type IsDecorator, type IsOptions, type DtoClass } from "./decorators/dto.js";
 export {
   param, params, query, header, request, body, field, file, files, signal, ndjsonBody, session, cookie,
-  toInt, toNumber, toBool, trim, lower, oneOf, between, length, matches,
+  toInt, toNumber, toBool, trim, lower, oneOf, between, length, matches, uuid, email,
   type Transform, type Validator, type Pipe, type PipeOutput, type PipeError, type IsValidPipe,
   type FieldOptions, type FileOptions, type OptionalFieldOptions, type BodyOptions, type FieldOutput, type FieldDecorator,
 } from "./decorators/request.js";

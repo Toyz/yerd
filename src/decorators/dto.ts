@@ -19,7 +19,8 @@
 
 import { HttpError } from "../respond/response.js";
 import { createKey } from "./keys.js";
-import type { Transform, Validator } from "./request.js";
+import type { FieldOutput, IsValidPipe, Pipe, PipeError, Transform, Validator } from "./request.js";
+import { email, uuid } from "./request.js";
 
 /** One problem found while validating, with a path like `address.city` or `tags[2]`. */
 export interface Issue {
@@ -64,17 +65,32 @@ export type IsDecorator<T> = (<This, V>(
   readonly spec: Spec<T>;
 };
 
-/** Options every `is.*` decorator takes. Steps run in order: type check, transform, validate. */
-export interface IsOptions<B> {
+/**
+ * Options every `is.*` decorator takes. Steps run in order: type check,
+ * transform, validate. `O` is the options object itself (inferred whole), so
+ * a pipeline can change the type and validators are typed by its output.
+ */
+export interface IsOptions<B, O = unknown> {
   /** Missing (or `undefined`) is allowed and leaves the field undefined, or its initializer. */
   optional?: boolean;
-  /** Same-type transform(s) run after the type check, e.g. `[trim, lower]`. */
-  transform?: Transform<B, B> | readonly Transform<B, B>[];
-  /** Validator(s) run last. `false` or a string rejects the value. */
-  validate?: Validator<B> | readonly Validator<B>[];
+  /**
+   * Transform(s) run after the type check, left to right; each takes the
+   * previous one's output, so the last decides the field's type:
+   * `[trim, lower]`, or `[trim, toUuid]` for a branded `Uuid`. Throw to reject.
+   */
+  transform?: Pipe;
+  /**
+   * Validator(s) run last, on the transformed value. `false` or a string
+   * rejects it. Inline functions need their parameter annotated.
+   */
+  validate?: Validator<FieldOutput<O, B>> | readonly Validator<FieldOutput<O, B>>[];
 }
 
-type Out<O, B> = O extends { optional: true } ? B | undefined : B;
+/** The field type: the pipeline's output (or the checked value), plus undefined when optional. */
+type Out<O, B> = O extends { optional: true } ? FieldOutput<O, B> | undefined : FieldOutput<O, B>;
+
+/** The decorator, or (for a pipeline whose steps don't line up) something `@` rejects. */
+type Checked<O, B> = (O extends { transform: infer T } ? IsValidPipe<T, B> : true) extends true ? IsDecorator<Out<O, B>> : PipeError;
 
 /** Checks for is.file() / is.files(). */
 export interface FileRules {
@@ -97,7 +113,10 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function finish<B>(value: B, path: string, issues: Issue[], options: IsOptions<B> | undefined): B | typeof INVALID {
+type AnyIsOptions = { optional?: boolean; transform?: Pipe; validate?: Validator<any> | readonly Validator<any>[] };
+
+function finish(input: unknown, path: string, issues: Issue[], options: AnyIsOptions | undefined): unknown {
+  let value = input;
   try {
     const transforms = options?.transform;
     if (transforms) for (const step of typeof transforms === "function" ? [transforms] : transforms) value = step(value);
@@ -136,15 +155,23 @@ function makeDecorator<T>(spec: Spec<T>): IsDecorator<T> {
 }
 
 function primitive<B>(check: (value: unknown) => B | typeof INVALID, expected: string) {
-  return <const O extends IsOptions<B> = {}>(options?: O): IsDecorator<Out<O, B>> =>
-    makeDecorator<Out<O, B>>({
+  return <const O extends IsOptions<B, O> = {}>(options?: O): Checked<O, B> =>
+    makeDecorator({
       optional: options?.optional ?? false,
       parse(value, path, issues) {
         const base = check(value);
         if (base === INVALID) return issue(issues, path, `Expected ${expected}`);
-        return finish(base, path, issues, options) as Out<O, B> | typeof INVALID;
+        return finish(base, path, issues, options);
       },
-    });
+    }) as unknown as Checked<O, B>;
+}
+
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/i;
+
+/** Whether year-month-day is a real calendar date. */
+function sameUtcDay(year: number, month: number, day: number): boolean {
+  const d = new Date(Date.UTC(year, month - 1, day));
+  return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
 }
 
 const INTEGER = /^-?\d+$/;
@@ -188,37 +215,37 @@ export const is = {
   }, "a boolean"),
 
   /** One of these exact strings; the field type is their union. */
-  oneOf<const V extends string, const O extends IsOptions<V> = {}>(values: readonly V[], options?: O): IsDecorator<Out<O, V>> {
+  oneOf<const V extends string, const O extends IsOptions<V, O> = {}>(values: readonly V[], options?: O): Checked<O, V> {
     const allowed = new Set<string>(values);
-    return makeDecorator<Out<O, V>>({
+    return makeDecorator({
       optional: options?.optional ?? false,
       parse(value, path, issues) {
         if (typeof value !== "string" || !allowed.has(value)) return issue(issues, path, `Expected one of ${values.join(", ")}`);
-        return finish(value as V, path, issues, options) as Out<O, V> | typeof INVALID;
+        return finish(value, path, issues, options);
       },
-    });
+    }) as unknown as Checked<O, V>;
   },
 
   /** A nested DTO. */
-  object<T, const O extends IsOptions<T> = {}>(dto: DtoClass<T>, options?: O): IsDecorator<Out<O, T>> {
-    return makeDecorator<Out<O, T>>({
+  object<T, const O extends IsOptions<T, O> = {}>(dto: DtoClass<T>, options?: O): Checked<O, T> {
+    return makeDecorator({
       optional: options?.optional ?? false,
       parse(value, path, issues) {
         const parsed = parseDto(dto, value, path, issues);
-        return parsed === INVALID ? INVALID : (finish(parsed, path, issues, options) as Out<O, T> | typeof INVALID);
+        return parsed === INVALID ? INVALID : finish(parsed, path, issues, options);
       },
-    });
+    }) as unknown as Checked<O, T>;
   },
 
   /**
    * An array whose items match another `is.*` spec. A lone value (a form field
    * sent once) counts as a one-item array.
    */
-  array<T, const O extends IsOptions<T[]> & { min?: number; max?: number } = {}>(
+  array<T, const O extends IsOptions<T[], O> & { min?: number; max?: number } = {}>(
     item: IsDecorator<T>,
     options?: O,
-  ): IsDecorator<Out<O, T[]>> {
-    return makeDecorator<Out<O, T[]>>({
+  ): Checked<O, T[]> {
+    return makeDecorator({
       optional: options?.optional ?? false,
       parse(value, path, issues) {
         const list = Array.isArray(value) ? value : [value];
@@ -227,9 +254,9 @@ export const is = {
         const before = issues.length;
         const out = list.map((v, i) => item.spec.parse(v, `${path}[${i}]`, issues));
         if (issues.length > before) return INVALID;
-        return finish(out as T[], path, issues, options) as Out<O, T[]> | typeof INVALID;
+        return finish(out, path, issues, options);
       },
-    });
+    }) as unknown as Checked<O, T[]>;
   },
 
   /**
@@ -244,21 +271,21 @@ export const is = {
    * }
    * ```
    */
-  file<const O extends IsOptions<File> & FileRules = {}>(options?: O): IsDecorator<Out<O, File>> {
-    return makeDecorator<Out<O, File>>({
+  file<const O extends IsOptions<File, O> & FileRules = {}>(options?: O): Checked<O, File> {
+    return makeDecorator({
       optional: options?.optional ?? false,
       parse(value, path, issues) {
         if (!(value instanceof File)) return issue(issues, path, Array.isArray(value) ? "Expected one file" : "Expected a file");
         const problem = fileProblem(value, options);
         if (problem) return issue(issues, path, problem);
-        return finish(value, path, issues, options) as Out<O, File> | typeof INVALID;
+        return finish(value, path, issues, options);
       },
-    });
+    }) as unknown as Checked<O, File>;
   },
 
   /** Several uploaded files under one name (one file counts as a list of one). */
-  files<const O extends IsOptions<File[]> & FileRules & { min?: number; max?: number } = {}>(options?: O): IsDecorator<Out<O, File[]>> {
-    return makeDecorator<Out<O, File[]>>({
+  files<const O extends IsOptions<File[], O> & FileRules & { min?: number; max?: number } = {}>(options?: O): Checked<O, File[]> {
+    return makeDecorator({
       optional: options?.optional ?? false,
       parse(value, path, issues) {
         const list = Array.isArray(value) ? value : [value];
@@ -271,14 +298,74 @@ export const is = {
           if (problem) issue(issues, `${path}[${i}]`, problem);
         });
         if (issues.length > before) return INVALID;
-        return finish(list as File[], path, issues, options) as Out<O, File[]> | typeof INVALID;
+        return finish(list, path, issues, options);
       },
-    });
+    }) as unknown as Checked<O, File[]>;
+  },
+
+  /**
+   * A UUID string, lowercased. `version` limits it to one version (4, 7...).
+   *
+   * ```ts
+   * @is.uuid({ version: 4 }) id!: string;
+   * ```
+   */
+  uuid<const O extends IsOptions<string, O> & { version?: number } = {}>(options?: O): Checked<O, string> {
+    const check = uuid(options?.version);
+    return primitive<string>((v) => {
+      if (typeof v !== "string") return INVALID;
+      const id = v.trim().toLowerCase();
+      return check(id) === true ? id : INVALID;
+    }, options?.version !== undefined ? `a version ${options.version} UUID` : "a UUID")(options as never) as unknown as Checked<O, string>;
+  },
+
+  /** An email address, trimmed (see the `email` validator for how loose the check is). */
+  email<const O extends IsOptions<string, O> = {}>(options?: O): Checked<O, string> {
+    const check = email();
+    return primitive<string>((v) => {
+      if (typeof v !== "string") return INVALID;
+      const address = v.trim();
+      return check(address) === true ? address : INVALID;
+    }, "an email address")(options as never) as unknown as Checked<O, string>;
+  },
+
+  /**
+   * An absolute URL, normalized (`new URL(v).href`). Only http and https
+   * unless `protocols` says otherwise, so a `javascript:` link can't sneak in.
+   */
+  url<const O extends IsOptions<string, O> & { protocols?: readonly string[] } = {}>(options?: O): Checked<O, string> {
+    const protocols = (options?.protocols ?? ["http", "https"]).map((p) => p.replace(/:$/, "").toLowerCase() + ":");
+    return primitive<string>((v) => {
+      if (typeof v !== "string" || !URL.canParse(v.trim())) return INVALID;
+      const parsed = new URL(v.trim());
+      return protocols.includes(parsed.protocol) ? parsed.href : INVALID;
+    }, `a ${protocols.map((p) => p.slice(0, -1)).join(" or ")} URL`)(options as never) as unknown as Checked<O, string>;
+  },
+
+  /**
+   * A date: an ISO 8601 string (`2026-10-17`, `2026-10-17T09:30:00Z`) or a
+   * Date, as a Date. A date-only string is midnight UTC. Impossible dates
+   * (`2026-02-30`) are rejected rather than rolled over.
+   */
+  date<const O extends IsOptions<Date, O> = {}>(options?: O): Checked<O, Date> {
+    return primitive<Date>((v) => {
+      if (v instanceof Date) return Number.isNaN(v.getTime()) ? INVALID : v;
+      if (typeof v !== "string") return INVALID;
+      const match = ISO_DATE.exec(v.trim());
+      if (!match) return INVALID;
+      const date = new Date(match[4] ? v.trim() : `${match[0]}T00:00:00Z`);
+      if (Number.isNaN(date.getTime())) return INVALID;
+      // new Date() rolls 2026-02-30 over to March; the calendar date must survive.
+      const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+      const check = match[4] && !/Z|[+-]\d{2}:?\d{2}$/i.test(v.trim()) ? [date.getFullYear(), date.getMonth() + 1, date.getDate()] : null;
+      if (check ? check[0] !== year || check[1] !== month || check[2] !== day : !sameUtcDay(year, month, day)) return INVALID;
+      return date;
+    }, "an ISO 8601 date")(options as never) as unknown as Checked<O, Date>;
   },
 
   /** Anything a function can turn `unknown` into. Throw (an HttpError or any Error) to reject. */
-  custom<T, const O extends IsOptions<T> = {}>(parse: (value: unknown) => T, options?: O): IsDecorator<Out<O, T>> {
-    return makeDecorator<Out<O, T>>({
+  custom<T, const O extends IsOptions<T, O> = {}>(parse: (value: unknown) => T, options?: O): Checked<O, T> {
+    return makeDecorator({
       optional: options?.optional ?? false,
       parse(value, path, issues) {
         let parsed: T;
@@ -287,9 +374,9 @@ export const is = {
         } catch (error) {
           return issue(issues, path, messageOf(error));
         }
-        return finish(parsed, path, issues, options) as Out<O, T> | typeof INVALID;
+        return finish(parsed, path, issues, options);
       },
-    });
+    }) as unknown as Checked<O, T>;
   },
 };
 

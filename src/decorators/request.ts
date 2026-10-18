@@ -528,6 +528,27 @@ export function length(min: number, max = Infinity): Validator<string | readonly
       : `Expected a length from ${min} to ${max}, got ${value.length}`);
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Deliberately loose: one @, no spaces, a dot in the domain. The only real check is sending mail to it.
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * A UUID (any case), optionally of one version: `uuid()`, `uuid(4)`, `uuid(7)`.
+ * For params and queries: `@param("id", { validate: uuid() })`; DTOs have `is.uuid()`.
+ */
+export function uuid(version?: number): Validator<string> {
+  return (value) => {
+    if (!UUID.test(value)) return "Expected a UUID";
+    if (version !== undefined && value[14] !== version.toString(16)) return `Expected a version ${version} UUID`;
+    return true;
+  };
+}
+
+/** A plausible email address (one @, a dot in the domain, no spaces, at most 254 characters). */
+export function email(): Validator<string> {
+  return (value) => (value.length <= 254 && EMAIL.test(value)) || "Expected an email address";
+}
+
 /** String matching a regular expression. */
 export function matches(pattern: RegExp, message?: string): Validator<string> {
   return (value) => {

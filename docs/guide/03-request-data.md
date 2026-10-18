@@ -152,9 +152,38 @@ The `is.*` decorators:
 | `is.array(is.string(), { min, max })` | An array of items matching another `is.*`. A lone value counts as a list of one. |
 | `is.file({ types, maxSize })` | One uploaded file. |
 | `is.files({ types, maxSize, min, max })` | Several uploaded files under one name. |
+| `is.uuid({ version })` | A UUID string, lowercased; `version: 4` (or 7...) for one version. |
+| `is.email()` | An email address, trimmed. The check is loose on purpose: sending mail is the real test. |
+| `is.url({ protocols })` | An absolute URL, normalized. Only http and https unless you list others, so `javascript:` can't get in. |
+| `is.date()` | An ISO 8601 string (`2026-10-17`, `2026-10-17T09:30:00Z`) or a Date, as a Date. Impossible dates like `2026-02-30` are rejected, not rolled over. |
 | `is.custom(fn)` | Whatever `fn(value)` returns; throw to reject. |
 
-Every one takes `optional`, `transform` (same type in and out) and `validate`. Outside a request, [`parse(Dto, raw)`](api:yerd.parse) validates a value and [`dto(Dto)`](api:yerd.dto) gives you a transform for any `transform` option.
+Every one takes `optional`, `transform` and `validate`. Outside a request, [`parse(Dto, raw)`](api:yerd.parse) validates a value and [`dto(Dto)`](api:yerd.dto) gives you a transform for any `transform` option.
+
+### Your own types
+
+`transform` runs after the type check, and each step gets the previous one's output, so the last step decides the field's type. Throw from a step to reject the value with that message. A pipeline whose steps don't fit together, or a field whose type doesn't match the output, won't compile.
+
+```tsx
+type Uuid = string & { readonly __brand: "Uuid" };
+
+function toUuid(value: string): Uuid {
+  if (uuid()(value) !== true) throw new Error("Not a valid id");
+  return value.toLowerCase() as Uuid;
+}
+
+class Transfer {
+  @is.string({ transform: [trim, toUuid] }) account!: Uuid;
+  @is.number({ transform: (n: number) => Math.round(n * 100), validate: (cents: number) => cents > 0 || "Must be positive" }) cents!: number;
+  @is.custom((v) => {
+    if (typeof v !== "string" || !/^[A-Z]{3}$/.test(v)) throw new Error("Expected a currency code");
+    return v;
+  })
+  currency!: string;
+}
+```
+
+`validate` runs on the transformed value; annotate inline validators' parameter (`(cents: number) => ...`). For values that don't start as a string, number or boolean at all, `is.custom(fn)` takes the raw value. For params and queries, [`uuid()`](api:yerd.uuid) and [`email()`](api:yerd.email) are validators: `@param("id", { validate: uuid() })`.
 
 ### Partial updates: PATCH
 
