@@ -11,7 +11,9 @@ beforeAll(() => {
   yerd = (window as unknown as { yerd: Yerd }).yerd;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Let a test's last save land before its storage is cleared.
+  await frame();
   vi.restoreAllMocks();
   document.body.innerHTML = "";
   localStorage.clear();
@@ -19,6 +21,8 @@ afterEach(() => {
 });
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+/** Persisted state is saved once per frame: wait for it. */
+const frame = () => new Promise((r) => requestAnimationFrame(() => r(undefined)));
 
 async function mount(markup: string): Promise<void> {
   document.body.innerHTML = markup;
@@ -255,6 +259,23 @@ describe("nesting and morphs", () => {
     $("#b").click();
     expect(texts("b")).toEqual(["1"]);
   });
+
+  it("a change to the page doesn't walk every scope's elements again looking for handlers", async () => {
+    await mount(scope({ n: 0 }, `<button id="b" data-yx-on-click="() => s.n++">x</button><b data-yx-text="n">0</b>${scope({ m: 0 }, `<i data-yx-text="m">0</i>`)}`));
+    const all = vi.spyOn(Element.prototype, "querySelectorAll");
+    document.dispatchEvent(new CustomEvent("yx:applied", { detail: { regions: 0 } }));
+    expect(all.mock.calls.filter(([selector]) => selector === "*")).toEqual([]);
+    $("#b").click();
+    expect(texts("b")).toEqual(["1"]);
+  });
+
+  it("an element put into a scope by other code is wired too", async () => {
+    await mount(scope({ n: 0 }, `<b data-yx-text="n">0</b>`));
+    $("yerd-local").insertAdjacentHTML("beforeend", `<p><button id="b" data-yx-on-click="() => s.n++">x</button></p>`);
+    await flush();
+    $("#b").click();
+    expect(texts("b")).toEqual(["1"]);
+  });
 });
 
 describe("persist", () => {
@@ -270,6 +291,7 @@ describe("persist", () => {
     await mount(counter('data-yx-persist="c"'));
     expect([$(".n").textContent, $(".theme").textContent]).toEqual(["0", "light"]);
     $(".inc").click();
+    await frame();
     expect(JSON.parse(localStorage.getItem("yerd-local:c")!)).toEqual({ n: 1, theme: "light" });
   });
 
@@ -278,6 +300,7 @@ describe("persist", () => {
     await mount(counter('data-yx-persist="c"'));
     expect([$(".n").textContent, $(".theme").textContent]).toEqual(["9", "light"]);
     $(".inc").click();
+    await frame();
     expect(JSON.parse(localStorage.getItem("yerd-local:c")!)).toEqual({ n: 10, theme: "light", extra: true });
   });
 
@@ -317,6 +340,7 @@ describe("persist", () => {
   it("scopes with the same key stay in step; other keys and the other storage don't", async () => {
     await mount(counter('data-yx-persist="a"') + counter('data-yx-persist="a"') + counter('data-yx-persist="b"') + counter('data-yx-persist="a" data-yx-storage="session"'));
     (document.querySelectorAll(".inc")[0] as HTMLElement).click();
+    await frame();
     expect(texts(".n")).toEqual(["1", "1", "0", "0"]);
   });
 
@@ -341,6 +365,36 @@ describe("persist", () => {
     $(".inc").click();
     expect($(".n").textContent).toBe("1");
     expect(goneN.textContent).toBe("0");
+  });
+
+  it("a scope that left the page no longer follows another tab's saves", async () => {
+    await mount(`<div id="gone">${counter('data-yx-persist="p"')}</div>${counter('data-yx-persist="p"')}`);
+    const goneN = $("#gone .n");
+    $("#gone").remove();
+    window.dispatchEvent(new StorageEvent("storage", { key: "yerd-local:p", newValue: '{"n":3}', storageArea: localStorage }));
+    expect($(".n").textContent).toBe("3");
+    expect(goneN.textContent).toBe("0");
+  });
+
+  it("a burst of handlers shows each change at once and saves once, with the last state", async () => {
+    await mount(counter('data-yx-persist="burst"') + counter('data-yx-persist="burst"'));
+    const set = vi.spyOn(localStorage, "setItem");
+    const inc = document.querySelector(".inc") as HTMLElement;
+    inc.click();
+    inc.click();
+    inc.click();
+    expect($(".n").textContent).toBe("3");
+    await frame();
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(localStorage.getItem("yerd-local:burst")!)).toEqual({ n: 3, theme: "light" });
+    expect(texts(".n")).toEqual(["3", "3"]);
+  });
+
+  it("a save still waiting is written when the page goes away", async () => {
+    await mount(counter('data-yx-persist="bye"'));
+    $(".inc").click();
+    window.dispatchEvent(new Event("pagehide"));
+    expect(JSON.parse(localStorage.getItem("yerd-local:bye")!).n).toBe(1);
   });
 
   it("persisted from the server's render: key and storage attributes", async () => {

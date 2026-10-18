@@ -8,6 +8,8 @@ beforeAll(() => {
 });
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+/** Persisted state is saved once per frame: wait for it. */
+const frame = () => new Promise((r) => requestAnimationFrame(() => r(undefined)));
 
 function Widget() {
   return (
@@ -182,6 +184,7 @@ describe("<Local persist>", () => {
     await render(html);
     (document.querySelector(".like") as HTMLElement).click();
     (document.querySelector(".like") as HTMLElement).click();
+    await frame();
     expect(JSON.parse(localStorage.getItem("yerd-local:likes")!)).toEqual({ likes: 2, theme: "light" });
 
     // An older save without "theme": the default fills it in.
@@ -195,6 +198,7 @@ describe("<Local persist>", () => {
     localStorage.clear();
     await render((await renderToString(<Likes />)) + (await renderToString(<Likes />)));
     (document.querySelector(".like") as HTMLElement).click();
+    await frame();
     expect(texts(".likes")).toEqual(["1", "1"]);
 
     window.dispatchEvent(new StorageEvent("storage", { key: "yerd-local:likes", newValue: JSON.stringify({ likes: 42, theme: "dark" }), storageArea: localStorage }));
@@ -207,6 +211,7 @@ describe("<Local persist>", () => {
     sessionStorage.clear();
     await render(await renderToString(<Likes storage="session" />));
     (document.querySelector(".like") as HTMLElement).click();
+    await frame();
     expect(JSON.parse(sessionStorage.getItem("yerd-local:likes")!).likes).toBe(1);
     expect(localStorage.getItem("yerd-local:likes")).toBeNull();
   });

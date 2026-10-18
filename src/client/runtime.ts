@@ -980,6 +980,7 @@ export function yerdRuntime(): void {
   // The handler attributes each element has a listener for.
   const wired = new WeakMap<Element, Set<string>>();
   // Persisted scopes by storage key, so scopes sharing a key stay in step.
+  // Scopes that left the page are pruned, so a boosted session doesn't keep them.
   const byKey = new Map<string, Set<Scope>>();
   const STORE_PREFIX = "yerd-local:";
 
@@ -1007,29 +1008,60 @@ export function yerdRuntime(): void {
     }
   }
 
+  /** A key's scopes still on the page; the others are dropped (and the key, once none are left). */
+  function prune(key: string): Set<Scope> | undefined {
+    const group = byKey.get(key);
+    if (!group) return undefined;
+    for (const scope of group) if (!scope.el.isConnected) group.delete(scope);
+    if (group.size === 0) byKey.delete(key);
+    return group;
+  }
+
   /** Save a persisted scope and bring the others with its key (in this tab) up to date. */
   function save(scope: Scope): void {
     if (!scope.key || !scope.storage) return;
+    let json: string;
     try {
-      scope.storage.setItem(STORE_PREFIX + scope.key, JSON.stringify(scope.state));
+      json = JSON.stringify(scope.state);
+      scope.storage.setItem(STORE_PREFIX + scope.key, json);
     } catch {
-      // full or blocked: the page still works
+      // full or blocked (or state that isn't JSON): the page still works
+      return;
     }
-    for (const other of byKey.get(scope.key) ?? []) {
+    for (const other of prune(scope.key) ?? []) {
       if (other === scope || other.storage !== scope.storage) continue;
-      if (!other.el.isConnected) {
-        byKey.get(scope.key)!.delete(other);
-        continue;
-      }
-      Object.assign(other.state, JSON.parse(JSON.stringify(scope.state)));
+      Object.assign(other.state, JSON.parse(json));
       applyBindings(other);
     }
+  }
+
+  // Persisted scopes changed since their last save. Storage is written once
+  // per frame at most, however many handlers ran (a drag, a burst of input),
+  // and before the page goes away.
+  const unsaved = new Set<Scope>();
+  function saveAll(): void {
+    for (const scope of Array.from(unsaved)) {
+      unsaved.delete(scope);
+      save(scope);
+    }
+  }
+  window.addEventListener("pagehide", saveAll);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") saveAll();
+  });
+
+  /** A handler ran: show the state now, and save it soon. */
+  function changed(scope: Scope): void {
+    applyBindings(scope);
+    if (!scope.key || !scope.storage) return;
+    if (unsaved.size === 0) requestAnimationFrame(saveAll);
+    unsaved.add(scope);
   }
 
   // Another tab saved: follow it.
   window.addEventListener("storage", (event) => {
     if (!event.key?.startsWith(STORE_PREFIX) || event.newValue === null) return;
-    for (const scope of byKey.get(event.key.slice(STORE_PREFIX.length)) ?? []) {
+    for (const scope of prune(event.key.slice(STORE_PREFIX.length)) ?? []) {
       if (scope.storage !== event.storageArea) continue;
       try {
         Object.assign(scope.state, savedState(event.newValue));
@@ -1109,40 +1141,68 @@ export function yerdRuntime(): void {
    * it is now: a morph that changes a handler's source gets it recompiled, one
    * that removes it silences it, and one that adds a handler gets a listener.
    */
-  function wire(scope: Scope): void {
-    for (const el of [scope.el, ...owned(scope, "*")]) {
-      const names = Array.from(el.attributes, (a) => a.name).filter((name) => name.startsWith("data-yx-on-"));
-      if (names.length === 0) continue;
-      const done = wired.get(el) ?? new Set<string>();
-      wired.set(el, done);
-      for (const name of names) {
-        if (done.has(name)) continue;
-        done.add(name);
-        let source = el.getAttribute(name)!;
-        let fn = compile(scope, source);
-        el.addEventListener(name.slice("data-yx-on-".length), (event) => {
-          const now = el.getAttribute(name);
-          if (now === null) return;
-          if (now !== source) {
-            source = now;
-            fn = compile(scope, now);
-          }
-          if (!fn) return;
-          let result: unknown;
-          try {
-            result = fn(event);
-          } finally {
-            applyBindings(scope);
-            save(scope);
-          }
-          if (result && typeof (result as Promise<unknown>).then === "function") {
-            const after = () => {
-              applyBindings(scope);
-              save(scope);
-            };
-            void (result as Promise<unknown>).then(after, after);
-          }
-        });
+  function wire(scope: Scope, el: Element, names: string[]): void {
+    const done = wired.get(el) ?? new Set<string>();
+    wired.set(el, done);
+    for (const name of names) {
+      if (done.has(name)) continue;
+      done.add(name);
+      let source = el.getAttribute(name)!;
+      let fn = compile(scope, source);
+      el.addEventListener(name.slice("data-yx-on-".length), (event) => {
+        const now = el.getAttribute(name);
+        if (now === null) return;
+        if (now !== source) {
+          source = now;
+          fn = compile(scope, now);
+        }
+        if (!fn) return;
+        let result: unknown;
+        try {
+          result = fn(event);
+        } finally {
+          changed(scope);
+        }
+        if (result && typeof (result as Promise<unknown>).then === "function") {
+          const after = () => changed(scope);
+          void (result as Promise<unknown>).then(after, after);
+        }
+      });
+    }
+  }
+
+  // Elements that arrived in a scope, or got a new handler attribute, since
+  // they were last looked at: only these are searched for handlers to wire,
+  // not every element of every scope after each change to the page.
+  const touched = new Set<Element>();
+  function collect(records: MutationRecord[]): void {
+    for (const record of records) {
+      if (record.type === "attributes") {
+        if (record.attributeName!.startsWith("data-yx-on-")) touched.add(record.target as Element);
+      } else for (const node of Array.from(record.addedNodes)) if (node.nodeType === 1) touched.add(node as Element);
+    }
+  }
+  const localWatch = new MutationObserver((records) => {
+    collect(records);
+    wireTouched();
+  });
+
+  /** Wire the handlers on touched elements and their descendants, each to the scope it belongs to. */
+  function wireTouched(): void {
+    const roots = new Set(touched);
+    touched.clear();
+    for (const root of roots) {
+      if (!root.isConnected) continue;
+      // Inside another root: walked with it.
+      let up = root.parentElement;
+      while (up && !roots.has(up)) up = up.parentElement;
+      if (up) continue;
+      for (const el of [root, ...Array.from(root.querySelectorAll("*"))]) {
+        const names = Array.from(el.attributes, (a) => a.name).filter((name) => name.startsWith("data-yx-on-"));
+        if (names.length === 0) continue;
+        const host = el.closest("yerd-local");
+        const scope = host ? scopes.get(host) : undefined;
+        if (scope) wire(scope, el, names);
       }
     }
   }
@@ -1585,7 +1645,19 @@ export function yerdRuntime(): void {
     if (strays.length) hoistStyles(strays);
   });
 
+  /** Put a persisted scope in its key's group (again, if it was pruned while off the page). */
+  function join(scope: Scope): void {
+    if (!scope.key) return;
+    if (!byKey.has(scope.key)) byKey.set(scope.key, new Set());
+    byKey.get(scope.key)!.add(scope);
+  }
+
   function initLocals(found: Element[]): void {
+    // Saves still waiting go first: a scope arriving with the same key reads them.
+    saveAll();
+    for (const key of Array.from(byKey.keys())) prune(key);
+    collect(localWatch.takeRecords());
+    const live: Scope[] = [];
     for (const el of found) {
       let scope = scopes.get(el);
       if (!scope) {
@@ -1601,16 +1673,19 @@ export function yerdRuntime(): void {
           scope.key = key;
           scope.storage = storageFor(el);
           loadSaved(scope);
-          if (!byKey.has(key)) byKey.set(key, new Set());
-          byKey.get(key)!.add(scope);
         }
         scopes.set(el, scope);
+        // From now on, only what changes inside it needs looking at.
+        localWatch.observe(el, { subtree: true, childList: true, attributes: true });
+        touched.add(el);
       }
-      // Wire handlers on new elements (a morph may have added some) and
-      // re-apply: a morph puts the server's initial values back.
-      wire(scope);
-      applyBindings(scope);
+      join(scope);
+      live.push(scope);
     }
+    // Wire handlers on new elements (a morph may have added some) and
+    // re-apply: a morph puts the server's initial values back.
+    wireTouched();
+    for (const scope of live) applyBindings(scope);
   }
   onPage("yerd-local[data-yx-local]", initLocals);
 
