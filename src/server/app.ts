@@ -21,6 +21,7 @@ import { coerce, type Outgoing } from "../respond/coerce.js";
 import { HttpError } from "../respond/response.js";
 import { LONG_LIVED } from "../respond/stream.js";
 import { Channels } from "../live/channels.js";
+import { TestClient, answer } from "./in-process.js";
 import { EventTransport, Events, HANDLES, ON_EVENT, eventName } from "../events/events.js";
 import { ACTIONS, ActionForm, CSRF_FIELD, checkActionToken, fillHoles, resolveSecrets, safeBack, verifyAction } from "../actions/action.js";
 import { CLASS_GUARDS, METHOD_GUARDS, guardRegistry, isGuardRef, resetGuardRegistry, type GuardSpec } from "../decorators/guards.js";
@@ -1096,6 +1097,49 @@ export class YerdApp {
    * createServer(app.handle).listen(3000);
    * ```
    */
+  /**
+   * Answer a fetch Request in this process: the whole pipeline (middleware,
+   * sessions, guards, actions, error pages, streaming), no HTTP server or
+   * port. Resolves when the response starts, so streams can be read as they
+   * go. Also the handler for runtimes that speak fetch.
+   *
+   * ```ts
+   * const res = await app.fetch(new Request("http://localhost/todos", { headers: { accept: "application/json" } }));
+   * ```
+   */
+  fetch = (request: Request): Promise<Response> => answer(this.handle, request);
+
+  /**
+   * app.fetch() for tests: a path (resolved against http://localhost) or a
+   * URL, and fetch's options. Cookies are up to you: send them in
+   * `headers.cookie`, read them from `res.headers.getSetCookie()`.
+   *
+   * ```ts
+   * const app = yerd({ routes: [Todos], services: [] });
+   * const res = await app.request("/todos", { method: "POST", body: JSON.stringify({ title: "milk" }), headers: { "content-type": "application/json" } });
+   * expect(res.status).toBe(201);
+   * ```
+   */
+  request(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+    const request = input instanceof Request ? new Request(input, init) : new Request(new URL(input, "http://localhost"), init);
+    return this.fetch(request);
+  }
+
+  /**
+   * A test client over app.fetch(): keeps cookies between requests (sessions,
+   * sign-in), sends a same-origin Origin on writes, and can submit the action
+   * forms a page rendered.
+   *
+   * ```ts
+   * const client = app.client();
+   * await client.action("/login", { name: "ada", password: "secret" });
+   * expect(await client.page("/account")).toContain("Signed in as ada");
+   * ```
+   */
+  client(base = "http://localhost"): TestClient {
+    return new TestClient(this.fetch, base);
+  }
+
   handle = async (req: IncomingMessage, res: ServerResponse, next?: Next): Promise<void> => {
     try {
       await this.start();

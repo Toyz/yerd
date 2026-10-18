@@ -22,9 +22,52 @@ export default defineConfig({
 
 Use [yerdDecorators](api:vite.yerdDecorators), not the full `yerd()` plugin: tests don't need the dev server or the build.
 
-## A test server
+## No server at all: app.request()
 
-Start the app on a free port, hit it with `fetch`, close it afterwards.
+Most tests don't need a port. [app.request()](api:yerd.YerdApp/request) sends a request through the whole pipeline (middleware, sessions, guards, actions, error pages, streaming) in the same process and gives you a fetch `Response`. Nothing listens, so there's no port to pick and nothing to close but the app.
+
+```ts
+import { afterAll, expect, it } from "vitest";
+import { yerd } from "@toyz/yerd";
+import { Todos } from "../src/routes/todos.js";
+
+const app = yerd({ routes: [Todos], services: [], handleSignals: false });
+afterAll(() => app.stop());
+
+it("adds a todo", async () => {
+  const res = await app.request("/todos", {
+    method: "POST",
+    body: JSON.stringify({ title: "milk" }),
+    headers: { "content-type": "application/json" },
+  });
+  expect(res.status).toBe(201);
+  expect(await (await app.request("/todos")).json()).toEqual({ todos: ["milk"] });
+});
+```
+
+- Paths resolve against `http://localhost`; pass a full URL for another host, or `https://...` to test what happens over TLS (`__Host-` cookies, `Secure`).
+- The response resolves as soon as its headers are written, so an SSE or NDJSON stream can be read as it arrives. Cancelling the body (`reader.cancel()`) is the client hanging up: the route's signal fires and its stream's `finally` runs.
+- The first request starts the app (`@onBoot`, `@every`, hosted services), so `app.stop()` it after the tests.
+- [app.fetch(request)](api:yerd.YerdApp/fetch) is the same for a `Request` you built yourself. It's also the handler for runtimes that speak fetch.
+
+### A client that keeps cookies
+
+[app.client()](api:yerd.YerdApp/client) is a small browser for tests. It remembers cookies between requests, so sessions and sign-in carry over. It sends a same-origin `Origin` on writes, like a form post would, so actions pass the cross-site check. And it can submit the action forms a page rendered:
+
+```ts
+const client = app.client();
+await client.action("/login", { name: "ada", password: "hunter22" }); // the page's form, its token, your fields
+expect(await client.page("/account")).toContain("Signed in as ada");
+
+await client.request("/logout", { method: "POST" });
+expect(client.cookies.has("yerd_session")).toBe(false);
+```
+
+`client.action(page, fields, { index, to, script })` fetches `page`, takes its first action token (or the `index`-th, counting forms and element actions), and posts it with your fields. By default it posts the way the runtime does (`yx` header: no redirects, JSON errors); `script: false` posts like a plain browser form.
+
+## A real server
+
+When the test is about the network itself (keep-alive, a proxy, a real browser with Playwright), start the app on a free port, hit it with `fetch`, close it afterwards.
 
 ```ts
 import { afterAll, beforeAll, expect, it } from "vitest";
