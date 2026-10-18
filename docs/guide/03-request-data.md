@@ -1,10 +1,10 @@
 # Request data
 
-This page covers reading params, query strings, headers, cookies, bodies, forms and uploads, and validating all of them.
+Reading and validating params, query strings, headers, cookies, bodies, forms and uploads.
 
 ## Accessors
 
-Request data arrives on decorated `accessor` fields. Each decorator says where the value comes from.
+Request data arrives on decorated `accessor` fields; each decorator says where the value comes from.
 
 ```tsx
 import { between, cookie, get, header, query, route, toInt, trim } from "@toyz/yerd";
@@ -22,7 +22,7 @@ export class Search {
 }
 ```
 
-When a value is missing, the field's initializer is used (`page = 1`, `theme = "light"`). With `required: true`, a missing value is a 400 instead.
+A missing value falls back to the field's initializer (`page = 1`), or is a 400 with `required: true`.
 
 | Decorator | Reads | Field type |
 | --- | --- | --- |
@@ -39,14 +39,12 @@ When a value is missing, the field's initializer is used (`page = 1`, `theme = "
 | [`@session`](api:yerd.session) | The session (needs `app.sessions()`) | `Session` |
 | [`@request`](api:yerd.request) | The raw Node `IncomingMessage` | `IncomingMessage` |
 
-The types shown are before transforms: a transform changes the field type to whatever it returns.
-
-> [!NOTE]
-> These values belong to the current request, not to the instance, so they're correct whatever the route's lifetime. Each one is resolved once per request, and assigning to the field throws.
+- Types shown are before transforms; a transform changes the field type to what it returns.
+- Values belong to the current request, whatever the route's lifetime. Each is resolved once per request, and assigning to the field throws.
 
 ## Transforms and validators
 
-Every name-based accessor takes the same options object.
+Every name-based accessor takes the same options.
 
 | Option | Type | Applies to | What it does |
 | --- | --- | --- | --- |
@@ -69,18 +67,18 @@ export class UserPage {
 }
 ```
 
-> [!WARNING]
-> Inline validators need their parameter annotated: `(n: number) => ...`, not `(n) => ...`. Without the annotation the parameter is an implicit `any`, which strict mode rejects.
+- The pipeline is type-checked: `[toInt, trim]` doesn't compile, nor does a `toInt` transform on a string field.
 
-The pipeline is type-checked. `[toInt, trim]` is a compile error because `trim` doesn't take a number, and so is `@query("n", { transform: toInt }) accessor n = "x"`, because a number won't fit a string field.
+> [!WARNING]
+> Annotate inline validators' parameter: `(n: number) => ...`, not `(n) => ...`. Strict mode rejects the implicit `any`.
 
 Built-in transforms (throw a 400 on bad input):
 
 | Transform | Output |
 | --- | --- |
-| [`toInt`](api:yerd.toInt) | A safe base-10 integer, surrounding spaces trimmed. `"12"` and `" 12 "` yes; `"1.5"`, `"abc"` and `"0x10"` no. |
-| [`toNumber`](api:yerd.toNumber) | A decimal number, surrounding spaces trimmed: `"3.5"`, `"-.5"`, `"1e3"`. Blanks, hex (`"0x10"`), `"Infinity"` and values too big for a number are refused. |
-| [`toBool`](api:yerd.toBool) | `"true"`, `"1"`, `"on"` or `""` are true; `"false"`, `"0"` or `"off"` are false (the same words as `is.boolean`). |
+| [`toInt`](api:yerd.toInt) | A safe base-10 integer, spaces trimmed. Not `"1.5"`, `"abc"` or `"0x10"`. |
+| [`toNumber`](api:yerd.toNumber) | A decimal number, spaces trimmed (`"3.5"`, `"-.5"`, `"1e3"`). Not blanks, hex, `"Infinity"` or overflow. |
+| [`toBool`](api:yerd.toBool) | `"true"`, `"1"`, `"on"`, `""` are true; `"false"`, `"0"`, `"off"` are false. |
 | [`trim`](api:yerd.trim) / [`lower`](api:yerd.lower) | The trimmed / lowercased string. |
 | [`oneOf("a", "b")`](api:yerd.oneOf) | One of the listed strings; the type is their union. |
 
@@ -92,7 +90,7 @@ Built-in validators (return a message on failure):
 | [`length(min, max?)`](api:yerd.length) | Strings or arrays with a length in range; `max` defaults to unlimited. |
 | [`matches(regex, message?)`](api:yerd.matches) | Strings matching the pattern. |
 
-Writing your own is just writing a function. A transform returns the new value and throws a [`YerdError`](api:yerd.YerdError) to reject; a validator returns `true`, `false` (generic 400) or a string (400 with that message).
+Your own are plain functions. A transform returns the new value or throws an [`YerdError`](api:yerd.YerdError); a validator returns `true`, `false` (generic 400) or a message string (400 with it).
 
 ```ts
 import { ValidationFailed, type Transform } from "@toyz/yerd";
@@ -105,7 +103,7 @@ export const slug: Transform<string, string> = (raw) => {
 
 ## Bodies and DTO classes
 
-Validate a body by declaring a class whose fields use [`is.*`](api:yerd.is) decorators, then pass the class to `@body`. You get a real instance of that class back.
+Declare a class with [`is.*`](api:yerd.is) decorated fields and pass it to `@body`; you get a validated instance of that class.
 
 ```tsx
 import { between, body, is, length, lower, matches, post, route, trim } from "@toyz/yerd";
@@ -135,14 +133,11 @@ export class SignupApi {
 }
 ```
 
-DTO fields are plain fields, not accessors. The rules:
-
-- A field without `optional: true` and without an initializer is required. Initializers double as defaults (`plan` above).
-- Keys the class doesn't declare are dropped, so a client can't sneak in `isAdmin: true`.
-- `is.int`, `is.number` and `is.boolean` also accept their string forms (`"42"`, `"true"`, `"on"`), so the same DTO works for JSON and HTML forms.
-- A decorator that doesn't match the field's declared type is a compile error.
-
-The `is.*` decorators:
+- DTO fields are plain fields, not accessors.
+- A field without `optional: true` or an initializer is required. Initializers are defaults (`plan`).
+- Undeclared keys are dropped, so a client can't sneak in `isAdmin: true`.
+- `is.int`, `is.number` and `is.boolean` accept string forms (`"42"`, `"on"`), so one DTO serves JSON and HTML forms.
+- A decorator that doesn't match the field's type is a compile error.
 
 | Decorator | Value |
 | --- | --- |
@@ -153,17 +148,17 @@ The `is.*` decorators:
 | `is.file({ types, maxSize })` | One uploaded file. |
 | `is.files({ types, maxSize, min, max })` | Several uploaded files under one name. |
 | `is.uuid({ version })` | A UUID string, lowercased; `version: 4` (or 7...) for one version. |
-| `is.email()` | An email address, trimmed. The check is loose on purpose: sending mail is the real test. |
+| `is.email()` | An email address, trimmed. Loose on purpose: sending mail is the real test. |
 | `is.url({ protocols })` | An absolute URL, normalized. Only http and https unless you list others, so `javascript:` can't get in. |
-| `is.date()` | An ISO 8601 string (`2026-10-17`, `2026-10-17T09:30:00Z`) or a Date, as a Date. Impossible dates like `2026-02-30` are rejected, not rolled over. |
+| `is.date()` | An ISO 8601 string or a Date, as a Date. Impossible dates (`2026-02-30`) are rejected, not rolled over. |
 | `is.custom(fn)` | Whatever `fn(value)` returns; throw to reject. |
 
-Every one takes `optional`, `transform` and `validate`. Outside a request, [`parse(Dto, raw)`](api:yerd.parse) validates a value and [`dto(Dto)`](api:yerd.dto) gives you a transform for any `transform` option.
+Every one takes `optional`, `transform` and `validate`. Outside a request, [`parse(Dto, raw)`](api:yerd.parse) validates a value and [`dto(Dto)`](api:yerd.dto) turns a DTO into a transform.
 
-The format decorators hand you clean values, typed:
+The format decorators hand you clean, typed values:
 
 ```tsx
-import { body, is, post, route } from "@toyz/yerd";
+import { is } from "@toyz/yerd";
 
 class ReturnRequest {
   @is.uuid({ version: 4 }) orderId!: string; // " 3F2504E0-4F89-41D3-9A0C-0305E82C3301 " arrives lowercased and trimmed
@@ -171,24 +166,14 @@ class ReturnRequest {
   @is.date() delivered!: Date; // "2026-10-17" arrives as a Date (midnight UTC)
   @is.url({ optional: true }) photoLink?: string; // http(s) only, normalized: "HTTPS://Example.com" -> "https://example.com/"
 }
-
-@route("/returns")
-export class Returns {
-  @body(ReturnRequest) accessor request!: Promise<ReturnRequest>;
-
-  @post async create() {
-    const r = await this.request;
-    const days = (Date.now() - r.delivered.getTime()) / 86_400_000;
-    return days <= 30 ? { ok: true, order: r.orderId } : { ok: false, reason: "Returns close 30 days after delivery" };
-  }
-}
 ```
 
-A failure names the format: `Expected a version 4 UUID`, `Expected an email address`, `Expected an ISO 8601 date`, `Expected a http or https URL`. `is.date()` rejects dates that don't exist (`2026-02-30`) instead of rolling them over, and a date with a time but no zone (`2026-10-17T09:30`) is read in the server's time zone, so send a `Z` or an offset when it matters.
+- Failures name the format: `Expected a version 4 UUID`, `Expected an email address`, `Expected an ISO 8601 date`, `Expected a http or https URL`.
+- A date with a time but no zone (`2026-10-17T09:30`) is read in the server's time zone; send a `Z` or offset when it matters.
 
 ### Your own types
 
-`transform` runs after the type check, and each step gets the previous one's output, so the last step decides the field's type. Throw from a step to reject the value with that message. A pipeline whose steps don't fit together, or a field whose type doesn't match the output, won't compile.
+`transform` runs after the type check, each step taking the previous one's output, so the last step sets the field's type. Throw from a step to reject with that message.
 
 ```tsx
 import { is, trim, uuid } from "@toyz/yerd";
@@ -211,11 +196,13 @@ class Transfer {
 }
 ```
 
-`validate` runs on the transformed value; annotate inline validators' parameter (`(cents: number) => ...`). For values that don't start as a string, number or boolean at all, `is.custom(fn)` takes the raw value. For params and queries, [`uuid()`](api:yerd.uuid) and [`email()`](api:yerd.email) are validators: `@param("id", { validate: uuid() })`.
+- `validate` runs on the transformed value. Mismatched steps or field types don't compile.
+- `is.custom(fn)` takes the raw value, for input that isn't a string, number or boolean.
+- For params and queries, [`uuid()`](api:yerd.uuid) and [`email()`](api:yerd.email) are validators: `@param("id", { validate: uuid() })`.
 
 ### Partial updates: PATCH
 
-A DTO only holds the fields that were sent: an optional field the client left out isn't on the instance at all (not even as `undefined`). So an all-optional DTO is exactly a PATCH body, and merging it can't wipe the fields that weren't sent.
+An optional field the client didn't send isn't on the instance at all (not even as `undefined`), so an all-optional DTO is a PATCH body that can't wipe unsent fields.
 
 ```tsx
 import { body, is, param, patch, route, toInt } from "@toyz/yerd";
@@ -241,13 +228,13 @@ export class TodoItem {
 }
 ```
 
-A route can declare one `@body` per shape (say `TodoChanges` for PATCH and a full `TodoReplacement` for PUT): they're promises, so each handler awaits the one it needs and only that one is validated.
+A route can declare one `@body` per shape (`TodoChanges` for PATCH, `TodoReplacement` for PUT); only the one a handler awaits is validated.
 
 ## The body is a promise
 
-Reading a body is async, so `@body`, `@field`, `@file` and `@files` fields hold promises. Nothing is read until something awaits the field, and every read in a request shares one parse.
+`@body`, `@field`, `@file` and `@files` fields hold promises. Nothing is read until something awaits one, and all reads in a request share one parse.
 
-Without a DTO, `@body()` gives you the parsed body by content type:
+Without a DTO, `@body()` parses by content type:
 
 | Content type | Value |
 | --- | --- |
@@ -258,7 +245,7 @@ Without a DTO, `@body()` gives you the parsed body by content type:
 | anything else | A `Uint8Array`. |
 | no body | `undefined` (or 400 with `required: true`). |
 
-For one form field, `@field` is simpler. It reads URL-encoded and multipart forms, and top-level strings, numbers and booleans of a JSON object:
+`@field` reads one field from URL-encoded or multipart forms, or a top-level string, number or boolean of a JSON object:
 
 ```tsx
 import { field, lower, matches, post, route, trim } from "@toyz/yerd";
@@ -276,7 +263,7 @@ export class Subscribe {
 
 ## Method parameters with @args
 
-TC39 decorators have no parameter decorators, so [`@args`](api:yerd.args) lists the values on the method instead. The same factories work here, and promises are awaited for you.
+TC39 has no parameter decorators, so [`@args`](api:yerd.args) lists a method's values; the same factories work, and promises are awaited for you.
 
 ```tsx
 import { args, body, is, length, param, patch, query, route, toBool, toInt } from "@toyz/yerd";
@@ -296,7 +283,8 @@ export class TodoApi {
 }
 ```
 
-The parameter types are checked against the resolvers: declare `id: string` here and it won't compile. Use `@args` for values only one handler needs, and accessors for values the whole class shares.
+- Parameter types are checked: `id: string` here won't compile.
+- Use `@args` for values one handler needs, accessors for values the class shares.
 
 ## Uploads
 
@@ -323,34 +311,22 @@ export class Avatar {
 | `maxSize` | Bytes; a bigger file is a 413. |
 | `types` | Mime types, `image/*` wildcards allowed; anything else is a 415. |
 
-An empty file input counts as no file. Uploads also work inside a DTO with `is.file` and `is.files`, next to ordinary fields:
+An empty file input counts as no file. In a DTO, use `is.file` and `is.files` next to ordinary fields:
 
 ```tsx
-import { body, is, post, route } from "@toyz/yerd";
-
 class Profile {
   @is.string() name!: string;
   @is.file({ types: ["image/*"], maxSize: 2_000_000, optional: true }) avatar?: File;
   @is.files({ optional: true, max: 3 }) attachments?: File[];
 }
-
-@route("/profile")
-export class ProfileApi {
-  @body(Profile) accessor profile!: Promise<Profile>;
-
-  @post async save() {
-    const p = await this.profile;
-    return { name: p.name, avatar: p.avatar?.name ?? null, attachments: p.attachments?.length ?? 0 };
-  }
-}
 ```
 
 > [!WARNING]
-> The whole body is capped by the app's `bodyLimit`, 1 MiB by default, and anything bigger is a 413 before your code runs. Raise it for uploads: `yerd({ bodyLimit: 10 * 1024 * 1024 })`. `maxSize` limits one file; it can't raise the body limit.
+> The whole body is capped by the app's `bodyLimit` (1 MiB by default; bigger is a 413 before your code runs). Raise it for uploads: `yerd({ bodyLimit: 10 * 1024 * 1024 })`. `maxSize` can't raise it.
 
 ## Signal and session
 
-[`@signal`](api:yerd.signal) aborts when the client goes away or the server shuts down. Pass it to anything slow:
+[`@signal`](api:yerd.signal) aborts when the client goes away or the server shuts down; pass it to anything slow.
 
 ```tsx
 import { get, route, signal } from "@toyz/yerd";
@@ -366,28 +342,15 @@ export class Slow {
 }
 ```
 
-[`@session`](api:yerd.session) gives you the session once the app calls `.sessions()`. `Session<T>` types its keys by `T`; the [sessions and auth guide](09-sessions-and-auth.md) has the full story.
-
-```tsx
-import { get, route, session, type Session } from "@toyz/yerd";
-
-@route("/visits")
-export class Visits {
-  @session accessor session!: Session<{ visits?: number }>;
-
-  @get count() {
-    this.session.visits = (this.session.visits ?? 0) + 1;
-    return { visits: this.session.visits };
-  }
-}
-```
+[`@session`](api:yerd.session) is covered in [sessions and auth](09-sessions-and-auth.md).
 
 ## Your own accessors
 
-The built-in decorators are made with [createAccessor](api:yerd.createAccessor), and so are yours. Give it a function of the request context; you get a decorator that works on accessor fields and in `@args`.
+[createAccessor](api:yerd.createAccessor) turns a function of the request context into a decorator for accessor fields and `@args`; the built-ins are made the same way.
 
 ```tsx
-import { NotFound, createAccessor, get, param, resolve, route, service } from "@toyz/yerd";
+import { YerdError, createAccessor, get, route } from "@toyz/yerd";
+import { findShop, type Shop } from "./shops.js";
 
 /** The visitor's first choice from Accept-Language: "pt-PT,pt;q=0.9,en;q=0.8" -> "pt-PT". */
 export const language = createAccessor(
@@ -395,24 +358,11 @@ export const language = createAccessor(
   { name: "language" },
 );
 
-interface Shop {
-  slug: string;
-  name: string;
-}
-
-@service
-export class Shops {
-  async bySlug(slug: string): Promise<Shop | undefined> {
-    return slug === "acme" ? { slug, name: "Acme" } : undefined;
-  }
-}
-
 /** The shop this request is for, from the subdomain (acme.example.com). A 404 if there's none. */
 export const shop = createAccessor(
   async (ctx): Promise<Shop> => {
-    const slug = ctx.url.hostname.split(".")[0] ?? "";
-    const found = await resolve(Shops).bySlug(slug);
-    if (!found) throw new NotFound("No such shop");
+    const found = await findShop(ctx.url.hostname.split(".")[0] ?? "");
+    if (!found) throw new YerdError(404, "No such shop");
     return found;
   },
   { name: "shop" },
@@ -441,18 +391,17 @@ export class Product {
 }
 ```
 
-- The function runs at most once per request for each decorator and argument list, the first time something reads it; every later read gets the same value (or the same promise).
-- Returning `undefined` uses the field's initializer, like `@query`.
-- Throwing (a `YerdError`, say) answers the request, the same as a guard.
-- Arguments after `ctx` become the decorator's arguments: `@idParam("id")`. `validate` runs at boot for every route class that uses it; return a message to stop the app from booting.
-- The field's type is checked against what the function returns: `@language accessor lang!: number` won't compile.
-- They work on services too, reading whatever request is running (see [request data in a service](08-services.md#request-data-in-a-service)), and in `@args(language, idParam("id"))`.
+- The function runs at most once per request per decorator and argument list, on first read.
+- Returning `undefined` uses the field's initializer; throwing (an `YerdError`, say) answers the request, like a guard.
+- Arguments after `ctx` become the decorator's arguments. `validate` runs at boot for every route that uses it; return a message to stop the boot.
+- The field's type is checked against the return type.
+- They also work on services (see [request data in a service](08-services.md#request-data-in-a-service)).
 
-For lower-level work, `currentContext()` gives you the same context anywhere in a request, and [readBody](api:yerd.readBody) parses a raw `IncomingMessage` body the way `@body` does.
+For lower-level work, `currentContext()` gives the same context anywhere in a request, and [readBody](api:yerd.readBody) parses a raw `IncomingMessage` like `@body` does.
 
 ## When input is bad
 
-You don't write error handling for bad input: yerd answers before (or while) your handler reads the value.
+yerd answers bad input before (or while) your handler reads it.
 
 | Problem | Response |
 | --- | --- |
@@ -479,4 +428,5 @@ A failed DTO reports every problem at once, each with a path:
 }
 ```
 
-Browsers get your error page instead when the app has one (see [responses](04-responses.md)). To turn issues into form messages, catch the [`ValidationFailed`](api:yerd.ValidationFailed) and read `error.issues`; the [interactivity guide](06-interactivity.md) shows the pattern for forms.
+- Browsers get your [error page](04-responses.md) instead, when the app has one.
+- For form messages, catch the [`YerdError`](api:yerd.YerdError) and read `error.details.issues`; the [interactivity guide](06-interactivity.md) shows the pattern.
