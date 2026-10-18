@@ -138,7 +138,7 @@ describe("@onBoot", () => {
     }
     const error = await yerd({ routes: [], services: [Hooked] }).start().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(BootError);
-    expect((error as BootError).problems).toEqual(["Hooked (scoped): @onBoot, @onShutdown and @every need a singleton service"]);
+    expect((error as BootError).problems).toEqual(["Hooked (scoped): @onBoot, @onShutdown, @every, @on and @handles need a singleton service"]);
   });
 
   it("refuses lifecycle hooks on routes", async () => {
