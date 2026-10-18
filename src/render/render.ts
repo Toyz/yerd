@@ -256,7 +256,7 @@ function renderChild(child: unknown, state: State): Step {
   }
   if (isPromiseLike(child)) {
     flush(state);
-    return Promise.resolve(child).then((value) => renderChild(value, state));
+    return renderAfter(child, state);
   }
   if (isIterable(child)) return renderList(Array.from(child), 0, state);
   throw new TypeError(`Cannot render ${Object.prototype.toString.call(child)} as a child`);
@@ -267,10 +267,31 @@ function renderList(items: readonly unknown[], from: number, state: State, start
     const step = renderChild(items[i], state);
     if (step) {
       if (!started) startSiblings(items, i + 1, state);
-      return step.then(() => renderList(items, i + 1, state, true));
+      return renderListAfter(step, items, i + 1, state);
     }
   }
   return undefined;
+}
+
+// The continuations below are functions of their own, not arrow functions
+// inline where they're needed: a closure makes V8 allocate a context for the
+// variables it captures on every call of the function it sits in, whether or
+// not that call creates it. On the walk that's per node, for steps that are
+// rarely taken (a page that never waits never needs one).
+
+/** A promise child: renders what it resolves to. */
+function renderAfter(child: PromiseLike<unknown>, state: State): Step {
+  return Promise.resolve(child).then((value) => renderChild(value, state));
+}
+
+/** The rest of a list, once `step` (the item before `from`) is done. */
+function renderListAfter(step: Promise<void>, items: readonly unknown[], from: number, state: State): Step {
+  return step.then(() => renderList(items, from, state, true));
+}
+
+/** An element's end tag, once its children's `step` is done. */
+function closeAfter(step: Promise<void>, type: string, open: number, state: State): Step {
+  return step.then(() => closeElement(type, open, state));
 }
 
 const AsyncFunction = (async () => {}).constructor;
@@ -388,7 +409,7 @@ function renderNode(node: YerdNode, state: State): Step {
     return undefined;
   }
   const step = renderChild(props.children, state);
-  if (step) return step.then(() => closeElement(type, open, state));
+  if (step) return closeAfter(step, type, open, state);
   closeElement(type, open, state);
   return undefined;
 }
