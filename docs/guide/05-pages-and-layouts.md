@@ -55,7 +55,22 @@ const page = (
 );
 ```
 
-Arrays render one after another, so `.map()` works as you'd expect. A `key` on an element is written as `data-key`, which the client runtime uses to match elements when it updates the page.
+Async siblings wait together. When the renderer has to wait on a child, it calls every `async` component after it among the same children (a `.map()` array or a fragment there included) right away, so three slow sections take as long as the slowest, not the sum. The output still goes out in page order: a section that finishes early waits for the ones above it, then goes out with them. If one fails, the page fails at that point, after everything above it, as if they had run one by one. Two things to know:
+
+- Only components declared `async` start early, and only those among the same children. Plain components, and async components inside a later element or component (the `<Orders />` in `<section><Orders /></section>`, or in `<Card><Orders /></Card>`), run when the renderer gets to them. To have slow parts wait together, make them siblings.
+- A component that starts early runs before the components above it have rendered, so don't have it depend on side effects of theirs.
+
+```tsx
+const page = (
+  <main>
+    <Stats />    {/* these three start together */}
+    <Orders />
+    <Activity />
+  </main>
+);
+```
+
+Arrays render in order, so `.map()` works as you'd expect. A `key` on an element is written as `data-key`, which the client runtime uses to match elements when it updates the page.
 
 ## What renders how
 

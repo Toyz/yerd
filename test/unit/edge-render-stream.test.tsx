@@ -38,7 +38,8 @@ describe("renderToStream chunks", () => {
 
   it("flushes before each wait, never an empty chunk", async () => {
     const A = async () => <i>a</i>;
-    const B = async () => <i>b</i>;
+    // Still waiting when the walk gets to it (siblings start together).
+    const B = async () => later(<i>b</i>, 5);
     expect(await chunks(<main><h1>top</h1><A /><B /><p>end</p></main>)).toEqual([
       "<main><h1>top</h1>",
       "<i>a</i>",

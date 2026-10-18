@@ -10,6 +10,10 @@
  * Output accumulates in a buffer that is flushed as a chunk right before the
  * renderer waits, so the top of the page goes out before a slow component
  * finishes, without emitting a chunk per tag.
+ *
+ * While it waits on one child, the async components among the children after
+ * it are called right away (see startSiblings), so siblings wait together
+ * instead of one after another. Output still goes out in order.
  */
 
 import { Fragment, isYerdNode, jsx, type Child, type YerdNode } from "../jsx/jsx-runtime.js";
@@ -109,6 +113,8 @@ interface State {
   cssHeld: Set<string> | undefined;
   /** cssSent outside each open <template> / <noscript>, innermost last (see OWN_CSS_ELEMENTS). */
   cssOuter: Set<string>[] | undefined;
+  /** Async components called before the walk got to them (see startSiblings), until it does. */
+  early: Map<YerdNode, Early> | undefined;
   /** Flushed chunks waiting for the stream's consumer. */
   chunks: string[];
   /** Wakes the stream's consumer when a chunk is flushed. */
@@ -117,6 +123,16 @@ interface State {
 
 /** `undefined`: finished synchronously. A promise: continue after it. */
 type Step = Promise<void> | undefined;
+
+/** An async component already called: how its promise came out, once it has. */
+interface Early {
+  /** Resolves (never rejects) once the component's promise has settled. */
+  settled: Promise<void>;
+  done: boolean;
+  failed: boolean;
+  /** What it resolved to, or the error. */
+  value: unknown;
+}
 
 /** Whether output is kept: in "only" mode, just inside a <Dynamic>. */
 function emitting(state: State): boolean {
@@ -204,12 +220,74 @@ function renderChild(child: unknown, state: State): Step {
   throw new TypeError(`Cannot render ${Object.prototype.toString.call(child)} as a child`);
 }
 
-function renderList(items: readonly unknown[], from: number, state: State): Step {
+function renderList(items: readonly unknown[], from: number, state: State, started = false): Step {
   for (let i = from; i < items.length; i++) {
     const step = renderChild(items[i], state);
-    if (step) return step.then(() => renderList(items, i + 1, state));
+    if (step) {
+      if (!started) startSiblings(items, i + 1, state);
+      return step.then(() => renderList(items, i + 1, state, true));
+    }
   }
   return undefined;
+}
+
+const AsyncFunction = (async () => {}).constructor;
+
+/**
+ * The walk is about to wait on a child: call the async components after it in
+ * the same list (arrays and fragments in it included) now, so they wait
+ * alongside it. What each returns is kept until the walk gets there and
+ * renders it in order. Calling a component doesn't depend on where the walk
+ * is (it only gets its props, and the request's context follows promises),
+ * so an early call is the same call. Only `async` functions: plain components
+ * still run when they're reached. Not inside elements or other components,
+ * whose children might never render.
+ */
+function startSiblings(items: readonly unknown[], from: number, state: State): void {
+  for (let i = from; i < items.length; i++) {
+    const item = items[i];
+    if (Array.isArray(item)) startSiblings(item, 0, state);
+    else if (isYerdNode(item)) {
+      if (item.type === Fragment) {
+        const children = item.props.children;
+        startSiblings(Array.isArray(children) ? children : [children], 0, state);
+      } else if (item.type instanceof AsyncFunction && !state.early?.has(item)) {
+        (state.early ??= new Map()).set(item, start(item));
+      }
+    }
+  }
+}
+
+function start(node: YerdNode): Early {
+  const early: Early = { settled: undefined!, done: false, failed: false, value: undefined };
+  // Handled here, so a component that fails before the walk gets to it (or
+  // that it never gets to, after an earlier error) is no unhandled rejection.
+  early.settled = Promise.resolve((node.type as (props: object) => unknown)(node.props)).then(
+    (value) => {
+      early.done = true;
+      early.value = value;
+    },
+    (error: unknown) => {
+      early.done = true;
+      early.failed = true;
+      early.value = error;
+    },
+  );
+  return early;
+}
+
+/** An early-started component, where the walk got to it: its output, or its error, now. */
+function renderEarly(early: Early, state: State): Step {
+  if (!early.done) {
+    flush(state);
+    return early.settled.then(() => renderEarly(early, state));
+  }
+  if (early.failed) {
+    // As if it had been awaited here: what came before it goes out first.
+    flush(state);
+    throw early.value;
+  }
+  return renderChild(early.value, state);
 }
 
 // Keys: jsx() keeps an element's key on the node and renderNode writes it as
@@ -230,6 +308,12 @@ function renderNode(node: YerdNode, state: State): Step {
       return undefined;
     }
     if (type === Local) return renderLocal(props as unknown as LocalProps<object>, state);
+    const early = state.early?.get(node);
+    if (early) {
+      // Called already, while the walk waited on an earlier sibling.
+      state.early!.delete(node);
+      return renderEarly(early, state);
+    }
     // In "only" mode components outside a <Dynamic> still run (a Dynamic may
     // be anywhere inside them); only their output is dropped.
     return renderChild(type(props), state);
@@ -546,6 +630,7 @@ export async function* renderToStream(child: Child, options: RenderOptions = {})
     cssHead: "",
     cssHeld: undefined,
     cssOuter: undefined,
+    early: undefined,
     chunks: [],
     notify: undefined,
   };
