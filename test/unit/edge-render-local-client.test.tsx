@@ -56,6 +56,22 @@ describe("bindings whose names have a colon", () => {
   });
 });
 
+describe("handlers in the browser", () => {
+  it("a method from a spread object runs", async () => {
+    await mount(
+      <Local state={{ n: 0 }}>
+        {(s) => {
+          const handlers = { onClick() { s.n++; } };
+          return <button id="b" {...handlers}>{s.n}</button>;
+        }}
+      </Local>,
+    );
+    $("#b").click();
+    $("#b").click();
+    expect($("#b").textContent).toBe("2");
+  });
+});
+
 describe("class bindings in the browser", () => {
   it("a flag naming several classes toggles each", async () => {
     await mount(

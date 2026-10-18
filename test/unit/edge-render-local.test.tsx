@@ -163,6 +163,50 @@ describe("eq() and not()", () => {
   });
 });
 
+describe("handler source", () => {
+  const handler = (on: unknown) =>
+    renderToString(<Local state={{ n: 0 }}>{(s) => (void s, jsx("b", { onClick: on })) as never}</Local>).then(inner);
+
+  it.each([
+    [fn("() => s.n++"), "() =&gt; s.n++"],
+    [fn("(e) => { s.n = e.detail }"), "(e) =&gt; { s.n = e.detail }"],
+    [fn("e=>s.n++"), "e=&gt;s.n++"],
+    [fn("async (e) => { await 1; s.n++ }"), "async (e) =&gt; { await 1; s.n++ }"],
+    [fn("async(e)=>{s.n++}"), "async(e)=&gt;{s.n++}"],
+    [fn("function (e) { s.n++ }"), "function (e) { s.n++ }"],
+    [fn("function named(e) { s.n++ }"), "function named(e) { s.n++ }"],
+    [fn("async function (e) { s.n++ }"), "async function (e) { s.n++ }"],
+    [fn("() => { /* a \"comment\" */ s.n++ // more\n}"), "() =&gt; { /* a &quot;comment&quot; */ s.n++ // more\n}"],
+    [fn("() => s.n = '<\\/script>&amp;'"), "() =&gt; s.n = &#39;&lt;\\/script&gt;&amp;amp;&#39;"],
+  ])("%s", async (on, written) => {
+    expect(await handler(on)).toBe(`<b data-yx-on-click="${written}"></b>`);
+  });
+
+  // A method from a spread object prints as `onClick() {...}`, which isn't an
+  // expression on its own: the runtime's `return (...)` would not compile.
+  it("wraps method shorthand so it's an expression", async () => {
+    const methods = fn("{ onClick(e) { s.n++ }, async onInput() { s.n-- } }") as unknown as Record<string, unknown>;
+    expect(await renderToString(<Local state={{ n: 0 }}>{(s) => (void s, jsx("b", methods)) as never}</Local>).then(inner)).toBe(
+      '<b data-yx-on-click="({ onClick(e) { s.n++ } })[&quot;onClick&quot;]"' +
+        ' data-yx-on-input="({ async onInput() { s.n-- } })[&quot;onInput&quot;]"></b>',
+    );
+  });
+
+  it.each([
+    ["a built-in", console.log],
+    ["a bound function", (() => 1).bind(null)],
+  ])("refuses %s: there's no source to send", async (_, on) => {
+    await expect(handler(on)).rejects.toThrow("onClick in <Local> is a built-in or bound function");
+  });
+
+  it.each([
+    "function () { return __awaiter(this, void 0, void 0, function* () {}) }",
+    "() => __name(() => 1, 'x')",
+  ])("refuses compiler helpers: %s", async (source) => {
+    await expect(handler(fn(source))).rejects.toThrow("was compiled with a helper");
+  });
+});
+
 describe("<Local> handler names", () => {
   // A spread object's keys reach the renderer unchecked; inside <Local> a
   // handler's name becomes part of an attribute name.

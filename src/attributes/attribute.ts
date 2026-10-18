@@ -168,16 +168,24 @@ builtin<PrefetchValue>("prefetch", (value, { tag, props }) => {
 
 let cached: { version: number; source: string } | undefined;
 
-/** A function's source as an expression, including method shorthand (`client(el) {...}`). */
+/**
+ * A function's source as an expression, including method shorthand
+ * (`client(el) {...}`). Also used for <Local> handlers (see render/attrs.ts).
+ */
+export function sourceExpression(fn: Function, source = fn.toString()): string {
+  // `function ...`, `async function ...`, arrows: already expressions.
+  // `async\s*`: minifiers print `async(e)=>...`.
+  if (/^(async\s*)?(function\b|\(|[A-Za-z_$][\w$]*\s*=>)/.test(source)) return source;
+  // Method shorthand: evaluate it as a method of a throwaway object.
+  return `({ ${source} })[${JSON.stringify(fn.name)}]`;
+}
+
 function functionExpression(name: string, fn: Function): string {
   const source = fn.toString();
   if (/\b__(async|awaiter|generator|name)\b/.test(source)) {
     throw new Error(`The client half of attribute "${name}" uses a compiler helper (async lowered below ES2017, or keepNames); it must be self-contained`);
   }
-  // `function ...`, `async function ...`, arrows: already expressions.
-  if (/^(async\s+)?(function\b|\(|[A-Za-z_$][\w$]*\s*=>)/.test(source)) return source;
-  // Method shorthand: evaluate it as a method of a throwaway object.
-  return `({ ${source} })[${JSON.stringify(fn.name)}]`;
+  return sourceExpression(fn, source);
 }
 
 /** Script that registers every client half with the runtime; appended to /_yerd/runtime.js. */

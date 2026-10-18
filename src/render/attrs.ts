@@ -1,4 +1,4 @@
-import { attributeVersion, customAttribute, type AttributeDef } from "../attributes/attribute.js";
+import { attributeVersion, customAttribute, sourceExpression, type AttributeDef } from "../attributes/attribute.js";
 import { escapeHtml, isRawHtml } from "./escape.js";
 import { bindingSpec, isBinding, type Binding } from "./local.js";
 
@@ -284,11 +284,19 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
   return out;
 }
 
-/** A <Local> handler's source, refusing compiler output that leans on helpers the browser won't have. */
+/**
+ * A <Local> handler's source as an expression (method shorthand included, as
+ * from a spread `{ onClick() {...} }`), refusing compiler output that leans on
+ * helpers the browser won't have, and functions that have no source to send.
+ */
 function handlerSource(name: string, fn: Function): string {
   const source = fn.toString();
   if (/\b__(async|awaiter|generator|name)\b/.test(source)) {
     throw new TypeError(`${name} in <Local> was compiled with a helper (async lowered below ES2017, or keepNames); handlers are sent as source and must be self-contained`);
   }
-  return source;
+  // Built-ins and bind() results print as `function () { [native code] }`.
+  if (source.endsWith("{ [native code] }")) {
+    throw new TypeError(`${name} in <Local> is a built-in or bound function; handlers are sent as source, so write one inline`);
+  }
+  return sourceExpression(fn, source);
 }
