@@ -943,6 +943,26 @@ export class YerdApp {
     };
     this.#container = container;
     this.#router = router;
+    container.get(Events).wireWith(() => this.#wireEvents(container));
+  }
+
+  /**
+   * Subscribe every singleton service's @on and @handles methods. Runs once:
+   * at start, or on the bus's first use before that (a script in app.scope(),
+   * a test calling app.request()), so events never go unheard just because
+   * the app wasn't started.
+   */
+  #wireEvents(container: Container): void {
+    const events = container.get(Events);
+    for (const registration of container.registrations()) {
+      if (!registration.impl || registration.lifetime !== "singleton") continue;
+      const metadata = metadataOfClass(registration.impl);
+      const ons = ON_EVENT.from(metadata) ?? [];
+      const answers = HANDLES.from(metadata) ?? [];
+      if (!ons.length && !answers.length) continue;
+      const instance = runWithServices(container, undefined, () => container.get(registration.key)) as object;
+      events.wire(container, instance, registration.impl.name, ons, answers);
+    }
   }
 
   /**
@@ -982,17 +1002,16 @@ export class YerdApp {
     const defs = serviceRegistry.filter((d) => !allowed || allowed.has(d.cls));
     const singletons = [...container.registrations()].filter((r) => r.impl && r.lifetime === "singleton");
 
+    // Event handlers subscribe now, if nothing has used the bus yet (see #wireEvents).
+    container.get(Events).subscribeHandlers();
     await runWithServices(container, undefined, async () => {
       for (const registration of singletons) {
         const metadata = metadataOfClass(registration.impl!);
         const boot = ON_BOOT.from(metadata) ?? [];
         const shutdown = ON_SHUTDOWN.from(metadata) ?? [];
         const periodic = EVERY.from(metadata) ?? [];
-        const ons = ON_EVENT.from(metadata) ?? [];
-        const answers = HANDLES.from(metadata) ?? [];
-        if (boot.length === 0 && shutdown.length === 0 && periodic.length === 0 && ons.length === 0 && answers.length === 0) continue;
+        if (boot.length === 0 && shutdown.length === 0 && periodic.length === 0) continue;
         const instance = container.get(registration.key) as Record<string | symbol, (...a: unknown[]) => unknown>;
-        if (ons.length || answers.length) container.get(Events).wire(container, instance, registration.impl!.name, ons, answers);
         for (const method of boot) await instance[method]!.call(instance);
         for (const method of shutdown) lifecycle.shutdown.push(() => instance[method]!.call(instance));
         for (const { method, ms, immediate } of periodic) {

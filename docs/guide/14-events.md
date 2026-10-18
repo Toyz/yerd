@@ -186,7 +186,7 @@ export class InvoiceDue {
 ```
 
 > [!WARNING]
-> An event JSON can't serialize at all (a `BigInt`, a circular reference) fails inside the bus, after `emit()` has returned, as an unhandled promise rejection. Keep events to plain data.
+> An event JSON can't serialize at all (a `BigInt`, a circular reference) is refused right at `emit()` with a TypeError naming the event, so the mistake shows up where you made it. Keep events to plain data.
 
 ## Calls: asking for an answer
 
@@ -278,12 +278,12 @@ What to know about calls:
 
 ## Jobs, scripts and the app's life
 
-Events flow once the app has started: `listen()` starts it, and so does `app.start()` for worker processes. That's when `@on` and `@handles` methods are subscribed.
+`@on` and `@handles` methods are subscribed when the app starts (`listen()`, or `app.start()` for worker processes), or on the bus's first use if that comes sooner: a script in `app.scope()` or a test calling `app.request()` reaches the handlers without starting anything else.
 
 - An `@every` job or a hosted service can emit; outside a request, the event goes at once.
 - On shutdown the bus stops taking new deliveries and waits for running handlers, up to `shutdownTimeout`. Calls still waiting for an answer fail with "the app is shutting down".
 
-[`app.scope()`](08-services.md#scripts-appscope) alone doesn't start the app, so an event emitted in it reaches nobody. Start the app first when a script needs its handlers:
+A script can emit from [`app.scope()`](08-services.md#scripts-appscope) without starting the app (no `@onBoot`, no `@every` jobs); the handlers still hear it. Stop the app afterwards so it waits for them:
 
 ```ts
 // scripts/resend-receipt.ts
@@ -291,7 +291,6 @@ import { Events, resolve } from "@toyz/yerd";
 import { app } from "../src/app.js";
 import { OrderPlaced } from "../src/events.js";
 
-await app.start(); // subscribes @on handlers (and runs @onBoot hooks)
 await app.scope(() => {
   resolve(Events).emit(new OrderPlaced("o-1001", "ada", 4200));
 });
@@ -384,7 +383,7 @@ const app = yerd({ routes: [Checkout], services: [Receipts], handleSignals: fals
 afterAll(() => app.stop());
 
 it("announces the order", async () => {
-  await app.start(); // boots the container and subscribes the @on handlers
+  await app.boot();
   const placed = app.container.get(Events).waitFor(OrderPlaced, { where: (e) => e.userId === "ada", timeout: "2s" });
   const client = app.client();
   // ...sign in as ada first, e.g. client.action("/login", { name: "ada", password: "..." })

@@ -284,3 +284,47 @@ describe("development warnings", () => {
     }
   });
 });
+
+describe("events without app.start()", () => {
+  it("throw at emit() when they can't be sent, instead of crashing later", async () => {
+    @named("test.big")
+    class Big {
+      constructor(readonly n: bigint) {}
+    }
+    const bus = new Events();
+    expect(() => bus.emit(new Big(1n))).toThrow(TypeError);
+    expect(() => bus.emit(new Big(1n))).toThrow(/test.big can't be sent as JSON/);
+    await expect(bus.emitNow(new Big(1n))).rejects.toThrow(/can't be sent as JSON/);
+  });
+
+  it("reach their handlers from a script (app.scope) and from app.request, unstarted", async () => {
+    @named("test.unstarted")
+    class Unstarted {
+      constructor(readonly from: string) {}
+    }
+    const heard: string[] = [];
+    @service
+    class Listener {
+      @on(Unstarted) note(e: Unstarted) {
+        heard.push(e.from);
+      }
+    }
+    @route("/emit-unstarted")
+    class Emitter {
+      @inject(Events) accessor events!: Events;
+      @post go() {
+        this.events.emit(new Unstarted("request"));
+        return 204;
+      }
+    }
+    const lazy = yerd({ routes: [Emitter], services: [Listener], handleSignals: false });
+    await lazy.scope(() => resolve(Events).emit(new Unstarted("script")));
+    await tick();
+    expect(heard).toEqual(["script"]);
+    const res = await lazy.request("/emit-unstarted", { method: "POST", headers: { origin: "http://localhost" } });
+    expect(res.status).toBe(204);
+    await tick();
+    expect(heard).toEqual(["script", "request"]);
+    await lazy.stop();
+  });
+});

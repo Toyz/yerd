@@ -11,6 +11,17 @@ import { choose, expandType, isNegotiated, type Negotiated } from "./negotiate.j
 
 export type Body = null | string | Uint8Array | AsyncIterable<string | Uint8Array>;
 
+/**
+ * A response as the pipeline carries it, before it's written: what
+ * middleware gets from `next()` and returns.
+ *
+ * ```ts
+ * const poweredBy: Middleware = async (ctx, next) => {
+ *   const out: Outgoing = await next();
+ *   return { ...out, headers: { ...(out.headers as Record<string, string>), "x-powered-by": "yerd" } };
+ * };
+ * ```
+ */
 export interface Outgoing {
   status: number;
   headers: HeaderInit;

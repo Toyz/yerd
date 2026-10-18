@@ -25,6 +25,7 @@ export {
 } from "./decorators/request.js";
 
 export { res, redirect, bare, HttpError, YerdResponse, type ResponseInit } from "./respond/response.js";
+export type { Outgoing, Body } from "./respond/coerce.js";
 export { negotiate, parseAccept, type Negotiated, type Variants } from "./respond/negotiate.js";
 export { Channels, ChannelBackend, MemoryBackend, channel, type ChannelRef, type SubscribeOptions } from "./live/channels.js";
 export {

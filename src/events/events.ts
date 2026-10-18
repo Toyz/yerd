@@ -409,6 +409,16 @@ export interface WaitOptions<E> {
 
 const eventTopic = (name: string) => `event:${name}`;
 
+/** An event as it travels, or a clear TypeError when it can't (BigInt, cycles). */
+function encode(event: object): EventMessage {
+  const name = eventName(event.constructor);
+  try {
+    return { name, data: toWire(event) };
+  } catch (error) {
+    throw new TypeError(`${name} can't be sent as JSON: ${(error as Error).message}`);
+  }
+}
+
 function isDevelopment(): boolean {
   const env = process.env.NODE_ENV;
   return env === undefined || env === "development";
@@ -437,7 +447,9 @@ export class Events {
   /** This instance, for replies and `every` groups. */
   readonly instance = randomUUID();
   readonly #transport: EventTransport;
-  readonly #queued = new WeakMap<YerdContext, object[]>();
+  readonly #queued = new WeakMap<YerdContext, EventMessage[]>();
+  /** Subscribes the app's @on / @handles methods; set by the app at boot, run once on first use. */
+  #wiring: (() => void) | undefined;
   readonly #released = new WeakSet<YerdContext>();
   readonly #pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: unknown) => void; timer: ReturnType<typeof setTimeout> }>();
   readonly #running = new Set<Promise<unknown>>();
@@ -468,14 +480,18 @@ export class Events {
    * ```
    */
   emit(event: object): void {
+    // Encoded now, so an event that can't be sent (a BigInt, a cycle) throws
+    // here, at the emit, rather than later where nobody can catch it.
+    const message = encode(event);
+    this.#prepare();
     const ctx = maybeContext();
     if (ctx && !this.#released.has(ctx)) {
       let queue = this.#queued.get(ctx);
       if (!queue) this.#queued.set(ctx, (queue = []));
-      queue.push(event);
+      queue.push(message);
       return;
     }
-    void this.#send(event);
+    void this.#send(message);
   }
 
   /**
@@ -486,8 +502,10 @@ export class Events {
    * await this.events.emitNow(new OrderPlaced(order.id, order.total));
    * ```
    */
-  emitNow(event: object): Promise<void> {
-    return this.#send(event);
+  async emitNow(event: object): Promise<void> {
+    const message = encode(event);
+    this.#prepare();
+    return this.#send(message);
   }
 
   /**
@@ -503,6 +521,7 @@ export class Events {
    * ```
    */
   call<C extends Call<any>>(call: C, options: CallOptions = {}): Promise<ResultOf<C>> {
+    this.#prepare();
     const name = eventName(call.constructor);
     const id = randomUUID();
     const ms = parseDuration(options.timeout ?? "10s");
@@ -534,6 +553,7 @@ export class Events {
    * ```
    */
   waitFor<E extends object>(type: EventClass<E>, options: WaitOptions<E> = {}): Promise<E> {
+    this.#prepare();
     const name = eventName(type);
     const ms = parseDuration(options.timeout ?? "10s");
     return new Promise<E>((resolve, reject) => {
@@ -557,7 +577,28 @@ export class Events {
     const queue = this.#queued.get(ctx);
     if (!queue) return;
     this.#queued.delete(ctx);
-    for (const event of queue) void this.#send(event);
+    for (const message of queue) void this.#send(message);
+  }
+
+  /**
+   * @internal How the app's handlers get subscribed: at start, or (in a
+   * script, or a test that never starts the app) on the first emit, call or
+   * waitFor, so handlers hear events wherever they're sent from.
+   */
+  wireWith(wiring: () => void): void {
+    this.#wiring = wiring;
+  }
+
+  /** @internal Called at app start: subscribe the handlers if no use did yet. */
+  subscribeHandlers(): void {
+    this.#prepare();
+  }
+
+  #prepare(): void {
+    const wiring = this.#wiring;
+    if (!wiring) return;
+    this.#wiring = undefined;
+    wiring();
   }
 
   /** @internal The request failed: forget what it emitted. */
@@ -609,9 +650,8 @@ export class Events {
     return finished;
   }
 
-  async #send(event: object): Promise<void> {
-    const name = eventName(event.constructor);
-    const message: EventMessage = { name, data: toWire(event) };
+  async #send(message: EventMessage): Promise<void> {
+    const { name } = message;
     try {
       const reached = await this.#transport.publish(eventTopic(name), message);
       // In development, once per event: an event nothing hears is usually a
