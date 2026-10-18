@@ -26,7 +26,19 @@ export interface ServiceDef {
 /** Every class decorated with @service / @hosted, in definition order. */
 export const serviceRegistry: ServiceDef[] = [];
 
-/** Forget every @service / @hosted class. Used by dev servers before re-importing the app. */
+/**
+ * Forget every @service / @hosted class. Dev servers call it before
+ * re-importing the app (prefer `app.resetRegistries()`, which reaches the copy
+ * of yerd the app uses); tests that define services per test can call it
+ * between them. Apps built with `yerd({ services: [...] })` don't need it.
+ *
+ * ```ts
+ * afterEach(() => {
+ *   resetServiceRegistry();
+ *   resetGuardRegistry();
+ * });
+ * ```
+ */
 export function resetServiceRegistry(): void {
   serviceRegistry.length = 0;
 }
@@ -47,9 +59,25 @@ export function registrationFor(def: ServiceDef): Registration {
 
 /** Options for @service. */
 export interface ServiceOptions {
-  /** Default "singleton". Wins over a @scoped / @transient decorator on the same class. */
+  /**
+   * Default "singleton". Wins over a @scoped / @transient decorator on the same class.
+   *
+   * ```ts
+   * @service({ lifetime: "scoped" }) export class UnitOfWork {}
+   * ```
+   */
   lifetime?: Lifetime;
-  /** Register as the implementation of a token (or another class). */
+  /**
+   * Register as the implementation of a token (or another class), so
+   * `@inject(Mailer)` gets this class.
+   *
+   * ```ts
+   * @service({ provides: Mailer })
+   * export class ConsoleMailer implements Mailer {
+   *   async send(to: string, body: string) { console.log(`to ${to}: ${body}`); }
+   * }
+   * ```
+   */
   provides?: ServiceKey;
 }
 
@@ -72,9 +100,18 @@ function addService(cls: Function, context: ClassDecoratorContext, options: Serv
  * Register a class with DI. Singleton unless told otherwise. Bare or called:
  *
  * ```ts
- * @service class Clock { ... }
- * @service({ lifetime: "scoped" }) class UnitOfWork { ... }
- * @service({ provides: Mailer }) class SmtpMailer implements Mailer { ... }
+ * @service
+ * export class Clock {
+ *   now() { return new Date(); }
+ * }
+ *
+ * @service({ lifetime: "scoped" })
+ * export class UnitOfWork {}
+ *
+ * @service({ provides: Mailer })
+ * export class ConsoleMailer implements Mailer {
+ *   async send(to: string, body: string) { console.log(`to ${to}: ${body}`); }
+ * }
  * ```
  */
 export function service(value: Function, context: ClassDecoratorContext): void;
@@ -95,11 +132,46 @@ function lifetimeDecorator(lifetime: Lifetime) {
   };
 }
 
-/** Lifetime shorthands for @service and @route classes. Stack in any order. */
+/**
+ * Make a @service or @route class a singleton: one instance for the life of
+ * the app. Services already are by default, so it's mostly for routes, which
+ * are scoped otherwise. Stacks with @route / @service in any order.
+ *
+ * ```ts
+ * @route("/stats")
+ * @singleton
+ * export class Stats {
+ *   #hits = 0;
+ *   @get show() { return { hits: ++this.#hits }; }
+ * }
+ * ```
+ */
 export const singleton = lifetimeDecorator("singleton");
-/** Make a @service or @route class scoped: one instance per request. The default for routes. */
+/**
+ * Make a @service or @route class scoped: one instance per request. The
+ * default for routes. Stacks with @service in any order.
+ *
+ * ```ts
+ * @scoped
+ * @service
+ * export class RequestStats {
+ *   queries = 0;
+ * }
+ * ```
+ */
 export const scoped = lifetimeDecorator("scoped");
-/** Make a @service or @route class transient: a new instance every time it's resolved. */
+/**
+ * Make a @service or @route class transient: a new instance every time it's
+ * resolved (one per injecting instance, since @inject caches on its owner).
+ *
+ * ```ts
+ * @transient
+ * @service
+ * export class IdGen {
+ *   readonly id = crypto.randomUUID();
+ * }
+ * ```
+ */
 export const transient = lifetimeDecorator("transient");
 
 function resolveFor<T>(owner: object, key: ServiceKey<T>, optional: boolean, perOwner: ReturnType<typeof localKey<T>>): T | undefined {
@@ -141,7 +213,25 @@ function injectDecorator<T>(key: ServiceKey<T>, optional: boolean) {
   };
 }
 
-/** Inject a service. Lazy: resolved on first read, cached per the service's lifetime. */
+/**
+ * Inject a service into an `accessor` field (a plain field is a type error).
+ * Lazy: resolved on first read, cached per the service's lifetime. Works on
+ * routes, services, guards' services and class components. A missing
+ * registration is a boot error.
+ *
+ * ```ts
+ * @service
+ * export class Checkout {
+ *   @inject(Orders) accessor orders!: Orders;
+ *   @inject(Mailer) accessor mailer!: Mailer; // a token works the same
+ *
+ *   async place(email: string) {
+ *     const order = this.orders.place();
+ *     await this.mailer.send(email, `Order ${order.id} placed`);
+ *   }
+ * }
+ * ```
+ */
 export function inject<T>(key: ServiceKey<T>) {
   return injectDecorator(key, false) as <This extends object>(
     target: ClassAccessorDecoratorTarget<This, T>,
@@ -149,7 +239,20 @@ export function inject<T>(key: ServiceKey<T>) {
   ) => ClassAccessorDecoratorResult<This, T>;
 }
 
-/** Like @inject, but `undefined` when nothing is registered. */
+/**
+ * Like @inject, but `undefined` when nothing is registered, instead of a boot
+ * error. For optional integrations.
+ *
+ * ```ts
+ * export const Analytics = token<{ track(event: string): void }>("Analytics");
+ *
+ * @service
+ * export class Signup {
+ *   @maybe(Analytics) accessor analytics: { track(event: string): void } | undefined;
+ *   run() { this.analytics?.track("signup"); }
+ * }
+ * ```
+ */
 export function maybe<T>(key: ServiceKey<T>) {
   return injectDecorator(key, true) as <This extends object>(
     target: ClassAccessorDecoratorTarget<This, T | undefined>,
@@ -176,15 +279,48 @@ function hook(key: typeof ON_BOOT, label: string) {
   };
 }
 
-/** Run when the app starts, before it accepts requests. Awaited, in registration order. Singleton services only. */
+/**
+ * Run when the app starts, before it accepts requests. Awaited, in
+ * registration order. Singleton services only (anything else is a boot error).
+ * `app.scope()` doesn't run these; `app.start()` and `listen()` do.
+ *
+ * ```ts
+ * @service
+ * export class Search {
+ *   #index = new Map<string, string[]>();
+ *   @onBoot async load() { this.#index.set("all", []); }
+ * }
+ * ```
+ */
 export const onBoot = hook(ON_BOOT, "onBoot");
 
-/** Run when the app stops, after requests drain. Reverse registration order. Singleton services only. */
+/**
+ * Run when the app stops, after requests drain and background work ends.
+ * Reverse registration order. Singleton services only.
+ *
+ * ```ts
+ * @service
+ * export class Search {
+ *   #index = new Map<string, string[]>();
+ *   @onShutdown async save() { this.#index.clear(); }
+ * }
+ * ```
+ */
 export const onShutdown = hook(ON_SHUTDOWN, "onShutdown");
 
 const UNITS: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
 
-/** "500ms", "5s", "1m", "2h", "1d", or a number of ms. */
+/**
+ * Parse "500ms", "5s", "1m", "2h", "1d" (decimals allowed), or a number of ms,
+ * into milliseconds. The format @every, `backoff` and call timeouts take;
+ * throws a TypeError on anything else.
+ *
+ * ```ts
+ * parseDuration("1.5s"); // 1500
+ * parseDuration(250); // 250
+ * setTimeout(poll, parseDuration(process.env.POLL_EVERY ?? "30s"));
+ * ```
+ */
 export function parseDuration(value: string | number): number {
   if (typeof value === "number") return value;
   const match = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)$/.exec(value.trim());
@@ -194,7 +330,13 @@ export function parseDuration(value: string | number): number {
 
 /** Options for @every. */
 export interface EveryOptions {
-  /** Also run once right at startup. */
+  /**
+   * Also run once right at startup.
+   *
+   * ```ts
+   * @every("1h", { immediate: true }) refresh() {}
+   * ```
+   */
   immediate?: boolean;
 }
 
@@ -204,7 +346,16 @@ export interface EveryOptions {
  * AbortSignal that fires at shutdown.
  *
  * ```ts
- * @every("5m") async sweep(signal: AbortSignal) { ... }
+ * @service
+ * export class Mailbox {
+ *   #queue: string[] = [];
+ *
+ *   @every("10s") async drain(signal: AbortSignal) {
+ *     for (const to of this.#queue.splice(0)) {
+ *       await fetch("https://mail.example.com/send", { method: "POST", body: to, signal });
+ *     }
+ *   }
+ * }
  * ```
  */
 export function every(interval: string | number, options: EveryOptions = {}) {
@@ -218,7 +369,16 @@ export function every(interval: string | number, options: EveryOptions = {}) {
 
 /** What a @hosted class must implement. */
 export interface HostedService {
-  /** Long-running work. Resolve or return when `signal` aborts (at shutdown). */
+  /**
+   * Long-running work. Resolve or return when `signal` aborts (at shutdown);
+   * shutdown waits up to `shutdownTimeout` for it.
+   *
+   * ```ts
+   * async run(signal: AbortSignal) {
+   *   while (!signal.aborted) await this.queue.processNext(signal);
+   * }
+   * ```
+   */
   run(signal: AbortSignal): unknown;
 }
 
@@ -227,7 +387,16 @@ export interface HostedService {
  * whose `run(signal)` starts after boot and is told to stop at shutdown.
  *
  * ```ts
- * @hosted class Mailer { async run(signal: AbortSignal) { while (!signal.aborted) { ... } } }
+ * @hosted
+ * export class QueueWorker implements HostedService {
+ *   @inject(Orders) accessor orders!: Orders;
+ *
+ *   async run(signal: AbortSignal) {
+ *     while (!signal.aborted) {
+ *       await new Promise((r) => setTimeout(r, 1000)); // poll, process, repeat
+ *     }
+ *   }
+ * }
  * ```
  */
 export function hosted<C extends abstract new (...args: never[]) => HostedService>(value: C, context: ClassDecoratorContext<C>): void {

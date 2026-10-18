@@ -11,11 +11,18 @@
  *
  * // In a handler: delivered once the request has succeeded.
  * @inject(Events) accessor events!: Events;
- * @post checkout() { ...; this.events.emit(new OrderPlaced(order.id, order.total)); }
+ * @post checkout() {
+ *   const order = this.orders.place();
+ *   this.events.emit(new OrderPlaced(order.id, order.total));
+ *   return redirect(`/orders/${order.id}`);
+ * }
  *
  * // Any singleton service reacts, in the background, in its own DI scope.
  * @service class Receipts {
- *   @on(OrderPlaced, { retries: 3 }) async send(e: OrderPlaced) { ... }
+ *   @inject(Mailer) accessor mailer!: Mailer;
+ *   @on(OrderPlaced, { retries: 3 }) async send(e: OrderPlaced) {
+ *     await this.mailer.send("orders@example.com", `Order ${e.orderId}: ${e.total}`);
+ *   }
  * }
  *
  * // A call: one handler answers, the caller awaits its typed result.
@@ -61,6 +68,14 @@ const CLASSES = new Map<string, Function>();
  * Give an event (or call) class a stable name: what it's called on the wire
  * and in logs. Without one, the class name is used, which a minifier can
  * change and two apps may not agree on; name anything that leaves the process.
+ * Two classes with the same name throw when the second is defined.
+ *
+ * ```ts
+ * @named("order.placed")
+ * export class OrderPlaced {
+ *   constructor(readonly orderId: string, readonly total: number) {}
+ * }
+ * ```
  */
 export function named(name: string) {
   return (cls: Function, _context: ClassDecoratorContext): void => {
@@ -71,21 +86,49 @@ export function named(name: string) {
   };
 }
 
-/** An event class's wire name. */
+/**
+ * An event class's wire name: its @named name, else the class name. Handy in
+ * logs, metrics and custom transports.
+ *
+ * ```ts
+ * eventName(OrderPlaced); // "order.placed"
+ * ```
+ */
 export function eventName(cls: Function): string {
   return NAMES.get(cls) ?? cls.name;
 }
 
 /**
  * A call: an event that wants an answer of type `R`. One `@handles` method
- * answers it; `events.call()` resolves to what that returns.
+ * answers it; `events.call()` resolves to what that returns. Extend it (and
+ * call `super()`), and give it a @named name like any event.
+ *
+ * ```ts
+ * @named("shipping.quote")
+ * export class QuoteShipping extends Call<number> {
+ *   constructor(readonly grams: number, readonly country: string) {
+ *     super();
+ *   }
+ * }
+ *
+ * const cents = await this.events.call(new QuoteShipping(1200, "US")); // number
+ * ```
  */
 export abstract class Call<R> {
   /** Type-only: the answer. */
   declare readonly __result?: R;
 }
 
-/** What `events.call(x)` resolves to for a call class. */
+/**
+ * What `events.call(x)` resolves to for a call class. For helpers that pass
+ * calls through and keep their result type.
+ *
+ * ```ts
+ * function ask<C extends Call<any>>(events: Events, call: C): Promise<ResultOf<C>> {
+ *   return events.call(call, { timeout: "2s" });
+ * }
+ * ```
+ */
 export type ResultOf<C> = C extends Call<infer R> ? R : never;
 
 function toWire(value: object): unknown {
@@ -102,11 +145,34 @@ function fromWire<E>(cls: Function, data: unknown): E {
 
 /** Options for @on. */
 export interface OnOptions {
-  /** Run again this many times when it throws. Default 0. */
+  /**
+   * Run again this many times when it throws. Default 0.
+   *
+   * ```ts
+   * @on(OrderPlaced, { retries: 3 }) async send(e: OrderPlaced) {
+   *   await this.mailer.send("orders@example.com", `Order ${e.orderId}`);
+   * }
+   * ```
+   */
   retries?: number;
-  /** Wait before the first retry, doubling after each ("500ms", "2s"). Default "1s". */
+  /**
+   * Wait before the first retry, doubling after each ("500ms", "2s"). Default "1s".
+   *
+   * ```ts
+   * // Retries after 2s, 4s, 8s, then 16s.
+   * @on(OrderPlaced, { retries: 4, backoff: "2s" }) reserve(e: OrderPlaced) {
+   *   return this.stock.reserve(e.orderId);
+   * }
+   * ```
+   */
   backoff?: string | number;
-  /** Every instance gets the event, not just one of them (for in-process state, like caches). */
+  /**
+   * Every instance gets the event, not just one of them (for in-process state, like caches).
+   *
+   * ```ts
+   * @on(PriceChanged, { every: true }) forget(e: PriceChanged) { this.cache.delete(e.sku); }
+   * ```
+   */
   every?: boolean;
 }
 
@@ -128,6 +194,22 @@ export const HANDLES = createKey<HandlesEntry[]>("events:handles");
  * Run this method of a singleton service whenever an event of this class is
  * emitted: in the background, in its own DI scope, after the emitting request
  * has succeeded. Failures are logged (after any retries), never shown to the user.
+ * Each handler is its own consumer group, so with several instances on a shared
+ * transport it still runs once per event (unless `every: true`).
+ *
+ * A service that only has handlers is never injected anywhere, so import its
+ * module from the app's entry (or `discover()` it), or it never registers.
+ *
+ * ```ts
+ * @service
+ * export class Receipts {
+ *   @inject(Mailer) accessor mailer!: Mailer;
+ *
+ *   @on(OrderPlaced, { retries: 3, backoff: "2s" }) async send(e: OrderPlaced) {
+ *     await this.mailer.send("orders@example.com", `Order ${e.orderId}: ${e.total}`);
+ *   }
+ * }
+ * ```
  */
 export function on<E extends object>(type: EventClass<E>, options: OnOptions = {}) {
   if (options.retries !== undefined && (!Number.isInteger(options.retries) || options.retries < 0)) {
@@ -140,7 +222,21 @@ export function on<E extends object>(type: EventClass<E>, options: OnOptions = {
   };
 }
 
-/** Answer calls of this class (see Call). One handler per call class in an app. */
+/**
+ * Answer calls of this class (see Call) on a singleton service. One handler
+ * per call class in an app (two is a boot error). The return value is the
+ * caller's result; an HttpError thrown here reaches the caller as an HttpError.
+ *
+ * ```ts
+ * @service
+ * export class Shipping {
+ *   @handles(QuoteShipping) quote(q: QuoteShipping): number {
+ *     if (q.country === "AQ") throw new HttpError(422, "We don't ship to Antarctica");
+ *     return 499 + Math.ceil(q.grams / 500) * 150;
+ *   }
+ * }
+ * ```
+ */
 export function handles<C extends Call<any>>(type: EventClass<C>) {
   return (_method: (this: any, call: C) => ResultOf<C> | Promise<ResultOf<C>>, context: ClassMethodDecoratorContext): void => {
     if (context.static || context.private) throw new TypeError("@handles must decorate a public instance method");
@@ -154,23 +250,76 @@ export function handles<C extends Call<any>>(type: EventClass<C>) {
  * How events travel. Topics are named after event classes; every
  * subscription belongs to a group, and a message goes to each group once (to
  * one member of it). Map it onto Redis Streams consumer groups, NATS queue
- * groups, or a queue per group.
+ * groups, or a queue per group. Messages are plain JSON-safe values; yerd
+ * names the topics and groups.
+ *
+ * A sketch over NATS, whose queue groups are exactly this model:
+ *
+ * ```ts
+ * export class NatsTransport implements EventTransport {
+ *   constructor(private readonly nc: NatsConnection) {}
+ *
+ *   publish(topic: string, message: unknown) {
+ *     this.nc.publish(topic, JSON.stringify(message)); // no count: an unanswered call times out
+ *   }
+ *
+ *   subscribe(topic: string, group: string, deliver: (message: unknown) => void | Promise<void>) {
+ *     const sub = this.nc.subscribe(topic, {
+ *       queue: group, // one member of the group gets each message
+ *       callback: (_error, data) => void deliver(JSON.parse(data)),
+ *     });
+ *     return () => sub.unsubscribe();
+ *   }
+ * }
+ *
+ * app.services((s) => s.value(EventTransport, new NatsTransport(nc)));
+ * ```
  */
 export interface EventTransport {
   /**
    * Send `message` to every group subscribed to `topic`. May return how many
    * groups it reached, when it knows: a call that reaches none fails at once
    * instead of timing out.
+   *
+   * ```ts
+   * async publish(topic: string, message: unknown) {
+   *   const groups = await this.redis.smembers(`groups:${topic}`);
+   *   for (const group of groups) await this.redis.rpush(`queue:${topic}:${group}`, JSON.stringify(message));
+   *   return groups.length;
+   * }
+   * ```
    */
   publish(topic: string, message: unknown): number | void | Promise<number | void>;
-  /** Join `group` on `topic`. Returns a function that leaves. */
+  /**
+   * Join `group` on `topic`: each message for the group goes to one of its
+   * members. Returns a function that leaves. Errors thrown by `deliver` are
+   * yerd's to log; the transport only needs to keep going.
+   *
+   * ```ts
+   * subscribe(topic: string, group: string, deliver: (message: unknown) => void | Promise<void>) {
+   *   const sub = this.nc.subscribe(topic, { queue: group, callback: (_error, data) => void deliver(JSON.parse(data)) });
+   *   return () => sub.unsubscribe();
+   * }
+   * ```
+   */
   subscribe(topic: string, group: string, deliver: (message: unknown) => void | Promise<void>): () => void;
 }
 
 /** DI token for a custom transport: `app.services((s) => s.value(EventTransport, myTransport))`. */
 export const EventTransport = token<EventTransport>("EventTransport");
 
-/** One process. Groups take turns among their members; delivery is asynchronous, never inside publish(). */
+/**
+ * One process: the default when no EventTransport is registered. Groups take
+ * turns among their members; delivery is asynchronous, never inside
+ * publish(). Construct one yourself to drive an Events bus in a unit test.
+ *
+ * ```ts
+ * const events = new Events(new MemoryTransport());
+ * const next = events.waitFor(OrderPlaced);
+ * await events.emitNow(new OrderPlaced("o1", 42));
+ * (await next).total; // 42
+ * ```
+ */
 export class MemoryTransport implements EventTransport {
   readonly #topics = new Map<string, Map<string, { members: Array<(message: unknown) => void | Promise<void>>; next: number }>>();
 
@@ -228,15 +377,33 @@ interface ReplyMessage {
 
 /** Options for events.call(). */
 export interface CallOptions {
-  /** How long to wait for the answer ("5s", ms). Default 10s. */
+  /**
+   * How long to wait for the answer ("5s", ms). Default 10s.
+   *
+   * ```ts
+   * const cents = await this.events.call(new QuoteShipping(1200, "US"), { timeout: "3s" });
+   * ```
+   */
   timeout?: string | number;
 }
 
 /** Options for events.waitFor(). */
 export interface WaitOptions<E> {
-  /** Give up after this long ("5s", ms). Default 10s. */
+  /**
+   * Give up (reject) after this long ("5s", ms). Default 10s.
+   *
+   * ```ts
+   * await events.waitFor(OrderPlaced, { timeout: "1s" });
+   * ```
+   */
   timeout?: string | number;
-  /** Only an event this accepts. */
+  /**
+   * Only an event this accepts; others are skipped, not consumed.
+   *
+   * ```ts
+   * await events.waitFor(OrderPlaced, { where: (e) => e.orderId === id });
+   * ```
+   */
   where?: (event: E) => boolean;
 }
 
@@ -251,6 +418,20 @@ const callTopic = (name: string) => `call:${name}`;
 /**
  * The bus. Built in: every app has one in DI (`@inject(Events)`), backed by
  * the EventTransport registered in DI, or an in-process one.
+ *
+ * ```ts
+ * @route("/checkout")
+ * export class Checkout {
+ *   @inject(Events) accessor events!: Events;
+ *   @inject(Orders) accessor orders!: Orders;
+ *
+ *   @post place() {
+ *     const order = this.orders.place();
+ *     this.events.emit(new OrderPlaced(order.id, order.total)); // sent once this succeeds
+ *     return redirect(`/orders/${order.id}`);
+ *   }
+ * }
+ * ```
  */
 export class Events {
   /** This instance, for replies and `every` groups. */
@@ -265,6 +446,14 @@ export class Events {
   readonly #unheard = new Set<string>();
   #stopped: AbortController = new AbortController();
 
+  /**
+   * The app builds its own (with the registered EventTransport, if any).
+   * Build one yourself only to test handlers or transports without an app.
+   *
+   * ```ts
+   * const events = new Events(new MemoryTransport());
+   * ```
+   */
   constructor(transport: EventTransport = new MemoryTransport()) {
     this.#transport = transport;
   }
@@ -272,6 +461,11 @@ export class Events {
   /**
    * Announce that something happened. Inside a request it waits until the
    * request has succeeded (and is dropped if it fails); elsewhere it's sent now.
+   * Doesn't wait for handlers: they run in the background.
+   *
+   * ```ts
+   * this.events.emit(new OrderPlaced(order.id, order.total));
+   * ```
    */
   emit(event: object): void {
     const ctx = maybeContext();
@@ -284,7 +478,14 @@ export class Events {
     void this.#send(event);
   }
 
-  /** Send now, even inside a request that may still fail. */
+  /**
+   * Send now, even inside a request that may still fail. Resolves once the
+   * transport has taken it, not when handlers finish.
+   *
+   * ```ts
+   * await this.events.emitNow(new OrderPlaced(order.id, order.total));
+   * ```
+   */
   emitNow(event: object): Promise<void> {
     return this.#send(event);
   }
@@ -293,6 +494,13 @@ export class Events {
    * Ask the one handler of this call class and wait for its answer. Its
    * HttpErrors come back as HttpErrors (status and message), other failures as
    * Errors with its message. Not deferred like emit(): you're waiting on it.
+   *
+   * ```ts
+   * @post async quote() {
+   *   const cents = await this.events.call(new QuoteShipping(1200, "US"), { timeout: "3s" });
+   *   return { cents }; // a 422 thrown by the handler is a 422 here too
+   * }
+   * ```
    */
   call<C extends Call<any>>(call: C, options: CallOptions = {}): Promise<ResultOf<C>> {
     const name = eventName(call.constructor);
@@ -315,7 +523,16 @@ export class Events {
     });
   }
 
-  /** The next event of this class this instance sees (tests, scripts). */
+  /**
+   * The next event of this class this instance sees (tests, scripts). Start
+   * waiting before you trigger the event, or you may miss it.
+   *
+   * ```ts
+   * const placed = app.container.get(Events).waitFor(OrderPlaced, { where: (e) => e.orderId === "o1" });
+   * await fetch(server.url + "/checkout", { method: "POST" });
+   * expect((await placed).total).toBe(42);
+   * ```
+   */
   waitFor<E extends object>(type: EventClass<E>, options: WaitOptions<E> = {}): Promise<E> {
     const name = eventName(type);
     const ms = parseDuration(options.timeout ?? "10s");

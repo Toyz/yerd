@@ -22,12 +22,36 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { localKey } from "../decorators/keys.js";
 import { maybeContext } from "../server/context.js";
 
-/** How long a service instance lives: one per app, one per request, or a new one per resolution. */
+/**
+ * How long a service instance lives: one per app, one per request, or a new
+ * one per resolution. Set it with `@service({ lifetime })` or the @singleton,
+ * @scoped and @transient shorthands.
+ *
+ * ```ts
+ * @service({ lifetime: "scoped" })
+ * export class UnitOfWork {}
+ *
+ * const lifetime: Lifetime | undefined = app.container.registration(UnitOfWork)?.lifetime; // "scoped"
+ * ```
+ */
 export type Lifetime = "singleton" | "scoped" | "transient";
 
 const TOKEN: unique symbol = Symbol.for("yerd.token");
 
-/** A DI key for things with no runtime class: interfaces, config objects. */
+/**
+ * A DI key for things with no runtime class: interfaces, config objects.
+ * Made by token(); `T` is what resolving it gives you.
+ *
+ * ```ts
+ * export interface Config { dbUrl: string }
+ * export const Config: Token<Config> = token<Config>("Config");
+ *
+ * @service
+ * export class Repo {
+ *   @inject(Config) accessor config!: Config;
+ * }
+ * ```
+ */
 export interface Token<T> {
   /** Brand that marks a token() result. */
   readonly [TOKEN]: true;
@@ -52,7 +76,18 @@ export function token<T>(name: string): Token<T> {
 }
 
 export type Constructor<T> = abstract new (...args: never[]) => T;
-/** What a service is registered and resolved by: a class or a token. */
+/**
+ * What a service is registered and resolved by: a class or a token. Use it to
+ * type helpers that work with any service.
+ *
+ * ```ts
+ * function fake<T>(key: ServiceKey<T>, value: T) {
+ *   return (s: ServiceCollection) => s.value(key, value);
+ * }
+ *
+ * app.services(fake(Mailer, { async send() {} }));
+ * ```
+ */
 export type ServiceKey<T = unknown> = Token<T> | Constructor<T>;
 
 export function keyName(key: ServiceKey): string {
@@ -147,19 +182,45 @@ async function disposeAll(created: unknown[]): Promise<void> {
   if (errors.length > 1) throw new AggregateError(errors, "Several services failed to dispose");
 }
 
-/** One request's worth of scoped instances. */
+/**
+ * One request's worth of scoped instances. yerd makes one per request, per
+ * event delivery and per `app.scope()` call; you rarely need your own. When
+ * you do (driving the container by hand in a test), dispose it afterwards.
+ *
+ * ```ts
+ * const scope = new Scope();
+ * const uow = app.container.get(UnitOfWork, scope);
+ * await scope.dispose(); // disposes uow, and anything else scoped it created
+ * ```
+ */
 export class Scope {
   /** Scoped instances by key, created on first resolution. */
   readonly instances = new Map<ServiceKey, unknown>();
   /** Disposable instances owned by this scope, in creation order. */
   readonly created: unknown[] = [];
 
-  /** Nothing was resolved in this scope (the common case): disposing would be a no-op. */
+  /**
+   * Nothing was resolved in this scope (the common case): disposing would be a no-op.
+   *
+   * ```ts
+   * if (!scope.isEmpty) await scope.dispose();
+   * ```
+   */
   get isEmpty(): boolean {
     return this.instances.size === 0 && this.created.length === 0;
   }
 
-  /** Dispose this scope's instances, newest first. Several failures are thrown as an AggregateError. */
+  /**
+   * Dispose this scope's instances, newest first. Several failures are thrown as an AggregateError.
+   *
+   * ```ts
+   * try {
+   *   app.container.get(UnitOfWork, scope).commit();
+   * } finally {
+   *   await scope.dispose();
+   * }
+   * ```
+   */
   async dispose(): Promise<void> {
     this.instances.clear();
     await disposeAll(this.created);
@@ -169,7 +230,14 @@ export class Scope {
 /**
  * The app's service container: registrations, singletons and their disposal.
  * The app builds it at boot (app.container); you normally resolve through
- * @inject or resolve() rather than calling it.
+ * @inject or resolve() rather than calling it. Tests and tooling reach for it
+ * directly.
+ *
+ * ```ts
+ * await app.boot();
+ * const channels = app.container.get(Channels);
+ * if (app.container.has(Mailer)) console.log("mail is configured");
+ * ```
  */
 export class Container {
   readonly #registrations = new Map<ServiceKey, Registration>();
@@ -178,27 +246,61 @@ export class Container {
   /** Keys whose create() is running, outermost first (see #creating). */
   readonly #resolving: ServiceKey[] = [];
 
-  /** Add a registration, replacing any earlier one for the same key. */
+  /**
+   * Add a registration, replacing any earlier one for the same key. The
+   * low-level form of app.services(); `create` gets this container.
+   *
+   * ```ts
+   * container.register({ key: Clock, lifetime: "singleton", create: () => new FakeClock() });
+   * ```
+   */
   register(registration: Registration): void {
     this.#registrations.set(registration.key, registration);
   }
 
-  /** The registration for `key`, if there is one. */
+  /**
+   * The registration for `key`, if there is one.
+   *
+   * ```ts
+   * app.container.registration(Db)?.lifetime; // "singleton"
+   * ```
+   */
   registration(key: ServiceKey): Registration | undefined {
     return this.#registrations.get(key);
   }
 
-  /** Every registration, in the order keys were first registered. */
+  /**
+   * Every registration, in the order keys were first registered.
+   *
+   * ```ts
+   * for (const r of app.container.registrations()) console.log(r.lifetime);
+   * ```
+   */
   registrations(): IterableIterator<Registration> {
     return this.#registrations.values();
   }
 
-  /** Whether anything is registered for `key`. */
+  /**
+   * Whether anything is registered for `key`.
+   *
+   * ```ts
+   * if (app.container.has(Mailer)) console.log("mail is configured");
+   * ```
+   */
   has(key: ServiceKey): boolean {
     return this.#registrations.has(key);
   }
 
-  /** Construct a class owned by this container (its @inject fields resolve here). */
+  /**
+   * Construct a class owned by this container (its @inject fields resolve
+   * here) and track it for disposal per `lifetime`. For a class that isn't
+   * registered but should be wired like a service.
+   *
+   * ```ts
+   * class Report { @inject(Clock) accessor clock!: Clock; }
+   * const report = app.container.construct(Report, undefined, "transient");
+   * ```
+   */
   construct<T>(cls: new () => T, scope: Scope | undefined, lifetime: Lifetime): T {
     const instance = new cls();
     // A constructor may freeze its instance; it then just can't carry the mark.
@@ -211,6 +313,10 @@ export class Container {
    * for disposal per its lifetime. An instance already tracked (a factory
    * handing back another registration's instance, `(c) => c.get(Pool)`)
    * keeps the lifetime it has, so it's never disposed twice or early.
+   *
+   * ```ts
+   * const pool = app.container.adopt(new Pool(), undefined, "singleton"); // disposed at shutdown
+   * ```
    */
   adopt<T>(instance: T, scope: Scope | undefined, lifetime: Lifetime): T {
     if (typeof instance !== "object" || instance === null || isTracked(instance)) return instance;
@@ -235,6 +341,12 @@ export class Container {
    * Resolve `key`. `holder` is the instance that will keep a transient result
    * (an @inject field's owner): the transient then shares its lifetime, so a
    * singleton's transient isn't disposed with the request that first read it.
+   * A scoped key needs a `scope`; inside a request, resolve() passes it for you.
+   *
+   * ```ts
+   * const channels = app.container.get(Channels);
+   * const uow = app.container.get(UnitOfWork, scope);
+   * ```
    */
   get<T>(key: ServiceKey<T>, scope?: Scope, holder?: object): T {
     const registration = this.#registrations.get(key);
@@ -283,14 +395,34 @@ export class Container {
     }
   }
 
-  /** Dispose singletons, newest first. */
+  /**
+   * Dispose singletons, newest first. `app.stop()` calls it; call it yourself
+   * only for a container you built.
+   *
+   * ```ts
+   * await container.dispose();
+   * ```
+   */
   async dispose(): Promise<void> {
     this.#singletons.clear();
     await disposeAll(this.#created);
   }
 }
 
-/** Fluent registration API passed to `app.services(...)`. */
+/**
+ * Fluent registration API passed to `app.services(...)`. Registrations here
+ * override @service ones for the same key, which is how tests swap in fakes.
+ *
+ * ```ts
+ * app.services((s) => s
+ *   .value(Mailer, { async send() {} })
+ *   .singleton(Clock, FakeClock)
+ *   .singleton(Pool)
+ *   .scoped(UnitOfWork)
+ *   .scoped(Db, (c) => c.get(Pool).connect())
+ *   .transient(IdGen));
+ * ```
+ */
 export class ServiceCollection {
   /** Created by the app; you receive one in app.services(). */
   constructor(private readonly add: (registration: Registration) => void) {}
@@ -311,17 +443,37 @@ export class ServiceCollection {
     return this.#register(key, "singleton", impl);
   }
 
-  /** Register a scoped service (one per request); `impl` as for singleton(). */
+  /**
+   * Register a scoped service (one per request); `impl` as for singleton().
+   * A factory that needs other scoped services should call resolve(), which
+   * sees the current request.
+   *
+   * ```ts
+   * app.services((s) => s.scoped(UnitOfWork).scoped(Db, (c) => c.get(Pool).connect()));
+   * ```
+   */
   scoped<T>(key: ServiceKey<T>, impl?: (new () => T) | ((container: Container) => T)): this {
     return this.#register(key, "scoped", impl);
   }
 
-  /** Register a transient service (a new instance per resolution); `impl` as for singleton(). */
+  /**
+   * Register a transient service (a new instance per resolution); `impl` as for singleton().
+   *
+   * ```ts
+   * app.services((s) => s.transient(IdGen));
+   * ```
+   */
   transient<T>(key: ServiceKey<T>, impl?: (new () => T) | ((container: Container) => T)): this {
     return this.#register(key, "transient", impl);
   }
 
-  /** Register an existing value as a singleton. */
+  /**
+   * Register an existing value as a singleton. yerd never disposes it: it's yours.
+   *
+   * ```ts
+   * app.services((s) => s.value(Config, { dbUrl: process.env.DB_URL ?? "postgres://localhost/app" }));
+   * ```
+   */
   value<T>(key: ServiceKey<T>, value: T): this {
     // Marked as tracked by nobody, so a factory returning it doesn't adopt it either.
     if (typeof value === "object" && value !== null && !isTracked(value)) markTracked(value, null);

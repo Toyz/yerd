@@ -24,23 +24,69 @@ import type { YerdContext } from "../server/context.js";
 import { createKey } from "./keys.js";
 
 export type GuardResult = boolean | string | void | undefined | unknown;
-/** A guard's check: gets the request context, returns a guard result (see the module notes above). May be async. */
+/**
+ * A guard's check: gets the request context and returns a guard result (see
+ * the module notes above). May be async. Type a check with it when you keep
+ * it apart from createGuard(), to share or test it on its own.
+ *
+ * ```ts
+ * const hasApiKey: GuardFn = (ctx) =>
+ *   ctx.headers["x-api-key"] === process.env.API_KEY || new HttpError(401, "Bad API key");
+ *
+ * export const apiKey = createGuard("apiKey", hasApiKey);
+ * ```
+ */
 export type GuardFn = (ctx: YerdContext) => GuardResult | Promise<GuardResult>;
 
 const GUARD: unique symbol = Symbol.for("yerd.guard");
 
-/** A value guard: callable as a class or method decorator, or listed in `guards`. */
+/**
+ * A value guard, as createGuard() returns it. The same object is a class or
+ * method decorator, an entry in a `guards` list, and (through `run`) a plain
+ * function you can call in a test.
+ *
+ * ```tsx
+ * const staffOnly: GuardRef = createGuard("staffOnly", (ctx) => ctx.headers["x-staff"] === "yes");
+ *
+ * @route("/staff") @staffOnly
+ * export class StaffHome {
+ *   @get page() { return <h1>Staff</h1>; }
+ * }
+ *
+ * @group("/ops", { guards: [staffOnly] })
+ * export class Ops {}
+ * ```
+ */
 export interface GuardRef {
   /** Brand that marks a createGuard() result. */
   readonly [GUARD]: true;
   /** The name given to createGuard(), used in logs and errors. */
   readonly label: string;
-  /** The check itself. */
+  /**
+   * The check itself, callable without a server: hand it a stand-in context
+   * holding just what the guard reads.
+   *
+   * ```ts
+   * const result = await staffOnly.run({ headers: {} } as unknown as YerdContext); // false: a 403
+   * ```
+   */
   readonly run: GuardFn;
   (value: Function, context: ClassDecoratorContext | ClassMethodDecoratorContext): void;
 }
 
-/** A guard in a `guards` list: the name of a @guard service method, or a value guard from createGuard(). */
+/**
+ * A guard in a `guards` list: the name of a @guard service method, or a value
+ * guard from createGuard(). Lists can mix both.
+ *
+ * ```tsx
+ * const adminGuards: GuardSpec[] = ["auth", staffOnly]; // a @guard name and a value guard
+ *
+ * @route("/admin/users", { guards: adminGuards })
+ * export class AdminUsers {
+ *   @get list() { return <h1>Users</h1>; }
+ * }
+ * ```
+ */
 export type GuardSpec = string | GuardRef;
 
 export function isGuardRef(value: unknown): value is GuardRef {
@@ -80,13 +126,16 @@ function attach(specs: readonly GuardSpec[], context: ClassDecoratorContext | Cl
 /**
  * Make a value guard.
  *
- * ```ts
+ * ```tsx
  * export const businessHours = createGuard("businessHours", () => {
  *   const h = new Date().getHours();
  *   return (h >= 9 && h < 17) || new HttpError(403, "Come back during business hours");
  * });
  *
- * @route("/support") @businessHours class Support { ... }
+ * @route("/support") @businessHours
+ * export class Support {
+ *   @get page() { return <h1>Support</h1>; }
+ * }
  * ```
  */
 export function createGuard(label: string, run: GuardFn): GuardRef {
@@ -101,7 +150,21 @@ export function createGuard(label: string, run: GuardFn): GuardRef {
   return ref;
 }
 
-/** Apply guards (names or value guards) to a class or method. */
+/**
+ * Apply guards (names of @guard methods, or value guards) to a class or
+ * method. On a class they cover every handler and action; on a method, just
+ * that one. They run in the order listed, after the class's guards.
+ *
+ * ```tsx
+ * @route("/billing")
+ * @guards("beta")
+ * export class Billing {
+ *   @get page() { return <h1>Billing</h1>; }
+ *
+ *   @post @guards(signedIn, "staff") refund() { return 204; }
+ * }
+ * ```
+ */
 export function guards(...specs: GuardSpec[]) {
   return (_value: Function, context: ClassDecoratorContext | ClassMethodDecoratorContext): void => attach(specs, context);
 }
@@ -123,7 +186,18 @@ export function onGuardRegistryReset(fn: () => void): void {
   resetHooks.push(fn);
 }
 
-/** Forget every @guard method. Used by dev servers before re-importing the app. */
+/**
+ * Forget every @guard method. Dev servers call it before re-importing the app
+ * (prefer `app.resetRegistries()`, which reaches the copy of yerd the app
+ * uses); tests that define @guard services per test can call it between them.
+ *
+ * ```ts
+ * afterEach(() => {
+ *   resetServiceRegistry();
+ *   resetGuardRegistry();
+ * });
+ * ```
+ */
 export function resetGuardRegistry(): void {
   guardRegistry.length = 0;
   for (const fn of resetHooks) fn();
@@ -134,9 +208,18 @@ export function resetGuardRegistry(): void {
  * name. The method gets the request context and returns a guard result.
  *
  * ```ts
- * @service class AuthGuards {
- *   @inject(Sessions) accessor sessions!: Sessions;
- *   @guard("auth") check(ctx: YerdContext) { return this.sessions.current() ? true : "/login"; }
+ * @service
+ * export class Flags {
+ *   @inject(FlagStore) accessor store!: FlagStore;
+ *
+ *   @guard("beta") beta(ctx: YerdContext) {
+ *     return this.store.isOn("beta", ctx.path) || "/waitlist";
+ *   }
+ * }
+ *
+ * @route("/beta", { guards: ["beta"] })
+ * export class Beta {
+ *   @get page() { return "You're in"; }
  * }
  * ```
  */
