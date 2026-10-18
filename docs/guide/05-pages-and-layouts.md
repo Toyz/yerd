@@ -119,6 +119,8 @@ import { json } from "@toyz/yerd";
 
 Text that could end the element early (`</script`, `<!--`, `</style`) throws at render time instead of breaking your page.
 
+As an attribute value, `json()` is escaped like any string, so `data-props={json(props)}` is safe too.
+
 ## Layouts
 
 A layout is a component that receives [LayoutProps](api:yerd.LayoutProps): the page as `children`, plus `meta`. Register the root layout once with `app.layout()`, and every JSX response goes through it.

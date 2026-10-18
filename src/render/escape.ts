@@ -60,6 +60,8 @@ const JSON_ESCAPES: Record<string, string> = {
   "\u2028": "\\u2028",
   "\u2029": "\\u2029",
 };
+/** Marks json() output, which attributes escape (see isJsonText). */
+const JSON_TEXT: unique symbol = Symbol.for("yerd.json");
 
 /**
  * Data for an inline script: JSON with `<`, `>`, `&`, U+2028 and U+2029
@@ -69,8 +71,16 @@ const JSON_ESCAPES: Record<string, string> = {
  * ```tsx
  * <script type="application/json" id="data">{json(state)}</script>
  * ```
+ *
+ * As an attribute value it's escaped like a string (JSON is full of `"`,
+ * which would end the attribute), so `data-props={json(props)}` is safe too.
  */
 export function json(value: unknown): RawHtml {
   const text = JSON.stringify(value) ?? "null";
-  return raw(text.replace(JSON_UNSAFE, (c) => JSON_ESCAPES[c]!));
+  return { [RAW]: true, [JSON_TEXT]: true, html: text.replace(JSON_UNSAFE, (c) => JSON_ESCAPES[c]!) } as RawHtml;
+}
+
+/** Whether a raw() value came from json(): safe as script text, but not as an attribute value as is. */
+export function isJsonText(value: RawHtml): boolean {
+  return (value as RawHtml & { [JSON_TEXT]?: true })[JSON_TEXT] === true;
 }

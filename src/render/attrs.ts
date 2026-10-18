@@ -1,5 +1,5 @@
 import { attributeVersion, customAttribute, sourceExpression, type AttributeDef } from "../attributes/attribute.js";
-import { escapeHtml, isRawHtml } from "./escape.js";
+import { escapeHtml, isJsonText, isRawHtml } from "./escape.js";
 import { bindingSpec, isBinding, type Binding } from "./local.js";
 
 // Anything that could end the attribute name or the tag. Attribute names come
@@ -160,8 +160,9 @@ function isEventHandlerName(name: string): boolean {
  * safeUrl); numbers are written as is, NaN is omitted; true is a bare
  * attribute and false/null/undefined omit it, except for enumerated ones (see
  * enumerated); URL objects are stringified and Dates written as ISO strings;
- * raw() is written verbatim, unescaped and unchecked. class and className are
- * merged into one class attribute. `key` and `children` are never attributes
+ * raw() is written verbatim, unescaped and unchecked (json() is escaped like a
+ * string). class and className are merged into one class attribute. `key`
+ * and `children` are never attributes
  * (render.ts writes the key as data-key). Custom attributes (see
  * attribute()) render through their own `render`; `custom` is false for that
  * output, so a custom attribute can write its own name as a plain attribute.
@@ -259,7 +260,8 @@ export function renderAttributes(props: Record<string, unknown>, tag = "", custo
 
     if (typeof value === "object") {
       if (isRawHtml(value)) {
-        out += ` ${name}="${value.html}"`;
+        // json() is data, often a user's: its quotes would end the attribute.
+        out += ` ${name}="${isJsonText(value) ? escapeHtml(value.html) : value.html}"`;
         continue;
       }
       if (value instanceof URL) value = value.href;
