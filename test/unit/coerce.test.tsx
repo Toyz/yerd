@@ -22,8 +22,8 @@ describe("coerce", () => {
 
   it("number -> bare status", async () => {
     expect(await coerce(418, opts)).toEqual({ status: 418, headers: {}, body: null, explicitStatus: true });
-    await expect(coerce(1.5, opts)).rejects.toThrow(/status code/);
-    await expect(coerce(42, opts)).rejects.toThrow(/status code/);
+    expect(() => coerce(1.5, opts)).toThrow(/status code/);
+    expect(() => coerce(42, opts)).toThrow(/status code/);
   });
 
   it("undefined / null -> 204", async () => {
@@ -50,8 +50,8 @@ describe("coerce", () => {
   });
 
   it("refuses built-ins JSON can't represent, saying what to do", async () => {
-    await expect(coerce(new Map(), opts)).rejects.toThrow(/a Map \(JSON can't represent it/);
-    await expect(coerce(new Error("x"), opts)).rejects.toThrow(/answer with a response, not another error/);
+    expect(() => coerce(new Map(), opts)).toThrow(/a Map \(JSON can't represent it/);
+    expect(() => coerce(new Error("x"), opts)).toThrow(/answer with a response, not another error/);
   });
 
   it("Uint8Array -> octet-stream", async () => {

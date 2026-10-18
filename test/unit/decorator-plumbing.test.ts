@@ -118,6 +118,6 @@ describe("assertStatus", () => {
     expect(() => res(null, { status: 600 })).toThrow("res(): 600 isn't a response status code (200-599)");
     expect(() => new YerdError(102)).toThrow("new YerdError(): 102 isn't a response status code (200-599)");
     expect(() => status(1000)).toThrow("@status: 1000 isn't a response status code (200-599)");
-    await expect(coerce(42, { layouts: [] })).rejects.toThrow("A handler's returned status: 42 isn't a response status code (200-599)");
+    expect(() => coerce(42, { layouts: [] })).toThrow("A handler's returned status: 42 isn't a response status code (200-599)");
   });
 });

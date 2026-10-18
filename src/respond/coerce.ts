@@ -117,18 +117,28 @@ async function coerceNegotiated(value: Negotiated, options: CoerceOptions): Prom
   return out;
 }
 
-export async function coerce(value: unknown, options: CoerceOptions): Promise<Outgoing> {
-  if (value instanceof Promise) value = await value;
+/** An explicit response: its status, headers and cookies over what its body coerced to. */
+function explicit(value: YerdResponse, inner: Outgoing): Outgoing {
+  const out: Outgoing = { status: value.status, headers: { ...inner.headers, ...value.headers }, body: inner.body, explicitStatus: true };
+  if (inner.cookies || value.cookies) out.cookies = [...(inner.cookies ?? []), ...(value.cookies ?? [])];
+  return out;
+}
+
+/**
+ * Coerce a handler's result. A promise only when it has to wait (a promise
+ * value, a negotiate() variant, an explicit response around one of those):
+ * the server awaits only then, so a plain result costs no trip through the
+ * microtask queue.
+ */
+export function coerce(value: unknown, options: CoerceOptions): Outgoing | Promise<Outgoing> {
+  if (value instanceof Promise) return value.then((resolved: unknown) => coerce(resolved, options));
 
   if (isNegotiated(value)) return coerceNegotiated(value, options);
 
   if (value instanceof YerdResponse) {
-    const inner = value.body === null || value.body === undefined
-      ? { status: value.status, headers: {}, body: null }
-      : await coerce(value.body, value.layout ? { ...options, layouts: applyLayouts(options.layouts, value.layout) } : options);
-    const out: Outgoing = { status: value.status, headers: { ...inner.headers, ...value.headers }, body: inner.body, explicitStatus: true };
-    if (inner.cookies || value.cookies) out.cookies = [...(inner.cookies ?? []), ...(value.cookies ?? [])];
-    return out;
+    if (value.body === null || value.body === undefined) return explicit(value, { status: value.status, headers: {}, body: null });
+    const inner = coerce(value.body, value.layout ? { ...options, layouts: applyLayouts(options.layouts, value.layout) } : options);
+    return inner instanceof Promise ? inner.then((done) => explicit(value, done)) : explicit(value, inner);
   }
 
   if (isBare(value)) {

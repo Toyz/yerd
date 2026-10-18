@@ -244,13 +244,18 @@ function elapsed(span: Span): number {
 
 const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/;
 
+/** Whether requests get a root span (and an access log line): yerd::request at info. */
+export function requestSpansOn(binding: LogBinding): boolean {
+  return binding.filter.enabled("info", "yerd::request");
+}
+
 /**
  * Open a request's root span, or return undefined when request logging is
  * off (then nothing is generated at all). The id comes from a well-formed
  * `x-request-id`, else is new; the trace id continues `traceparent`.
  */
 export function startRequestSpan(binding: LogBinding, req: IncomingMessage, method: string, path: string): Span | undefined {
-  if (!binding.filter.enabled("info", "yerd::request")) return undefined;
+  if (!requestSpansOn(binding)) return undefined;
   const id = requestIdFrom(req) ?? newSpanId();
   const parent = req.headers.traceparent;
   const trace = typeof parent === "string" ? TRACEPARENT.exec(parent) : null;

@@ -27,7 +27,7 @@ import { cssBundleClasses, cssBundleHash, cssBundleText, resetCss, resetCssBundl
 import { EventTransport, Events, eventName, handlesOf, hasEventHandlers, onsOf } from "../events/events.js";
 import { ActionForm, actionNames, checkActionToken, fillHoles, resolveSecrets, safeBack, verifyAction } from "../actions/action.js";
 import { CLASS_GUARDS, METHOD_GUARDS, guardRegistry, isGuardRef, resetGuardRegistry, type GuardSpec } from "../decorators/guards.js";
-import { SessionManager, checkSessionOptions } from "../session/manager.js";
+import { SessionManager, checkSessionOptions, type LoadedSession } from "../session/manager.js";
 import type { SessionOptions } from "../session/session.js";
 import { RUNTIME_CHUNK_PREFIX, RUNTIME_PATH } from "../actions/components.js";
 import { OUTDATED_CHUNK, chunkSource, chunkVersion, runtimeSource } from "../client/runtime.js";
@@ -35,7 +35,7 @@ import { attributesSource, moduleAttributes, resetAttributeRegistry } from "../a
 import { lazyRegistry, resetLazyElements } from "../render/lazy.js";
 import { isYerdNode } from "../jsx/jsx-runtime.js";
 import { YerdResponse, isBare, redirect } from "../respond/response.js";
-import { Router, paramNames } from "../router/trie.js";
+import { Router, paramNames, type Match } from "../router/trie.js";
 import { DEFAULT_BODY_LIMIT, mediaTypeOf } from "./body.js";
 import { metadataOf } from "../decorators/keys.js";
 import { acceptsEncoding, createMount, serveStatic, type StaticMount, type StaticOptions } from "./static.js";
@@ -48,7 +48,7 @@ import { ConsoleLogger } from "../log/console.js";
 import { LogFilter, defaultFilter } from "../log/filter.js";
 import { ILogger } from "../log/ilogger.js";
 import { Logger } from "../log/logger.js";
-import { REQUEST_SPAN, bindLogging, endRequestSpan, startRequestSpan, type LogBinding } from "../log/span.js";
+import { REQUEST_SPAN, bindLogging, endRequestSpan, requestSpansOn, startRequestSpan, type LogBinding } from "../log/span.js";
 
 /** yerd's own log targets. */
 const lifecycleLog = new Logger("yerd::lifecycle");
@@ -200,9 +200,6 @@ interface MappedRoute {
   lifetime: Lifetime;
   sitemap: ResolvedRoute["sitemap"];
 }
-
-/** A handler's or action's result, or the answer of a guard that turned the request away first. */
-type Invoked = { blocked: Outgoing; result?: undefined } | { blocked?: undefined; result: unknown };
 
 /**
  * Middleware wraps guards and the handler (or action) for every routed
@@ -1495,7 +1492,21 @@ export class YerdApp {
    * createServer(app.handle).listen(3000);
    * ```
    */
-  handle = async (req: IncomingMessage, res: ServerResponse, next?: Next): Promise<void> => {
+  handle = (req: IncomingMessage, res: ServerResponse, next?: Next): Promise<void> => {
+    // The usual request (the app started, request logging off) goes straight to #serve, without an
+    // async frame of its own in front of it. handle must only ever reject, never throw.
+    if (this.#running && !requestSpansOn(this.#log!)) {
+      try {
+        return this.#serve(req, res, next);
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
+    return this.#handleSpanned(req, res, next);
+  };
+
+  /** handle() before the app has started, or with request logging on: the request's root span around #serve. */
+  async #handleSpanned(req: IncomingMessage, res: ServerResponse, next: Next | undefined): Promise<void> {
     // Started once; after that a request doesn't wait on the start promise.
     if (!this.#running) {
       try {
@@ -1516,10 +1527,31 @@ export class YerdApp {
     } finally {
       endRequestSpan(this.#log!, span, res.statusCode);
     }
-  };
+  }
+
+  /**
+   * Answer a request. A routed one, the common case, goes from here to
+   * #answer without an async frame in between (one would cost a promise per
+   * request and a suspended frame waiting on #answer's). Everything else
+   * (yerd's own endpoints, absolute-form targets, the sitemap, prerendered and
+   * static files, unmatched paths) goes through #serveOther.
+   */
+  #serve(req: IncomingMessage, res: ServerResponse, next: Next | undefined): Promise<void> {
+    const rawTarget = req.url ?? "/";
+    if (!rawTarget.startsWith("/")) return this.#serveOther(req, res, next);
+    const method = (req.method ?? "GET").toUpperCase() as Verb;
+    const target = splitTarget(rawTarget);
+    const path = target.path;
+    if (path.startsWith("/_yerd/") || ((method === "GET" || method === "HEAD") && (this.#prerendered.size > 0 || this.#sitemap?.handles(path)))) {
+      return this.#serveOther(req, res, next);
+    }
+    const match = this.#router!.match(path);
+    if (!match) return this.#serveOther(req, res, next);
+    return this.#route(req, res, method, target, match);
+  }
 
   /** Built-in endpoints, prerendered files and static mounts, then routing. */
-  async #serve(req: IncomingMessage, res: ServerResponse, next: Next | undefined): Promise<void> {
+  async #serveOther(req: IncomingMessage, res: ServerResponse, next: Next | undefined): Promise<void> {
     const method = (req.method ?? "GET").toUpperCase() as Verb;
     // The usual "/path?query" is split by hand; absolute-form targets (proxies) go through URL.
     const rawTarget = req.url ?? "/";
@@ -1586,7 +1618,11 @@ export class YerdApp {
       if (next) return next();
       return this.#sendError(new NotFound(), req, res, target, method);
     }
+    return this.#route(req, res, method, target, match);
+  }
 
+  /** A matched request: refused if cross-site, else resolved to a handler and answered in its own context. */
+  #route(req: IncomingMessage, res: ServerResponse, method: Verb, target: { path: string; search: string }, match: Match<RouteGroup>): Promise<void> {
     if (this.#options.csrf !== false && UNSAFE_METHODS.has(method)) {
       const refused = crossSiteReason(req, this.#trustedOrigins, this.#options.trustProxy ?? false);
       if (refused) return this.#sendError(new Forbidden(refused), req, res, target, method, { refused: true });
@@ -1597,12 +1633,63 @@ export class YerdApp {
 
     const base = routed.handler ?? routed.group?.variants[0] ?? routed.node.first;
     const prerendering = this.#prerenderToken !== undefined && req.headers["x-yerd-prerender"] === this.#prerenderToken;
-    const scope = new Scope();
-    const context = new RequestContext({ req, res, target, method, params: match.params, route: base.route, meta: { ...base.meta }, prerendering, scope, env: this.#env! });
+    const context = new RequestContext({ req, res, target, method, params: match.params, route: base.route, meta: { ...base.meta }, prerendering, scope: new Scope(), env: this.#env! });
+    // One async context for the whole request and its DI scope (currentServices() reads context.services).
+    return runWithContext(context, () => this.#answer(context, routed, base));
+  }
+
+  /**
+   * A routed request, inside its context: the session, middleware, the
+   * handler or action, the answer sent, and the request's services disposed.
+   *
+   * The steps it runs hand back a promise only when they have to wait, and it
+   * awaits only those: a request whose guards, handler and response are all
+   * synchronous goes through without suspending at all. (Awaiting a plain
+   * value still suspends the frame and takes a turn of the microtask queue.)
+   */
+  async #answer(context: RequestContext, routed: Routed, base: Handler): Promise<void> {
     try {
-      // One async context for the whole request and its DI scope (currentServices() reads context.services).
-      await runWithContext(context, () => this.#answer(context, routed, base));
+      let out: Outgoing;
+      let failed = false;
+      // A crash (not a YerdError) skips the session commit, so a half-done
+      // login or update doesn't stick.
+      let crashed = false;
+      try {
+        // The session opens on first use, synchronously. A store that may answer
+        // asynchronously can't be read then, so its read starts here, the moment
+        // the route is known (a `session: false` route never starts it), and
+        // middleware waits for it. Nothing to wait for otherwise.
+        const reading = context.readsUpFront();
+        if (reading) await reading;
+        const ran = this.#middleware.length > 0 ? this.#runMiddleware(context, routed) : this.#run(context, routed);
+        out = ran instanceof Promise ? await ran : ran;
+        // Whichever handler answered, the response depended on what the variants' tests read.
+        if (routed.group?.vary) out.headers.vary = mergeVary(out.headers.vary, routed.group.vary);
+        // Render up to the first chunk now, so an error at the top of the page
+        // (a layout, an early component) still becomes the error page.
+        const primed = this.#prime(out);
+        out = primed instanceof Promise ? await primed : primed;
+        // The handler succeeded: what it emitted goes out now (see Events).
+        this.#events!.release(context);
+      } catch (error) {
+        this.#events!.discard(context);
+        if (context.prerendering) this.#prerenderErrors.set(context.path, error instanceof Error ? error.message : String(error));
+        failed = true;
+        ({ out, crashed } = await this.#failure(error, base, context));
+      }
+      const finalized = this.#finalize(context, out, failed, !crashed);
+      out = finalized instanceof Promise ? await finalized : finalized;
+      const longLived = out.headers[LONG_LIVED] !== undefined;
+      if (longLived) this.#streams.add(context);
+      try {
+        // Only streams need the abort signal (client gone, shutdown); plain bodies skip creating one.
+        const sending = send(context.res, out, context.method === "HEAD", isStreamBody(out.body) ? context.signal : undefined);
+        if (sending) await sending;
+      } finally {
+        if (longLived) this.#streams.delete(context);
+      }
     } finally {
+      const scope = context.services.scope;
       if (!scope.isEmpty) {
         try {
           await scope.dispose();
@@ -1613,47 +1700,21 @@ export class YerdApp {
     }
   }
 
-  /** A routed request, inside its context: the session, middleware, the handler or action, and the answer sent. */
-  async #answer(context: RequestContext, routed: Routed, base: Handler): Promise<void> {
-    let out: Outgoing;
-    let failed = false;
-    // A crash (not a YerdError) skips the session commit, so a half-done
-    // login or update doesn't stick.
-    let crashed = false;
-    try {
-      // The session opens on first use, synchronously. A store that may answer
-      // asynchronously can't be read then, so its read starts here, the moment
-      // the route is known (a `session: false` route never starts it), and
-      // middleware waits for it. Nothing to wait for otherwise.
-      const reading = context.readsUpFront();
-      if (reading) await reading;
-      out = await this.#runMiddleware(context, () => this.#run(context, routed));
-      // Whichever handler answered, the response depended on what the variants' tests read.
-      if (routed.group?.vary) out.headers.vary = mergeVary(out.headers.vary, routed.group.vary);
-      // Render up to the first chunk now, so an error at the top of the page
-      // (a layout, an early component) still becomes the error page.
-      out = await this.#prime(out);
-      // The handler succeeded: what it emitted goes out now (see Events).
-      this.#events!.release(context);
-    } catch (error) {
-      this.#events!.discard(context);
-      if (context.prerendering) this.#prerenderErrors.set(context.path, error instanceof Error ? error.message : String(error));
-      failed = true;
-      ({ out, crashed } = await this.#failure(error, base, context));
-    }
-    out = await this.#finalize(context, out, { failed, commit: !crashed });
-    const longLived = out.headers[LONG_LIVED] !== undefined;
-    if (longLived) this.#streams.add(context);
-    try {
-      // Only streams need the abort signal (client gone, shutdown); plain bodies skip creating one.
-      await send(context.res, out, context.method === "HEAD", isStreamBody(out.body) ? context.signal : undefined);
-    } finally {
-      if (longLived) this.#streams.delete(context);
-    }
+  /**
+   * What runs inside middleware: a posted action, else the handler (a
+   * `@get(when)` variant or the default). Synchronous unless something it
+   * runs is async (see #answer); throws rather than rejecting when it can.
+   */
+  #run(context: RequestContext, routed: Routed): Outgoing | Promise<Outgoing> {
+    const { group, handler } = routed;
+    // An action reads the body first, and variants' tests may wait: both are async anyway.
+    if (routed.mayBeAction || (group !== undefined && group.variants.length > 0)) return this.#runChoosing(context, routed);
+    if (!handler) throw new MethodNotAllowed(undefined, { allow: routed.node.allow });
+    return this.#respond(context, handler, group);
   }
 
-  /** What runs inside middleware: a posted action, else the handler (a `@get(when)` variant or the default). */
-  async #run(context: RequestContext, routed: Routed): Promise<Outgoing> {
+  /** #run for a posted action or `@get(when)` variants. */
+  async #runChoosing(context: RequestContext, routed: Routed): Promise<Outgoing> {
     if (routed.mayBeAction) {
       const fromAction = await this.#dispatchAction(routed.node, context);
       if (fromAction) return fromAction;
@@ -1677,35 +1738,55 @@ export class YerdApp {
       }
     }
     if (!chosen) throw variants.length > 0 ? new NotFound() : new MethodNotAllowed(undefined, { allow: routed.node.allow });
-    const serving = chosen;
-    const invoked = await this.#invoke(context, serving, serving, () => (serving.args ? Promise.all(serving.args.map((r) => r.resolve(context))) : []));
-    if (invoked.blocked) return invoked.blocked;
-    const out = await coerce(invoked.result, { layouts: serving.layouts, meta: context.meta, dynamic: dynamicOf(context), accept: context.req.headers.accept });
-    if (group?.negotiated) out.headers.vary = mergeVary(out.headers.vary, "accept");
-    return out;
+    return this.#respond(context, chosen, group);
+  }
+
+  /** Invoke the handler that serves the request and coerce its result. */
+  #respond(context: RequestContext, serving: Handler, group: RouteGroup | undefined): Outgoing | Promise<Outgoing> {
+    // A closure only for a handler with @args.
+    const args = serving.args ? () => Promise.all(serving.args!.map((r) => r.resolve(context))) : undefined;
+    const invoked = this.#invoke(context, serving, serving, args);
+    if (invoked instanceof Promise) return invoked.then((result: unknown) => this.#coerceResult(context, serving, group, result));
+    return this.#coerceResult(context, serving, group, invoked);
+  }
+
+  #coerceResult(context: RequestContext, serving: Handler, group: RouteGroup | undefined, invoked: unknown): Outgoing | Promise<Outgoing> {
+    if (invoked instanceof Blocked) return invoked.out;
+    const out = coerce(invoked, { layouts: serving.layouts, meta: context.meta, dynamic: dynamicOf(context), accept: context.req.headers.accept });
+    if (!group?.negotiated) return out;
+    if (out instanceof Promise) return out.then(varyByAccept);
+    return varyByAccept(out);
   }
 
   /**
    * Run a handler or an action: its guards, then the method on the route
    * instance with the arguments `args` makes (only once the guards let the
-   * request through). A guard's own answer when one turns it away, else
-   * what the method returned, not yet coerced.
+   * request through; none when it's undefined). A guard's own answer, as a
+   * Blocked, when one turns it away, else what the method returned, not yet
+   * coerced. A promise only when a guard, the arguments or the method are
+   * async.
    */
-  async #invoke(context: RequestContext, owner: Handler, call: Call, args: () => unknown[] | Promise<unknown[]>): Promise<Invoked> {
+  #invoke(context: RequestContext, owner: Handler, call: Call, args: (() => unknown[] | Promise<unknown[]>) | undefined): unknown {
     context.route = call.route;
     if (call.runs.length > 0) {
-      const blocked = await this.#runGuards(call.runs, owner.layouts, context);
-      if (blocked) return { blocked };
+      const blocked = this.#runGuards(call.runs, owner.layouts, context, 0);
+      if (blocked instanceof Promise) {
+        return blocked.then((out: Outgoing | undefined) => (out ? new Blocked(out) : this.#call(context, owner, call, args)));
+      }
+      if (blocked) return new Blocked(blocked);
     }
+    return this.#call(context, owner, call, args);
+  }
+
+  /** The method itself, for #invoke, once the guards let the request through. */
+  #call(context: RequestContext, owner: Handler, call: Call, args: (() => unknown[] | Promise<unknown[]>) | undefined): unknown {
     context.declared = call.declared;
     const instance = this.#routeInstance(owner, context.services.scope);
     const fn = instance[call.method] as ((...args: unknown[]) => unknown) | undefined;
     if (typeof fn !== "function") throw new Error(`${owner.def.className}.${String(call.method)} is not a method`);
-    const result: unknown = await fn.apply(instance, await args());
-    // `return this.catalog.find(id) ?? new NotFound()`: TypeScript has no throw
-    // expressions, so a returned error counts as thrown (@catches, onError, the error page).
-    if (result instanceof Error) throw result;
-    return { result };
+    const values = args?.();
+    if (values instanceof Promise) return values.then((resolved: unknown[]) => settled(fn.apply(instance, resolved)));
+    return settled(fn.apply(instance, values ?? (NO_ARGS as unknown[])));
   }
 
   /** Unlisted statuses already warned about, once each per handler. */
@@ -1772,7 +1853,7 @@ export class YerdApp {
           }
         }
         let { out } = await this.#failure(error, undefined, context);
-        out = await this.#finalize(context, out, { failed: true, commit: !options.refused });
+        out = await this.#finalize(context, out, true, !options.refused);
         await send(res, out, method === "HEAD", isStreamBody(out.body) ? context.signal : undefined);
       });
     } finally {
@@ -1797,10 +1878,10 @@ export class YerdApp {
    * declared and the context set (headers, cookies, status) go on, a
    * scripted request's redirect becomes yx-location, the session is saved
    * (unless `commit` is false), and a page shown to someone with a session
-   * is kept out of shared caches.
+   * is kept out of shared caches. A promise only when there's a session to save.
    */
-  async #finalize(context: RequestContext, out: Outgoing, options: { failed: boolean; commit: boolean }): Promise<Outgoing> {
-    out = context.finish(out, options.failed);
+  #finalize(context: RequestContext, out: Outgoing, failed: boolean, commit: boolean): Outgoing | Promise<Outgoing> {
+    out = context.finish(out, failed);
     // @status([...]) said what this handler answers; say so in development when it doesn't.
     const listed = context.declared?.listed;
     if (listed && out.status < 500 && out.status !== 304 && !listed.includes(out.status) && isDevelopment()) this.#warnUnlisted(context, out.status, listed);
@@ -1813,20 +1894,29 @@ export class YerdApp {
     // extends sessions that are used). The commit itself skips one that has
     // nothing to save.
     const loaded = context.loadedSession;
-    if (this.#sessions && loaded && options.commit) {
-      try {
-        const rebound = await this.#sessions.commit(loaded, out);
-        // An action that started (or rotated) the session: the page's other
-        // forms carry tokens for no session, or the old one. The runtime
-        // fetches the page again quietly so they're bound before the next
-        // click, instead of that click coming back stale.
-        if (rebound && context.req.headers["yx"] !== undefined && out.status < 400 && out.headers["yx-location"] === undefined) {
-          out = { ...out, headers: { ...out.headers, "yx-rebind": "1" } };
-        }
-      } catch (error) {
-        out = errorResponse(error);
+    if (this.#sessions && loaded && commit) return this.#commit(context, loaded, out);
+    return this.#keepPrivate(context, out);
+  }
+
+  /** #finalize with a session to save. */
+  async #commit(context: RequestContext, loaded: LoadedSession, out: Outgoing): Promise<Outgoing> {
+    try {
+      const rebound = await this.#sessions!.commit(loaded, out);
+      // An action that started (or rotated) the session: the page's other
+      // forms carry tokens for no session, or the old one. The runtime
+      // fetches the page again quietly so they're bound before the next
+      // click, instead of that click coming back stale.
+      if (rebound && context.req.headers["yx"] !== undefined && out.status < 400 && out.headers["yx-location"] === undefined) {
+        out = { ...out, headers: { ...out.headers, "yx-rebind": "1" } };
       }
+    } catch (error) {
+      out = errorResponse(error);
     }
+    return this.#keepPrivate(context, out);
+  }
+
+  /** The last of #finalize: a page for someone with a session gets `Cache-Control: private, no-cache`. */
+  #keepPrivate(context: RequestContext, out: Outgoing): Outgoing {
     // A page for someone with a session shows their state (signed in, a cart),
     // and its action forms are bound to that session: a shared cache, or Back
     // from the browser's HTTP cache, mustn't replay it. A session not opened
@@ -1894,25 +1984,35 @@ export class YerdApp {
     return this.#prime(out);
   }
 
-  #runMiddleware(context: YerdContext, inner: () => Promise<Outgoing>): Promise<Outgoing> {
+  /** The app's middleware around #run (only called when there is some). */
+  #runMiddleware(context: RequestContext, routed: Routed): Promise<Outgoing> {
     const chain = this.#middleware;
-    if (chain.length === 0) return inner();
+    // `next()` always hands middleware a promise, and never throws.
+    const inner = async (): Promise<Outgoing> => this.#run(context, routed);
     const step = (i: number): Promise<Outgoing> => (i < chain.length ? chain[i]!(context, () => step(i + 1)) : inner());
     return step(0);
   }
 
-  /** Run a handler's guards; returns the response if one of them doesn't let the request through. */
-  async #runGuards(guards: readonly GuardRun[], layouts: Component<LayoutProps>[], context: RequestContext): Promise<Outgoing | undefined> {
-    for (const run of guards) {
-      const result = await run(context);
-      if (result === true || result === undefined) continue;
-      if (result === false) throw new Forbidden();
-      // Returning an error (e.g. `ok || new Forbidden()`) is the same as throwing it.
-      if (result instanceof Error) throw result;
-      if (typeof result === "string") return coerce(redirect(result), { layouts: [] });
-      return coerce(result, { layouts, meta: context.meta, accept: context.req.headers.accept });
+  /**
+   * Run a handler's guards from `from` on; the response if one of them
+   * doesn't let the request through, else undefined. Synchronous while the
+   * guards are: the first to return a promise has the rest run after it.
+   */
+  #runGuards(guards: readonly GuardRun[], layouts: Component<LayoutProps>[], context: RequestContext, from: number): Outgoing | Promise<Outgoing | undefined> | undefined {
+    for (let i = from; i < guards.length; i++) {
+      const result = guards[i]!(context);
+      if (isThenable(result)) return this.#guardsAfter(result, i, guards, layouts, context);
+      const answer = guardAnswer(result, layouts, context);
+      if (answer) return answer;
     }
     return undefined;
+  }
+
+  /** #runGuards once guard `at` returned a promise: its result, then the guards after it. */
+  async #guardsAfter(pending: PromiseLike<unknown>, at: number, guards: readonly GuardRun[], layouts: Component<LayoutProps>[], context: RequestContext): Promise<Outgoing | undefined> {
+    const answer = guardAnswer(await pending, layouts, context);
+    if (answer) return answer;
+    return this.#runGuards(guards, layouts, context, at + 1);
   }
 
   /**
@@ -1950,9 +2050,8 @@ export class YerdApp {
     }
     const { owner } = found;
     // The class's guards (app, group, route) and the action's own method guards.
-    const invoked = await this.#invoke(context, owner, found, () => [fillHoles(payload.p, payload.h, parsed.value), new ActionForm(parsed.value, parsed.files)]);
-    if (invoked.blocked) return invoked.blocked;
-    const result = invoked.result;
+    const result = await this.#invoke(context, owner, found, () => [fillHoles(payload.p, payload.h, parsed.value), new ActionForm(parsed.value, parsed.files)]);
+    if (result instanceof Blocked) return result.out;
 
     if (context.headers["yx"] !== undefined) {
       // Nothing returned: the runtime refreshes the page's regions.
@@ -2261,14 +2360,58 @@ async function sendFile(res: ServerResponse, file: Outgoing, headOnly: boolean):
   return send(res, file, headOnly, undefined);
 }
 
+/** A guard's answer in place of the handler's result (see #invoke): a class, so no result can pass for one. */
+class Blocked {
+  constructor(readonly out: Outgoing) {}
+}
+
+/** The arguments of a handler without @args. */
+const NO_ARGS: readonly unknown[] = Object.freeze([]);
+
+/** Whether `value` is something `await` would wait on. */
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (typeof value === "object" || typeof value === "function") && value !== null && typeof (value as PromiseLike<unknown>).then === "function";
+}
+
+/**
+ * A handler's result, waited for if it's a promise. `return this.catalog.find(id) ?? new NotFound()`:
+ * TypeScript has no throw expressions, so a returned error counts as thrown (@catches, onError,
+ * the error page).
+ */
+function settled(result: unknown): unknown {
+  if (isThenable(result)) return Promise.resolve(result).then(thrownIfError);
+  return thrownIfError(result);
+}
+
+function thrownIfError(result: unknown): unknown {
+  if (result instanceof Error) throw result;
+  return result;
+}
+
+/** What a guard's result means: undefined lets the request through; else the response it answers with, or it throws. */
+function guardAnswer(result: unknown, layouts: Component<LayoutProps>[], context: RequestContext): Outgoing | Promise<Outgoing> | undefined {
+  if (result === true || result === undefined) return undefined;
+  if (result === false) throw new Forbidden();
+  // Returning an error (e.g. `ok || new Forbidden()`) is the same as throwing it.
+  if (result instanceof Error) throw result;
+  if (typeof result === "string") return coerce(redirect(result), { layouts: [] });
+  return coerce(result, { layouts, meta: context.meta, accept: context.req.headers.accept });
+}
+
+/** A negotiated handler's response depends on Accept. */
+function varyByAccept(out: Outgoing): Outgoing {
+  out.headers.vary = mergeVary(out.headers.vary, "accept");
+  return out;
+}
+
 /** What a wait in send() settles with when the response was aborted instead. */
 const STOPPED: unique symbol = Symbol("stopped");
 
-async function send(res: ServerResponse, out: Outgoing, headOnly: boolean, signal: AbortSignal | undefined): Promise<void> {
+/** Write `out`. A body in one piece is written at once; a stream returns a promise for its end. */
+function send(res: ServerResponse, out: Outgoing, headOnly: boolean, signal: AbortSignal | undefined): Promise<void> | undefined {
   // Copied rather than reused: handlers may hand back a headers object they share.
   const headers: Record<string, string | string[]> = { "x-content-type-options": "nosniff" };
   for (const name in out.headers) if (name !== LONG_LIVED) headers[name] = out.headers[name]!;
-  const longLived = out.headers[LONG_LIVED] !== undefined;
   if (out.cookies?.length) headers["set-cookie"] = out.cookies;
   const { body } = out;
   // 204 and 304 never have a body (RFC 9110 6.4.1); a Content-Length promising
@@ -2279,17 +2422,28 @@ async function send(res: ServerResponse, out: Outgoing, headOnly: boolean, signa
     if (body !== null && !bodiless) headers["content-length"] = String(typeof body === "string" ? Buffer.byteLength(body) : body.byteLength);
     res.writeHead(out.status, headers);
     res.end(headOnly || bodiless || body === null ? undefined : body);
-    return;
+    return undefined;
   }
+  return sendStream(res, out.status, headers, body, out.headers[LONG_LIVED] !== undefined, headOnly || bodiless, signal);
+}
 
+async function sendStream(
+  res: ServerResponse,
+  status: number,
+  headers: Record<string, string | string[]>,
+  body: AsyncIterable<string | Uint8Array>,
+  longLived: boolean,
+  headOnly: boolean,
+  signal: AbortSignal | undefined,
+): Promise<void> {
   // A page's first chunk was pulled before it got here (primeStream), so an
   // error at its top already became the error page. Long-lived streams (SSE,
   // NDJSON) send their headers now, so the client is connected even if the
   // first item is a long way off.
-  res.writeHead(out.status, headers);
+  res.writeHead(status, headers);
   if (longLived) res.flushHeaders();
   const iterator = body[Symbol.asyncIterator]();
-  if (headOnly || bodiless) {
+  if (headOnly) {
     await iterator.return?.();
     res.end();
     return;
