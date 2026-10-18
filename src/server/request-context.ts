@@ -70,6 +70,7 @@ export class RequestContext implements YerdContext {
   #outHeaders: Record<string, string> | undefined;
   #outCookies: string[] | undefined;
   #status: number | undefined;
+  #sessionUsed = false;
 
   readonly req: IncomingMessage;
   readonly res: ServerResponse;
@@ -151,7 +152,17 @@ export class RequestContext implements YerdContext {
     this.#noRequestData("the session");
     if (!this.env.sessions) throw new Error("Sessions are off; call app.sessions() to turn them on");
     if (!this.loadedSession) throw new Error("The session isn't loaded yet");
+    this.#sessionUsed = true;
     return this.loadedSession.session;
+  }
+
+  /**
+   * Whether anything got hold of the session (ctx.session, @session, auth)
+   * or a CSRF nonce was put in it. A session that came with no cookie and
+   * was never used has nothing to save, so the app skips committing it.
+   */
+  get sessionUsed(): boolean {
+    return this.#sessionUsed;
   }
 
   /** Aborts when the client disconnects or the server shuts down. Created (and wired up) on first use. */
@@ -256,6 +267,7 @@ export class RequestContext implements YerdContext {
     if (typeof nonce !== "string") {
       nonce = randomBytes(18).toString("base64url");
       session.set(CSRF_FIELD, nonce);
+      this.#sessionUsed = true;
     }
     return nonce;
   }

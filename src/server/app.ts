@@ -1689,10 +1689,14 @@ export class YerdApp {
       // session cookie can't change once they've gone (RequestContext.csrfNonce).
       // A HEAD response's body is never rendered past what's been primed.
       if (context.method !== "HEAD" && this.#nonceUndecided(context) && maySignLater(out)) context.csrfNonce();
-      try {
-        await this.#sessions.commit(loaded, out);
-      } catch (error) {
-        out = errorResponse(error);
+      // No cookie came in and nothing touched the session: there's nothing to
+      // save, refresh or clear, so skip working that out (most anonymous requests).
+      if (loaded.payload !== undefined || context.sessionUsed) {
+        try {
+          await this.#sessions.commit(loaded, out);
+        } catch (error) {
+          out = errorResponse(error);
+        }
       }
     }
     // A page for someone with a session shows their state (signed in, a cart):

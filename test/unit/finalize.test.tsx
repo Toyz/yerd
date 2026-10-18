@@ -1,6 +1,7 @@
 // The last steps every answer takes, routed or not: what the context set, the session, caching, a failing error page.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { currentContext, get, post, route, session, yerd, MemoryStore, type LayoutProps, type Session } from "@toyz/yerd";
+import { SessionManager } from "../../src/session/manager.js";
 
 const SECRET = "f".repeat(32);
 
@@ -90,5 +91,32 @@ describe("requests that never reach a handler", () => {
     const r = await app.request("/sign-in", { method: "POST", headers: { cookie: `yerd_session=${jar}`, "sec-fetch-site": "cross-site", accept: "text/html" } });
     expect(r.status).toBe(403);
     expect(r.headers.getSetCookie()).toEqual([]);
+  });
+});
+
+@route("/anon")
+class Anon {
+  @get page() {
+    return { ok: true };
+  }
+}
+
+describe("saving the session", () => {
+  it("skips the commit for a visitor with no cookie whose session nothing touched", async () => {
+    const commit = vi.spyOn(SessionManager.prototype, "commit");
+    try {
+      const app = yerd({ routes: [Anon, SignIn], services: [], handleSignals: false, secret: SECRET }).sessions();
+      const r = await app.request("/anon");
+      expect(r.headers.getSetCookie()).toEqual([]);
+      expect(commit).not.toHaveBeenCalled();
+      // Used sessions, and incoming ones (a rolling refresh, unread flash), still commit.
+      const client = app.client();
+      await client.request("/sign-in", { method: "POST" });
+      expect(commit).toHaveBeenCalledTimes(1);
+      await client.request("/anon");
+      expect(commit).toHaveBeenCalledTimes(2);
+    } finally {
+      commit.mockRestore();
+    }
   });
 });
