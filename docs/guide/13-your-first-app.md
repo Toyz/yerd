@@ -392,13 +392,13 @@ import { Scripts, type LayoutProps } from "@toyz/yerd";
       </head>
 ```
 
-The runtime posts the form with `fetch` and morphs the result into the page. It only touches parts marked with a [Region](api:yerd.Region), so wrap everything that changes in one. While you're in there, add delete buttons: [bind](api:yerd.bind) attaches the link's id to the action, signed, so nobody can edit it in the HTML.
+The runtime posts the form with `fetch` and morphs the result into the page. It only touches parts marked with a [Region](api:yerd.Region), so wrap everything that changes in one. While you're in there, add delete buttons: a [Form](api:yerd.Form) with `args` attaches the link's id to the action, signed, so nobody can edit it in the HTML.
 
 Here's the whole file:
 
 ```tsx
 // src/routes/home.tsx
-import { ActionForm, HttpError, Region, action, bind, get, inject, route, session, type Issue, type Session } from "@toyz/yerd";
+import { ActionForm, Form, HttpError, Region, action, get, inject, route, session, type Issue, type Session } from "@toyz/yerd";
 import { Links, NewLink } from "../links.js";
 
 interface Draft {
@@ -445,9 +445,9 @@ export class Home {
           {this.links.all().map((link) => (
             <li key={link.id}>
               <a href={link.url}>{link.title}</a>
-              <form action={bind(this.remove, { id: link.id })}>
+              <Form action={this.remove} args={{ id: link.id }}>
                 <button aria-label={`Delete ${link.title}`}>Delete</button>
-              </form>
+              </Form>
             </li>
           ))}
         </ul>

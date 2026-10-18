@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import {
-  Local, Region, Scripts, Stylesheet, action, bind, get, route, session, yerd,
+  Form, Local, Region, Scripts, Stylesheet, action, get, route, session, yerd,
   type Action, type Child, type LayoutProps, type Session,
 } from "@toyz/yerd";
 
@@ -48,7 +48,7 @@ type Store =
 /**
  * One counter, wherever its count lives. Server stores (shared, session)
  * post an action and get back just this counter: its Region id is unique
- * (`shared-bugs`) and its form is bound to this counter with bind(), signed,
+ * (`shared-bugs`) and its <Form> passes this counter's id to the action, signed,
  * so the browser can't change which one it bumps. Client stores (tab,
  * browser) are a <Local>: clicks never leave the page, and "browser" keeps
  * the count in localStorage across reloads.
@@ -62,9 +62,9 @@ function Counter({ id, store }: { id: string; store: Store }) {
           {/* A new key per value, so the runtime inserts a fresh element and data-[yx-new] animates it. */}
           <span key={store.value} class="inline-block data-[yx-new]:animate-bounce">{store.value}</span>
         </Region>
-        <form action={bind(store.bump, { id })}>
+        <Form action={store.bump} args={{ id }}>
           <PlusButton />
-        </form>
+        </Form>
       </Card>
     );
   }

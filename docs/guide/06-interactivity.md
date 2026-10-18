@@ -105,12 +105,12 @@ Updates are morphed into the page rather than swapped: elements are matched by `
 
 Returning nothing is the easy default: every Region on the page refreshes. Returning the Regions you changed saves a second request.
 
-## bind(): actions with arguments
+## Actions with arguments
 
-To pass data like an id, use [bind](api:yerd.bind). The arguments travel inside the signed token, so a visitor can't change them, and TypeScript checks them against the action's first parameter.
+To pass data like an id, use [Form](api:yerd.Form) with `args`. The arguments travel inside the signed token, so a visitor can't change them, and TypeScript checks them against the action's first parameter: a wrong or missing field doesn't compile.
 
 ```tsx
-import { Region, action, bind, get, route, type Action } from "@toyz/yerd";
+import { Form, Region, action, get, route, type Action } from "@toyz/yerd";
 
 const items = [{ id: 1, title: "Milk" }, { id: 2, title: "Eggs" }];
 
@@ -118,9 +118,9 @@ function Item({ item, remove }: { item: { id: number; title: string }; remove: A
   return (
     <li>
       {item.title}
-      <form action={bind(remove, { id: item.id })}>
+      <Form action={remove} args={{ id: item.id }}>
         <button>Delete</button>
-      </form>
+      </Form>
     </li>
   );
 }
@@ -138,6 +138,29 @@ export class List {
 ```
 
 Pass actions down to components typed as [Action](api:yerd.Action)`<Args>`. The signature proves the request came from a form you rendered; it does not prove the user may touch that id, so still check ownership in the action.
+
+`<Form>` renders a plain `<form>` and takes every other form attribute (`class`, `data-yx-confirm`, `enctype`, ...). It's shorthand for `<form action={bind(remove, { id })}>`: [bind](api:yerd.bind) is the same thing as a value, for the places a component doesn't fit, like a submit button's `formaction` below.
+
+## Where actions work
+
+An action is a form submission, so it goes on the two things that submit one:
+
+| Where | Use it for |
+|---|---|
+| `<form action={this.save}>` / `<Form action={this.remove} args={{ id }}>` | the usual case: the form's fields arrive as `ActionForm` |
+| `<button formaction={bind(this.remove, { id })}>` | a second action from the same form ("Save" and "Delete" side by side) |
+
+That's deliberate: a form posts with JavaScript off, so every action works before (and without) the runtime. With the runtime, the same form is sent with `fetch` and the result morphed in. A button is just a one-button form; no fields needed:
+
+```tsx
+<Form action={this.archive} args={{ id }}><button>Archive</button></Form>
+```
+
+For things that aren't a click on a submit button:
+
+- **On change** (a checkbox, a select): put `data-yx-submit` on the field and the runtime submits its form when it changes. Keep a submit button for JavaScript-off visitors.
+- **From your own script**: call `requestSubmit()` on a rendered action form; the runtime sends it like any other.
+- **No server at all**: use [Local](#local-state-no-server-at-all) state instead of an action.
 
 ## Reading the form
 

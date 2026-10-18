@@ -230,6 +230,8 @@ export class Support {
 }
 ```
 
+Guards go on the class (every handler and action in it) or on one method. On a method, write the guard as its own decorator next to the verb, `@post @signedIn open()`, or list several with `@guards(signedIn, businessHours)`. That works on `@action` methods too.
+
 What a guard can return:
 
 | Return | Effect |
@@ -315,6 +317,9 @@ export class Product {
 
 - Variants are tried in the order they're declared; the first whose test passes wins, then the plain handler. With no plain handler and no match, the response is 404.
 - A test is any function of the request context (it may be async), or a guard from [`createGuard`](api:yerd.createGuard): `@get(beta)`.
+
+> [!NOTE]
+> `@get(beta)` and `@get @beta` look alike but do different things. In the parentheses the guard is a **variant test**: when it fails, yerd moves on to the next handler, and nobody is turned away. As its own decorator it's a **gate**: when it fails, its result is the response (a redirect, a 403). Use the first to answer differently, the second to keep people out.
 - Variants combine with `@accepts`: `@get(isBot) @accepts("json")` answers crawlers that ask for JSON.
 - Prerendering has no request to test, so the plain handler is what gets prerendered.
 - [`isBot`](api:yerd.isBot) also works on its own, inside any handler: `if (isBot(ctx)) ...`.

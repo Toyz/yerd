@@ -22,9 +22,9 @@ Tailwind CSS v4 in a yerd app. `npm run tailwind` from the repo root.
   - **This browser**: the same `<Local>` with `persist="counter-{id}"`, kept in
     localStorage: survives a reload, and other open tabs follow along.
 - The server stores are one action each. A server `Counter` renders its own
-  `<Region id="{store}-{id}">` and a form bound to itself with
-  `bind(bump, { id })`, so the action knows which counter to bump (signed:
-  the browser can't change it) and returns just that counter; the runtime
+  `<Region id="{store}-{id}">` and a `<Form action={bump} args={{ id }}>`,
+  so the action knows which counter to bump (signed: the browser can't change
+  it; typed: `args` must match the action) and returns just that counter; the runtime
   morphs the Region with the matching id. The action is a typed prop,
   `bump: Action<{ id: string }>`.
 - Regions morphed in by actions are styled too, and `data-[yx-new]:animate-bounce`
