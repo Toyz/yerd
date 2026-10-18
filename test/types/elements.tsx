@@ -115,3 +115,8 @@ export const badBool = <input disabled={1} />;
 
 // @ts-expect-error unknown SVG attribute (camelCase names aren't covered by the kebab index)
 export const badSvg = <circle radius={2} />;
+
+// Images: loading hints are checked.
+export const lazy = <img src="/a.jpg" alt="" loading="lazy" decoding="async" fetchpriority="high" />;
+// @ts-expect-error loading is "eager" | "lazy"
+export const later = <img src="/a.jpg" alt="" loading="later" />;

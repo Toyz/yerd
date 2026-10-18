@@ -248,7 +248,54 @@ While a drag is on, the dragged element has `data-yx-dragging` and the target un
 [data-yx-over] { outline: 2px dashed currentColor; }
 ```
 
-Only the page's own `draggable` elements drop: files or text dragged in from elsewhere are left to the browser. Drag and drop needs the client runtime, so give important moves another way in too (a select, or buttons).
+What a target takes:
+
+| `trigger` | Takes |
+|---|---|
+| `"drop"` | any of the page's `draggable` elements |
+| `"drop:.task"` | only draggables matching the selector (keep cards out of the trash, notes out of the board) |
+| `"drop:files"` | files dragged in from the desktop, filtered by the element's `accept` |
+
+The runtime handles the fiddly parts:
+- A target never takes a drop of itself or of something inside it. Drop a card on itself and the column around it gets the drop instead.
+- When targets nest, the innermost one that accepts the drag wins.
+- Text, links and images dragged in from elsewhere are left to the browser.
+- If the page has a file zone, a file dropped next to it doesn't make the browser navigate away to the file.
+- Folders are skipped, and files `accept` refuses are left out with a notice.
+- The marks are cleaned up if the drag is cancelled, leaves the window, or the dragged element is morphed away mid-drag.
+
+Drag and drop needs the client runtime, so give important moves another way in too (a select, or buttons).
+
+### Dropping files
+
+A `drop:files` target posts the files straight to its action as soon as they land. They arrive as multipart, under `files`:
+
+```tsx
+<div class="dropzone" action={this.upload} trigger="drop:files" accept="image/*,.pdf">
+  Drop photos or PDFs
+</div>
+
+@action async upload(_: {}, form: ActionForm) {
+  for (const file of form.files("files")) await this.store.save(file.name, await file.arrayBuffer());
+}
+```
+
+To collect files first and upload them with the rest of a form, point a zone at a file input with `dropTo`. Dropped files are added to the input (drop five, then five more: ten), filtered by its `accept`, kept to one unless it's `multiple`, and sent when the form submits:
+
+```tsx
+<form action={this.post} enctype="multipart/form-data">
+  <input name="title" />
+  <input id="photos" type="file" name="photos" multiple accept="image/*" />
+  <div class="dropzone" dropTo="#photos">Drop photos here</div>
+  <button>Post</button>
+</form>
+
+@action post(_: {}, form: ActionForm) {
+  const photos = form.files("photos"); // File[]
+}
+```
+
+The zone gets `data-yx-files="<count>"` while the input holds files, so CSS can show it (`.dropzone[data-yx-files]::after { content: attr(data-yx-files) " ready" }`). The input still works on its own, with or without JavaScript. Mind the app's `bodyLimit` (1 MiB by default) when taking many or big files.
 
 ### Infinite scroll
 

@@ -23,10 +23,15 @@
  * - [data-yx-trigger]   on an action form: submits it on that trigger
  * - [data-yx-holes]     values the server left for the browser: read from the
  *                       element (or ref(selector)) when the action fires, sent as _yxh<n>
- * - trigger "drop"      a drop target: draggable elements can be dropped on it; the
- *                       action's drag.* holes read the dropped element. While
- *                       dragging, [data-yx-dragging] is on the dragged element and
- *                       [data-yx-over] on the target under it
+ * - trigger "drop"      a drop target for the page's draggable elements ("drop:<selector>":
+ *                       only those matching it); the action's drag.* holes read the
+ *                       dropped one. "drop:files": files from outside the page, posted
+ *                       as multipart "files", filtered by the element's accept. While
+ *                       dragging, [data-yx-dragging] marks the dragged element and
+ *                       [data-yx-over] the target that would take it
+ * - [data-yx-drop-to]   a drop zone that adds dropped files to a file input (by
+ *                       selector) for its form to upload; data-yx-files="<n>" while
+ *                       the input holds some
  * - [data-yx-append]    on a Region in a response: children are appended, not replaced
  *                       (data-yx-prepend: put first)
  * - #yx-notice          a small status message the runtime shows when an action
@@ -985,44 +990,241 @@ export function yerdRuntime(): void {
 
   const actionRuns = new WeakMap<Element, AbortController>();
 
-  // Drag and drop: the element being dragged, for drop targets' drag.* holes.
+  // ── drag and drop ──
+  //
+  // Drop targets are elements whose trigger is "drop" (the page's draggable
+  // elements), "drop:<selector>" (only draggables matching it) or
+  // "drop:files" (files from outside the page, filtered by its accept
+  // attribute). Drops are handled here, centrally: the innermost target that
+  // accepts what's being dragged gets it.
+
   let dragged: HTMLElement | null = null;
+
+  /** The page element being dragged, if it's still on the page. */
+  function dragSource(): HTMLElement | null {
+    if (dragged && !dragged.isConnected) dragged = null;
+    return dragged;
+  }
+
+  function clearOver(except?: Element): void {
+    for (const over of Array.from(document.querySelectorAll("[data-yx-over]"))) if (over !== except) over.removeAttribute("data-yx-over");
+  }
+
+  function endDrag(): void {
+    dragged?.removeAttribute("data-yx-dragging");
+    dragged = null;
+    clearOver();
+  }
+
+  const DROP_TARGETS = '[data-yx-trigger^="drop"], [data-yx-drop-to]';
+
+  /** What a drop target takes: "page" (any draggable), a selector, or "files". */
+  function dropKind(target: Element): string {
+    if (target.hasAttribute("data-yx-drop-to")) return "files";
+    const spec = (target.getAttribute("data-yx-trigger") ?? "").trim();
+    return spec === "drop" ? "page" : spec.slice(5).trim() || "page";
+  }
+
+  function carriesFiles(event: DragEvent): boolean {
+    return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+  }
+
+  /** Whether a file (or, while dragging, its item's MIME type) fits an accept list like "image/*,.pdf". */
+  function fits(accept: string | null, type: string, name?: string): boolean {
+    if (!accept) return true;
+    return accept.split(",").some((raw) => {
+      const rule = raw.trim().toLowerCase();
+      if (!rule) return false;
+      if (rule.startsWith(".")) return name === undefined || name.toLowerCase().endsWith(rule);
+      if (rule.endsWith("/*")) return type.toLowerCase().startsWith(rule.slice(0, -1));
+      return type.toLowerCase() === rule;
+    });
+  }
+
+  function accepts(target: Element, event: DragEvent): boolean {
+    const kind = dropKind(target);
+    const source = dragSource();
+    if (source) {
+      if (kind === "files") return false;
+      // Not onto itself, or into something it contains.
+      if (source === target || source.contains(target)) return false;
+      if (kind !== "page") {
+        try {
+          return source.matches(kind);
+        } catch {
+          return false;
+        }
+      }
+      return true;
+    }
+    if (kind !== "files" || !carriesFiles(event)) return false;
+    // While dragging, only types are known (and not in every browser): refuse only a clear mismatch.
+    const accept = acceptOf(target);
+    const items = Array.from(event.dataTransfer?.items ?? []).filter((item) => item.kind === "file");
+    return items.length === 0 || items.some((item) => !item.type || fits(accept, item.type));
+  }
+
+  /** The innermost drop target that accepts this drag. */
+  function dropTarget(event: DragEvent): HTMLElement | null {
+    let target = (event.target as Element).closest?.<HTMLElement>(DROP_TARGETS) ?? null;
+    while (target && !accepts(target, event)) target = target.parentElement?.closest<HTMLElement>(DROP_TARGETS) ?? null;
+    return target;
+  }
+
+  /** Files dropped from outside, minus folders and what `accept` refuses. */
+  function droppedFiles(target: Element, event: DragEvent): { files: File[]; refused: number } {
+    const transfer = event.dataTransfer;
+    if (!transfer) return { files: [], refused: 0 };
+    const items = Array.from(transfer.items ?? []).filter((item) => item.kind === "file");
+    const all: File[] = [];
+    if (items.length) {
+      for (const item of items) {
+        // A dropped folder shows up as a file with no type and no size; skip it.
+        const entry = (item as DataTransferItem & { webkitGetAsEntry?: () => { isDirectory: boolean } | null }).webkitGetAsEntry?.();
+        if (entry?.isDirectory) continue;
+        const file = item.getAsFile();
+        if (file) all.push(file);
+      }
+    } else all.push(...Array.from(transfer.files ?? []));
+    const accept = acceptOf(target);
+    const files = all.filter((file) => fits(accept, file.type, file.name));
+    return { files, refused: all.length - files.length };
+  }
+
+  /** Is there anywhere on the page files may be dropped? Then a missed drop mustn't open the file. */
+  function hasFileTargets(): boolean {
+    return document.querySelector('[data-yx-trigger^="drop:files"], [data-yx-drop-to]') !== null;
+  }
+
+  /** The file input a dropTo zone fills. */
+  function stagingInput(zone: Element): HTMLInputElement | null {
+    const selector = zone.getAttribute("data-yx-drop-to");
+    let input: Element | null = null;
+    try {
+      input = selector ? document.querySelector(selector) : null;
+    } catch {
+      // not a valid selector
+    }
+    return input instanceof HTMLInputElement && input.type === "file" ? input : null;
+  }
+
+  /** What a zone takes: its own accept, or (for dropTo) its input's. */
+  function acceptOf(target: Element): string | null {
+    return target.getAttribute("accept") ?? stagingInput(target)?.getAttribute("accept") ?? null;
+  }
+
+  /** Show how many files a zone's input holds: data-yx-files, or none. */
+  function countStaged(input: HTMLInputElement): void {
+    for (const zone of Array.from(document.querySelectorAll("[data-yx-drop-to]"))) {
+      if (stagingInput(zone) !== input) continue;
+      const count = input.files?.length ?? 0;
+      if (count) zone.setAttribute("data-yx-files", String(count));
+      else zone.removeAttribute("data-yx-files");
+    }
+  }
+
+  /** Add dropped files to a dropTo zone's input (the same file twice counts once). */
+  function stage(zone: Element, files: File[]): void {
+    const input = stagingInput(zone);
+    if (!input) {
+      console.error(`[yerd] dropTo=${JSON.stringify(zone.getAttribute("data-yx-drop-to"))} isn't a file input on the page`);
+      return;
+    }
+    const transfer = new DataTransfer();
+    const seen = new Set<string>();
+    const add = (file: File) => {
+      const id = `${file.name}:${file.size}:${file.lastModified}`;
+      if (seen.has(id)) return;
+      seen.add(id);
+      transfer.items.add(file);
+    };
+    if (input.multiple) for (const file of Array.from(input.files ?? [])) add(file);
+    for (const file of input.multiple ? files : files.slice(0, 1)) add(file);
+    if (!input.multiple && files.length > 1) notify("Only one file goes here; kept the first.");
+    input.files = transfer.files;
+    // As if the user had picked them: listeners (and triggers) on the input see it.
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  document.addEventListener("change", (event) => {
+    const input = event.target;
+    if (input instanceof HTMLInputElement && input.type === "file") countStaged(input);
+  });
+  document.addEventListener("reset", (event) => {
+    // After the reset has cleared the inputs.
+    const form = event.target as HTMLFormElement;
+    setTimeout(() => {
+      for (const input of Array.from(form.querySelectorAll<HTMLInputElement>("input[type=file]"))) countStaged(input);
+    }, 0);
+  });
+
   document.addEventListener("dragstart", (event) => {
+    endDrag();
     const source = (event.target as Element).closest?.<HTMLElement>("[draggable=true]");
     if (!source) return;
     dragged = source;
     source.setAttribute("data-yx-dragging", "");
-    // Firefox won't start a drag without data.
-    event.dataTransfer?.setData("text/plain", source.id || source.dataset.id || "");
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+    if (event.dataTransfer) {
+      // Firefox won't start a drag without data.
+      event.dataTransfer.setData("text/plain", source.dataset.id ?? source.id ?? "");
+      event.dataTransfer.effectAllowed = "move";
+    }
   });
-  document.addEventListener("dragend", () => {
-    dragged?.removeAttribute("data-yx-dragging");
-    for (const over of Array.from(document.querySelectorAll("[data-yx-over]"))) over.removeAttribute("data-yx-over");
-    dragged = null;
-  });
+  // Fired on the source element, so a morph that removes it mid-drag can swallow it: drop cleans up too.
+  document.addEventListener("dragend", endDrag);
 
-  /** The innermost drop target under a drag event, if the drag is one of ours. */
-  function dropTarget(event: Event): Element | null {
-    if (!dragged) return null;
-    return (event.target as Element).closest?.("[data-yx-trigger=drop]") ?? null;
-  }
   document.addEventListener("dragover", (event) => {
     const target = dropTarget(event);
-    if (!target) return;
+    if (!target) {
+      clearOver();
+      if (!dragSource() && carriesFiles(event) && hasFileTargets()) {
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+      }
+      return;
+    }
     // Allowing the drop is what makes the browser fire "drop" at all.
     event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-    for (const over of Array.from(document.querySelectorAll("[data-yx-over]"))) if (over !== target) over.removeAttribute("data-yx-over");
+    if (event.dataTransfer) event.dataTransfer.dropEffect = dragSource() ? "move" : "copy";
+    clearOver(target);
     target.setAttribute("data-yx-over", "");
   });
+
   document.addEventListener("dragleave", (event) => {
+    // Leaving the window altogether (to the desktop, another app).
+    if (!event.relatedTarget && (event.clientX <= 0 || event.clientY <= 0 || event.clientX >= innerWidth || event.clientY >= innerHeight)) clearOver();
+  });
+
+  document.addEventListener("drop", (event) => {
     const target = dropTarget(event);
-    if (target && !target.contains(event.relatedTarget as Node | null)) target.removeAttribute("data-yx-over");
+    if (!target) {
+      // A missed file drop would navigate to the file: not while the page takes files somewhere.
+      if (!dragSource() && carriesFiles(event) && hasFileTargets()) event.preventDefault();
+      endDrag();
+      return;
+    }
+    event.preventDefault();
+    target.removeAttribute("data-yx-over");
+    if (dragSource()) {
+      void runAction(target);
+      endDrag();
+      return;
+    }
+    const { files, refused } = droppedFiles(target, event);
+    endDrag();
+    if (refused && !files.length) {
+      notify("Those files can't be dropped here.");
+      return;
+    }
+    if (refused) notify(`${refused} file${refused === 1 ? "" : "s"} skipped: not a type this takes.`);
+    if (!files.length) return;
+    if (target.hasAttribute("data-yx-drop-to")) stage(target, files);
+    else void runAction(target, files);
   });
 
   /** Post an element's action (a newer run cancels an older one: typeahead), then apply the result like a form's. */
-  async function runAction(el: HTMLElement): Promise<void> {
+  async function runAction(el: HTMLElement, files?: File[]): Promise<void> {
     // A debounce or timer can outlive its element (morphed or navigated away).
     if (!el.isConnected) return;
     if (el instanceof HTMLFormElement) {
@@ -1039,7 +1241,11 @@ export function yerdRuntime(): void {
     actionRuns.get(el)?.abort();
     const run = new AbortController();
     actionRuns.set(el, run);
-    const body = new URLSearchParams([["_yx", token], ...holes]);
+    // Dropped files go up as multipart, under "files" (form.files("files") in the action).
+    const body = files ? new FormData() : new URLSearchParams();
+    body.append("_yx", token);
+    for (const [name, value] of holes) body.append(name, value);
+    for (const file of files ?? []) (body as FormData).append("files", file, file.name);
     // A named field sends itself too, like it would in a form.
     const field = el as HTMLInputElement;
     if (field.name && "value" in field && (!/^(checkbox|radio)$/.test(field.type) || field.checked)) body.append(field.name, field.value);
@@ -1048,7 +1254,8 @@ export function yerdRuntime(): void {
       const response = await fetch(new URL(url, el.baseURI).href, {
         method: "POST",
         body,
-        headers: { yx: "1", accept: "text/html", "content-type": "application/x-www-form-urlencoded" },
+        // fetch sets multipart's boundary itself.
+        headers: files ? { yx: "1", accept: "text/html" } : { yx: "1", accept: "text/html", "content-type": "application/x-www-form-urlencoded" },
         signal: run.signal,
       });
       if (run.signal.aborted) return;
@@ -1126,6 +1333,8 @@ export function yerdRuntime(): void {
         visibility.observe(el);
         continue;
       }
+      // Drops are handled centrally (see drag and drop).
+      if (kind === "drop" || kind.startsWith("drop:")) continue;
       if (wiredTriggers.has(el)) continue;
       wiredTriggers.add(el);
       if (kind === "every") {
@@ -1144,15 +1353,10 @@ export function yerdRuntime(): void {
         // The trigger may have been morphed away or changed since.
         if (el.getAttribute("data-yx-trigger")?.trim().split(/\s+/)[0] !== kind) return;
         if (key && (e as KeyboardEvent).key !== key) return;
-        // A click on a link or a submit button would navigate or submit too;
-        // a drop would open the dropped thing.
-        if (event === "click" || event === "submit" || event === "drop" || key) e.preventDefault();
-        // The innermost action wins: a card's drop doesn't also drop on its column.
+        // A click on a link or a submit button would navigate or submit too.
+        if (event === "click" || event === "submit" || key) e.preventDefault();
+        // The innermost action wins: a button's click doesn't also fire its card's.
         e.stopPropagation();
-        if (event === "drop") {
-          el.removeAttribute("data-yx-over");
-          if (!dragged) return;
-        }
         clearTimeout(timer);
         if (wait) timer = setTimeout(() => void runAction(el), wait);
         else void runAction(el);

@@ -14,6 +14,8 @@ class Lab {
         <div id="more" action={({ ref }) => this.search({ q: ref("#q").value, page: 2, on: ref("#q").checked })} trigger="visible" />
         <button id="plain" action={() => this.remove({ id: "b" })}>b</button>
         <Region id="feed" as="ul" append><li>one</li></Region>
+        <div id="zone" action={this.upload} trigger="drop:files" accept="image/*">Drop photos</div>
+        <div id="staging" dropTo="#photos">Drop to add</div>
       </main>
     );
   }
@@ -24,6 +26,10 @@ class Lab {
 
   @action rename(args: { id: string }, form: ActionForm) {
     seen.push(["rename", args, form.get("title")]);
+  }
+
+  @action upload(_: {}, form: ActionForm) {
+    seen.push(["upload", form.files("files").map((f) => `${f.name}:${f.size}`)]);
   }
 
   @action search(args: { q: string; page: number; on: boolean }) {
@@ -113,6 +119,21 @@ describe("action lambdas", () => {
     // Without the runtime, it's the normal error page.
     const plain = await fetch(`${server.url}/lab`, { method: "POST", body: new URLSearchParams({ _yx: "eyJ4IjoxfQ.bad" }), headers: { origin: server.url } });
     expect(plain.headers.get("yx-stale")).toBeNull();
+  });
+
+  it("take dropped files as multipart", async () => {
+    seen.length = 0;
+    expect(attr("zone", "data-yx-trigger")).toBe("drop:files");
+    expect(attr("zone", "accept")).toBe("image/*");
+    expect(attr("staging", "data-yx-drop-to")).toBe("#photos");
+    expect(pageHtml).not.toContain("dropTo");
+    const body = new FormData();
+    body.append("_yx", attr("zone", "data-yx-token"));
+    body.append("files", new File(["abc"], "a.png", { type: "image/png" }));
+    body.append("files", new File(["defg"], "b.png", { type: "image/png" }));
+    const r = await fetch(`${server.url}/lab`, { method: "POST", body, headers: { yx: "1", origin: server.url } });
+    expect(r.status).toBe(204);
+    expect(seen).toEqual([["upload", ["a.png:3", "b.png:4"]]]);
   });
 
   it("refuse a token whose holes weren't sent (a plain post can't fill them)", async () => {

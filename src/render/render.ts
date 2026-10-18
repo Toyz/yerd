@@ -182,6 +182,10 @@ function renderNode(node: YerdNode, state: State): Step {
     };
   }
 
+  if (attrs.dropTo !== undefined) {
+    const { dropTo, ...rest } = attrs;
+    attrs = { ...rest, "data-yx-drop-to": dropTo };
+  }
   const key = node.key === undefined || props["data-key"] !== undefined ? "" : ` data-key="${escapeHtml(String(node.key))}"`;
   write(state, `<${type}${renderAttributes(attrs, type, true, state.insideLocal > 0)}${key}>${hidden}`);
   if (isVoid) return undefined;

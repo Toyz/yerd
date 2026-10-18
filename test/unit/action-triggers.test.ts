@@ -234,4 +234,133 @@ describe("element actions", () => {
     await flush();
     expect(fetch.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
   });
+
+  describe("drag and drop edge cases", () => {
+    const drag = (type: string, target: Element, transfer?: object) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      if (transfer) Object.defineProperty(event, "dataTransfer", { value: transfer });
+      target.dispatchEvent(event);
+      return event;
+    };
+    const posts = (fetch: ReturnType<typeof stubFetch>) =>
+      fetch.mock.calls.filter(([, init]) => init?.method === "POST").map(([, init]) => init!.body);
+
+    it("never drops a card on itself: the drop goes to the column around it", async () => {
+      const fetch = stubFetch(() => new Response(null, { status: 204 }));
+      show(`<ul id="col" data-yx-action="/b" data-yx-token="COL" data-yx-trigger="drop">
+        <li id="c1" draggable="true" data-yx-action="/b" data-yx-token="C1" data-yx-trigger="drop">one</li></ul>`);
+      const card = document.getElementById("c1")!;
+      drag("dragstart", card);
+      drag("dragover", card);
+      expect(card.hasAttribute("data-yx-over")).toBe(false);
+      expect(document.getElementById("col")!.hasAttribute("data-yx-over")).toBe(true);
+      drag("drop", card);
+      await flush();
+      expect(posts(fetch).map((b) => new URLSearchParams(String(b)).get("_yx"))).toEqual(["COL"]);
+    });
+
+    it("drop:<selector> takes only matching draggables", async () => {
+      const fetch = stubFetch(() => new Response(null, { status: 204 }));
+      show(`<div id="tasks" data-yx-action="/b" data-yx-token="T" data-yx-trigger="drop:.task"></div>
+        <i id="note" class="note" draggable="true">n</i><i id="task" class="task" draggable="true">t</i>`);
+      drag("dragstart", document.getElementById("note")!);
+      expect(drag("dragover", document.getElementById("tasks")!).defaultPrevented).toBe(false);
+      drag("drop", document.getElementById("tasks")!);
+      drag("dragstart", document.getElementById("task")!);
+      expect(drag("dragover", document.getElementById("tasks")!).defaultPrevented).toBe(true);
+      drag("drop", document.getElementById("tasks")!);
+      await flush();
+      expect(posts(fetch)).toHaveLength(1);
+    });
+
+    it("files: posts accepted files as multipart, skips folders, says what it refused", async () => {
+      const fetch = stubFetch(() => new Response(null, { status: 204 }));
+      show(`<div id="zone" data-yx-action="/up" data-yx-token="UP" data-yx-trigger="drop:files" accept="image/*,.txt"></div>`);
+      const png = new File(["x"], "cat.png", { type: "image/png" });
+      const txt = new File(["y"], "notes.txt", { type: "" });
+      const pdf = new File(["z"], "doc.pdf", { type: "application/pdf" });
+      const item = (file: File | null, directory = false) => ({
+        kind: "file",
+        type: file?.type ?? "",
+        getAsFile: () => file,
+        webkitGetAsEntry: () => ({ isDirectory: directory }),
+      });
+      const transfer = { types: ["Files"], items: [item(png), item(txt), item(pdf), item(new File([], "folder"), true)], files: [] };
+      expect(drag("dragover", document.getElementById("zone")!, transfer).defaultPrevented).toBe(true);
+      drag("drop", document.getElementById("zone")!, transfer);
+      await flush();
+      const [body] = posts(fetch) as FormData[];
+      expect(body).toBeInstanceOf(FormData);
+      expect(body!.get("_yx")).toBe("UP");
+      expect((body!.getAll("files") as File[]).map((f) => f.name)).toEqual(["cat.png", "notes.txt"]);
+      expect(document.getElementById("yx-notice")?.textContent).toMatch(/1 file skipped/);
+      expect((fetch.mock.calls[0]![1]!.headers as Record<string, string>)["content-type"]).toBeUndefined();
+    });
+
+    it("files: nothing acceptable is refused outright", async () => {
+      const fetch = stubFetch(() => new Response(null, { status: 204 }));
+      show(`<div id="zone" data-yx-action="/up" data-yx-token="UP" data-yx-trigger="drop:files" accept="image/*"></div>`);
+      const pdf = new File(["z"], "doc.pdf", { type: "application/pdf" });
+      drag("drop", document.getElementById("zone")!, { types: ["Files"], items: [], files: [pdf] });
+      await flush();
+      expect(posts(fetch)).toHaveLength(0);
+      expect(document.getElementById("yx-notice")?.textContent).toMatch(/can't be dropped here/);
+    });
+
+    it("a missed file drop doesn't open the file while the page takes files; otherwise it's the browser's", () => {
+      const transfer = { types: ["Files"], items: [], files: [] };
+      show(`<p id="text">x</p>`);
+      expect(drag("drop", document.getElementById("text")!, transfer).defaultPrevented).toBe(false);
+      show(`<p id="text">x</p><div data-yx-action="/up" data-yx-token="UP" data-yx-trigger="drop:files"></div>`);
+      expect(drag("dragover", document.getElementById("text")!, transfer).defaultPrevented).toBe(true);
+      expect(drag("drop", document.getElementById("text")!, transfer).defaultPrevented).toBe(true);
+    });
+
+    it("page drops don't accept files, file zones don't accept cards", () => {
+      show(`<ul id="col" data-yx-action="/b" data-yx-token="C" data-yx-trigger="drop"></ul>
+        <div id="zone" data-yx-action="/up" data-yx-token="UP" data-yx-trigger="drop:files"></div><i id="card" draggable="true">c</i>`);
+      drag("dragover", document.getElementById("col")!, { types: ["Files"], items: [], files: [] });
+      expect(document.getElementById("col")!.hasAttribute("data-yx-over")).toBe(false);
+      drag("dragstart", document.getElementById("card")!);
+      expect(drag("dragover", document.getElementById("zone")!).defaultPrevented).toBe(false);
+      drag("dragend", document.getElementById("card")!);
+    });
+
+    it("a dragged element morphed away mid-drag drops nothing and leaves no marks", async () => {
+      const fetch = stubFetch(() => new Response(null, { status: 204 }));
+      show(`<ul id="col" data-yx-action="/b" data-yx-token="C" data-yx-trigger="drop" data-yx-holes='[["drag","dataset","id"]]'></ul><i id="card" data-id="c" draggable="true">c</i>`);
+      drag("dragstart", document.getElementById("card")!);
+      drag("dragover", document.getElementById("col")!);
+      document.getElementById("card")!.remove();
+      drag("drop", document.getElementById("col")!);
+      await flush();
+      expect(posts(fetch)).toHaveLength(0);
+      expect(document.querySelector("[data-yx-over]")).toBeNull();
+    });
+
+    it("dropTo stages files in a form's file input, adding to what's there, for the form to upload", async () => {
+      const fetch = stubFetch(() => new Response(null, { status: 204 }));
+      show(`<form><input id="photos" type="file" name="photos" multiple accept="image/*"><div id="zone" data-yx-drop-to="#photos">Drop</div></form>`);
+      const input = document.getElementById("photos") as HTMLInputElement;
+      const changes: number[] = [];
+      input.addEventListener("change", () => changes.push(input.files!.length));
+      const files = (...names: string[]) => names.map((n) => new File([n], n, { type: n.endsWith(".png") ? "image/png" : "text/plain" }));
+      const [a, b] = files("a.png", "b.png");
+      drag("drop", document.getElementById("zone")!, { types: ["Files"], items: [], files: [a, b] });
+      drag("drop", document.getElementById("zone")!, { types: ["Files"], items: [], files: [b, ...files("c.png", "notes.txt")] });
+      expect([...input.files!].map((f) => f.name)).toEqual(["a.png", "b.png", "c.png"]);
+      expect(changes).toEqual([2, 3]);
+      expect(document.getElementById("zone")!.getAttribute("data-yx-files")).toBe("3");
+      expect(document.getElementById("yx-notice")?.textContent).toMatch(/1 file skipped/);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it("dropTo a single-file input keeps one", () => {
+      show(`<form><input id="avatar" type="file" name="avatar"><div id="zone" data-yx-drop-to="#avatar">Drop</div></form>`);
+      const two = [new File(["1"], "1.png"), new File(["2"], "2.png")];
+      drag("drop", document.getElementById("zone")!, { types: ["Files"], items: [], files: two });
+      expect([...(document.getElementById("avatar") as HTMLInputElement).files!].map((f) => f.name)).toEqual(["1.png"]);
+      expect(document.getElementById("yx-notice")?.textContent).toMatch(/Only one file/);
+    });
+  });
 });

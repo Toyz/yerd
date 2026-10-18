@@ -246,6 +246,26 @@ import { Stylesheet, assetUrl } from "@toyz/yerd";
 
 In dev that's `/src/styles.css`, served by Vite. After `vite build` it's the hashed file (`/assets/styles-AbC123.css`), as long as the file is listed in the Vite plugin's `client` option. See [deploying](11-deploying.md).
 
+### Images
+
+Images are plain HTML, and the browser's loading hints are typed: `loading="lazy"` defers offscreen images and iframes, `decoding="async"` keeps decoding off the main thread, `fetchpriority="high"` hurries the one that matters (your hero image), and `srcset` / `sizes` / `<picture>` pick the right file for the screen.
+
+```tsx
+<img src={assetUrl("src/hero.jpg")} alt="" width={1200} height={600} fetchpriority="high" />
+
+{products.map((p) => (
+  <img src={p.photo} alt={p.name} width={320} height={240} loading="lazy" decoding="async"
+    srcset={`${p.photo}?w=320 320w, ${p.photo}?w=640 640w`} sizes="(max-width: 600px) 50vw, 320px" />
+))}
+
+<picture>
+  <source type="image/avif" srcset="/cat.avif" />
+  <img src="/cat.jpg" alt="A cat" loading="lazy" />
+</picture>
+```
+
+Give images a `width` and `height` so the page doesn't jump as they load. Files in `public/` are served as they are; `assetUrl()` is for files Vite should fingerprint (list them in the plugin's `client` option).
+
 ## Prerendering
 
 Pages that are the same for everyone can be rendered once at build time. Add [@prerender](api:yerd.prerender) and `vite build` writes them as static files that the server sends without running your handler.
