@@ -1,6 +1,6 @@
 {
   "name": "@toyz/yerd",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A TypeScript web server where routes are decorated classes and TSX is the template engine. Zero runtime dependencies.",
   "keywords": [
     "web",
