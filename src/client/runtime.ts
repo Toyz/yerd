@@ -977,7 +977,9 @@ export function yerdRuntime(): void {
     }
     for (const el of owned(scope, "[data-yx-bind]")) {
       for (const entry of el.getAttribute("data-yx-bind")!.split(";")) {
-        const at = entry.indexOf(":");
+        // The last colon: names can have their own (class.md:block,
+        // xlink:href), specs can't (an eq() value is URI-encoded).
+        const at = entry.lastIndexOf(":");
         if (at < 0) continue;
         const name = entry.slice(0, at);
         const value = read(scope.state, entry.slice(at + 1));
