@@ -514,7 +514,8 @@ function remember<V>(map: Map<string, V>, key: string, value: V): void {
 
 function makeAsset(text: string, type: string): Asset {
   const raw = Buffer.from(text);
-  return { type, raw, etag: `"${createHash("sha256").update(raw).digest("base64url").slice(0, 16)}"` };
+  // Weak: one validator for the identity, gzip and brotli bytes alike.
+  return { type, raw, etag: `W/"${createHash("sha256").update(raw).digest("base64url").slice(0, 16)}"` };
 }
 
 /** An asset as a response: 304 for a matching If-None-Match, else br or gzip (compressed once, on first ask) or plain. */
@@ -526,7 +527,7 @@ async function respond(req: IncomingMessage, asset: Asset, maxAge: number): Prom
     vary: "accept-encoding",
   };
   const inm = req.headers["if-none-match"];
-  if (inm && inm.split(",").some((tag) => tag.trim() === "*" || tag.trim() === asset.etag || tag.trim() === `W/${asset.etag}`)) {
+  if (inm && inm.split(",").some((tag) => tag.trim() === "*" || tag.trim() === asset.etag || `W/${tag.trim()}` === asset.etag)) {
     return { status: 304, headers, body: null };
   }
   const accept = req.headers["accept-encoding"] ?? "";

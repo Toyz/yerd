@@ -31,8 +31,15 @@ export interface LogBinding {
 
 /** A record's fields, serialized safely, with the app's redact paths masked. */
 function recordFields(binding: LogBinding, fields: Record<string, unknown> | undefined): Record<string, unknown> {
-  const safe = safeFields(fields);
-  return binding.redact?.length ? (prunePaths(safe, binding.redact, "[redacted]") as Record<string, unknown>) : safe;
+  if (!binding.redact?.length || !fields) return safeFields(fields);
+  // Redact before serializing: paths name the fields as written (form.email),
+  // not as the serializer wraps class instances ({"CheckoutForm": {...}}).
+  try {
+    return safeFields(prunePaths(fields, binding.redact, "[redacted]") as Record<string, unknown>);
+  } catch {
+    // Something on the way threw (a getter): redact what the serializer made of it.
+    return prunePaths(safeFields(fields), binding.redact, "[redacted]") as Record<string, unknown>;
+  }
 }
 
 export interface Span {

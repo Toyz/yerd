@@ -94,6 +94,43 @@ describe("logging({ redact })", () => {
     await app.stop();
   });
 
+  it("reaches into class instances (a parsed DTO), keeping the class name in the record", async () => {
+    class Checkout {
+      constructor(
+        readonly name: string,
+        readonly email: string,
+        readonly when: Date,
+      ) {}
+    }
+    class Orders {
+      @instrument({ level: "info", skip: ["form.when"] })
+      place(form: Checkout) {
+        return form.name;
+      }
+    }
+    const { app, records } = capture({ redact: ["form.email"] });
+    await app.scope(() => {
+      log.info("checkout", { form: new Checkout("Ada", "ada@example.com", new Date(0)) });
+      return new Orders().place(new Checkout("Ada", "ada@example.com", new Date(0)));
+    });
+    const line = JSON.stringify(records.find((r) => r.message === "checkout")!.fields);
+    expect(line).not.toContain("ada@example.com");
+    expect(line).toContain("Checkout");
+    expect(line).toContain("1970-01-01");
+    const span = JSON.stringify(records.find((r) => r.kind === "span-enter")!.spans[0]!.fields);
+    expect(span).not.toContain("ada@example.com");
+    expect(span).not.toContain("1970-01-01");
+    expect(span).toContain("Ada");
+    await app.stop();
+  });
+
+  it("leaves built-ins to the serializer", () => {
+    const when = new Date(0);
+    const pruned = prunePaths({ at: when, tags: new Set(["a"]) }, [compilePath("at.x")]) as { at: Date; tags: Set<string> };
+    expect(pruned.at).toBe(when);
+    expect(pruned.tags).toBeInstanceOf(Set);
+  });
+
   it("refuses a malformed path at boot", async () => {
     const { app } = capture({ redact: ["card..number"] });
     const error = (await app.boot().catch((e: unknown) => e)) as BootError;

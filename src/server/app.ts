@@ -2132,7 +2132,8 @@ function scriptResponse(req: IncomingMessage, key: string, source: string, cache
     const raw = Buffer.from(source);
     asset = {
       source,
-      etag: `"${createHash("sha256").update(raw).digest("base64url").slice(0, 16)}"`,
+      // Weak: one validator for the identity, gzip and brotli bytes alike.
+      etag: `W/"${createHash("sha256").update(raw).digest("base64url").slice(0, 16)}"`,
       br: brotliCompressSync(raw),
       gzip: gzipSync(raw),
       raw,
@@ -2148,7 +2149,7 @@ function scriptResponse(req: IncomingMessage, key: string, source: string, cache
   const inm = req.headers["if-none-match"];
   // `*` matches any current representation (RFC 9110 13.1.2), and there always is one.
   const etag = asset.etag;
-  if (inm && inm.split(",").some((tag) => tag.trim() === "*" || tag.trim() === etag || tag.trim() === `W/${etag}`)) {
+  if (inm && inm.split(",").some((tag) => tag.trim() === "*" || tag.trim() === etag || `W/${tag.trim()}` === etag)) {
     return { status: 304, headers, body: null };
   }
   const accept = req.headers["accept-encoding"] ?? "";

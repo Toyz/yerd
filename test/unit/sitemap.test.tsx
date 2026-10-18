@@ -269,7 +269,7 @@ describe("serving", () => {
     expect(plain.headers.get("vary")).toBe("accept-encoding");
     expect(plain.headers.get("cache-control")).toBe("public, max-age=600");
     const etag = plain.headers.get("etag")!;
-    expect(etag).toMatch(/^"[\w-]{16}"$/);
+    expect(etag).toMatch(/^W\/"[\w-]{16}"$/);
 
     const br = await site.request("/sitemap.xml", { headers: { "accept-encoding": "br, gzip" } });
     expect(br.headers.get("content-encoding")).toBe("br");

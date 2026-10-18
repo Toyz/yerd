@@ -46,14 +46,26 @@ function step(patterns: readonly string[][], key: string): { rest: string[][]; h
  * (`replace`). The original is never touched; values the patterns don't reach
  * are shared, not copied.
  */
+function isBuiltIn(value: object): boolean {
+  return (
+    value instanceof Date || value instanceof Map || value instanceof Set || value instanceof Error || value instanceof URL ||
+    value instanceof RegExp || value instanceof Promise || value instanceof ArrayBuffer || ArrayBuffer.isView(value)
+  );
+}
+
 export function prunePaths(value: unknown, patterns: readonly string[][], replace?: string, depth = 0): unknown {
   if (patterns.length === 0 || typeof value !== "object" || value === null || depth > 32) return value;
-  if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null && !Array.isArray(value)) {
-    // Class instances, Dates, Maps: left for the serializer, which knows them.
-    return value;
-  }
+  // Built-ins the serializer formats itself (a Date as a string, a Map as an object...) are left to it.
+  if (isBuiltIn(value)) return value;
   const isArray = Array.isArray(value);
-  const out: Record<string, unknown> | unknown[] = isArray ? [...(value as unknown[])] : { ...(value as Record<string, unknown>) };
+  const proto = Object.getPrototypeOf(value) as object | null;
+  // A class instance (a parsed DTO, say) is pruned like an object, into a copy
+  // with the same prototype, so the log still names its class.
+  const out: Record<string, unknown> | unknown[] = isArray
+    ? [...(value as unknown[])]
+    : proto === Object.prototype || proto === null
+      ? { ...(value as Record<string, unknown>) }
+      : Object.assign(Object.create(proto) as Record<string, unknown>, value);
   for (const key of Object.keys(out)) {
     const { rest, hit } = step(patterns, key);
     const target = out as Record<string, unknown>;

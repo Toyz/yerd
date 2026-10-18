@@ -102,7 +102,7 @@ describe("the chunk endpoints", () => {
     expect(plain.headers.get("cache-control")).toBe("no-cache");
     expect(plain.headers.get("vary")).toBe("accept-encoding");
     const etag = plain.headers.get("etag")!;
-    expect(etag).toMatch(/^"[\w-]{16}"$/);
+    expect(etag).toMatch(/^W\/"[\w-]{16}"$/);
     expect((await plain.text()).startsWith("export default function")).toBe(true);
     const br = await rawGet(server.url, path, "Accept-Encoding: br\r\n");
     expect(br.headers["content-encoding"]).toBe("br");

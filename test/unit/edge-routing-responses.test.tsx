@@ -679,7 +679,7 @@ describe("the runtime script", () => {
     expect(r.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
     expect(r.headers.get("cache-control")).toBe("no-cache");
     expect(r.headers.get("vary")).toBe("accept-encoding");
-    expect(r.headers.get("etag")).toMatch(/^"[\w-]{16}"$/);
+    expect(r.headers.get("etag")).toMatch(/^W\/"[\w-]{16}"$/);
     expect(r.headers.get("content-encoding")).toBeNull();
     expect((await r.text()).length).toBeGreaterThan(1000);
   });
@@ -701,9 +701,10 @@ describe("the runtime script", () => {
     expect(Number(r.headers["content-length"])).toBe(r.body.length);
   });
 
+  // The ETag is weak (one for every encoding); a client may send it back weak or strong.
   it.each([
     (etag: string) => etag,
-    (etag: string) => `W/${etag}`,
+    (etag: string) => etag.replace(/^W\//, ""),
     (etag: string) => `"other", ${etag}`,
     () => "*",
   ])("If-None-Match variant %# -> 304 with no body", async (make) => {
