@@ -109,8 +109,9 @@ export async function* readNdjson(req: IncomingMessage, maxLine = DEFAULT_BODY_L
   if (carry.trim() !== "") yield parseLine(carry, lineNumber + 1);
 }
 
-function mediaType(req: IncomingMessage): string {
-  return (req.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+/** A Content-Type's media type, lower case and without parameters; "" when there's none. */
+export function mediaTypeOf(contentType: string | undefined): string {
+  return (contentType ?? "").split(";")[0]!.trim().toLowerCase();
 }
 
 function hasBody(req: IncomingMessage): boolean {
@@ -119,7 +120,7 @@ function hasBody(req: IncomingMessage): boolean {
   return req.headers["transfer-encoding"] !== undefined;
 }
 
-async function readAll(req: IncomingMessage, limit: number): Promise<Buffer> {
+async function readAll(req: IncomingMessage, limit: number): Promise<Buffer<ArrayBuffer>> {
   const declared = Number(req.headers["content-length"]);
   if (Number.isFinite(declared) && declared > limit) {
     throw new HttpError(413, `Request body is larger than ${limit} bytes`);
@@ -146,10 +147,11 @@ async function readAll(req: IncomingMessage, limit: number): Promise<Buffer> {
  * implementation built into Node), so there's no hand-rolled boundary parser.
  * The body limit has already been applied; raise `bodyLimit` for uploads.
  */
-async function parseMultipart(raw: Buffer, contentType: string): Promise<ParsedBody> {
+async function parseMultipart(raw: Buffer<ArrayBuffer>, contentType: string): Promise<ParsedBody> {
   let data: FormData;
   try {
-    data = await new Response(new Blob([new Uint8Array(raw)]), { headers: { "content-type": contentType } }).formData();
+    // The Blob takes its own copy; don't make another on the way in.
+    data = await new Response(new Blob([raw]), { headers: { "content-type": contentType } }).formData();
   } catch {
     throw new HttpError(400, "Request body is not valid multipart/form-data");
   }
@@ -157,15 +159,30 @@ async function parseMultipart(raw: Buffer, contentType: string): Promise<ParsedB
   const files: FormFiles = Object.create(null);
   for (const [key, value] of data) {
     if (typeof value === "string") {
-      const existing = fields[key];
-      if (existing === undefined) fields[key] = value;
-      else if (Array.isArray(existing)) existing.push(value);
-      else fields[key] = [existing, value];
+      appendField(fields, key, value);
     } else {
       (files[key] ??= []).push(value);
     }
   }
   return { kind: "form", value: fields, files };
+}
+
+/** Add a field's value: a name sent more than once becomes an array, in order. */
+function appendField(fields: FormFields, key: string, value: string): void {
+  const existing = fields[key];
+  if (existing === undefined) fields[key] = value;
+  else if (Array.isArray(existing)) existing.push(value);
+  else fields[key] = [existing, value];
+}
+
+/** Whether a file input really sent a file: an empty one arrives as a File with no name and no bytes. */
+export function isSentFile(file: File): boolean {
+  return file.size > 0 || file.name !== "";
+}
+
+/** The files really sent under a field (see isSentFile); empty when none. */
+export function sentFiles(files: readonly File[] | undefined): File[] {
+  return files ? files.filter(isSentFile) : [];
 }
 
 /**
@@ -177,7 +194,7 @@ export function withFiles(fields: FormFields, files: FormFiles): Record<string, 
   const out: Record<string, unknown> = Object.create(null);
   for (const key of Object.keys(fields)) out[key] = fields[key];
   for (const key of Object.keys(files)) {
-    const sent = files[key]!.filter((f) => f.size > 0 || f.name !== "");
+    const sent = sentFiles(files[key]);
     if (sent.length > 0) out[key] = sent.length === 1 ? sent[0] : sent;
   }
   return out;
@@ -185,12 +202,7 @@ export function withFiles(fields: FormFields, files: FormFiles): Record<string, 
 
 export function formFields(params: URLSearchParams): FormFields {
   const fields: FormFields = Object.create(null);
-  for (const [key, value] of params) {
-    const existing = fields[key];
-    if (existing === undefined) fields[key] = value;
-    else if (Array.isArray(existing)) existing.push(value);
-    else fields[key] = [existing, value];
-  }
+  for (const [key, value] of params) appendField(fields, key, value);
   return fields;
 }
 
@@ -213,7 +225,7 @@ export async function readBody(req: IncomingMessage, limit = DEFAULT_BODY_LIMIT)
   const raw = await readAll(req, limit);
   // A chunked request that sends no bytes is no body, like Content-Length: 0.
   if (raw.byteLength === 0) return { kind: "none", value: undefined };
-  const type = mediaType(req);
+  const type = mediaTypeOf(req.headers["content-type"]);
 
   if (type === "application/json" || type.endsWith("+json")) {
     try {

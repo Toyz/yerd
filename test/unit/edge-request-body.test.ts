@@ -5,6 +5,7 @@ import {
   args, body, currentContext, field, files, get, is, ndjsonBody, post, route, yerd,
   type ParsedBody, type RunningServer,
 } from "@toyz/yerd";
+import { isSentFile, mediaTypeOf, sentFiles } from "../../src/server/body.js";
 
 const LIMIT = 1024;
 
@@ -644,5 +645,22 @@ describe("reading the body more than once", () => {
   it("asking for lines() after body() is a programming error (500), not a hang", async () => {
     const r = await send("/then-lines", "application/x-ndjson", "1\n");
     expect(r.status).toBe(500);
+  });
+});
+
+describe("body helpers", () => {
+  it("mediaTypeOf drops parameters and case", () => {
+    expect(mediaTypeOf("Multipart/Form-Data; boundary=x")).toBe("multipart/form-data");
+    expect(mediaTypeOf(" application/json ")).toBe("application/json");
+    expect(mediaTypeOf(undefined)).toBe("");
+  });
+
+  it("an empty file input isn't a sent file; an empty file with a name is", () => {
+    const blank = new File([], "");
+    const empty = new File([], "empty.txt");
+    const full = new File(["x"], "");
+    expect([blank, empty, full].map(isSentFile)).toEqual([false, true, true]);
+    expect(sentFiles([blank, empty])).toEqual([empty]);
+    expect(sentFiles(undefined)).toEqual([]);
   });
 });

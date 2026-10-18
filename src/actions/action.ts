@@ -22,7 +22,7 @@ import { resolveRoute, routeRegistry, type RouteDef } from "../decorators/route.
 import { HttpError } from "../respond/response.js";
 import { Logger } from "../log/logger.js";
 import { currentContext, type YerdContext } from "../server/context.js";
-import { withFiles, type FormFields, type FormFiles } from "../server/body.js";
+import { sentFiles, withFiles, type FormFields, type FormFiles } from "../server/body.js";
 import { parse, type DtoClass } from "../decorators/dto.js";
 
 /**
@@ -96,7 +96,7 @@ export class ActionForm {
    * ```
    */
   files(name: string): File[] {
-    return (this.uploads[name] ?? []).filter((f) => f.size > 0 || f.name !== "");
+    return sentFiles(this.uploads[name]);
   }
 
   /**
