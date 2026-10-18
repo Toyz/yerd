@@ -3,6 +3,7 @@ import { createAccessor, type AccessorDecorator, type Resolves } from "./kit.js"
 import type { YerdContext } from "../server/context.js";
 import { formFields, withFiles, type FormFields } from "../server/body.js";
 import { dto, parse, type DtoClass } from "./dto.js";
+import { shapeSession, type Session, type SessionApi, type SessionShape } from "../session/session.js";
 
 /** Turns one value into another. Throw an HttpError to reject the request. */
 export type Transform<I = string, O = unknown> = (value: I) => O;
@@ -391,18 +392,46 @@ export function ndjsonBody<const A extends DtoClass<unknown> | { transform?: Pip
 }
 
 /**
+ * `@session` / `@session(Shape)`: see `session`.
+ */
+export interface SessionDecorator extends Resolves<Session<any>> {
+  <This, V extends SessionApi<any>>(target: ClassAccessorDecoratorTarget<This, V>, context: ClassAccessorDecoratorContext<This, V>): ClassAccessorDecoratorResult<This, V>;
+  <T extends object>(shape: SessionShape<T>): AccessorDecorator<Session<T>>;
+}
+
+/**
  * The session (needs app.sessions()). The accessor's type picks the shape:
- * `Session<Cart>` types get/set by `Cart`'s fields; plain `Session` uses the
- * app-wide `SessionData` interface.
+ * `Session<Cart>` makes `Cart`'s fields typed properties (and types
+ * get/set); plain `Session` uses the app-wide `SessionData` interface.
  *
  * ```ts
  * interface Cart { items?: string[]; coupon?: string }
  *
  * @session accessor session!: Session<Cart>;
- * // this.session.get("items") is string[] | undefined; get("itmes") doesn't compile
+ * (this.session.items ??= []).push("socks"); // saved, even changed in place
+ * this.session.itmes; // doesn't compile
+ * ```
+ *
+ * Pass a class to give the session methods, getters and defaults: they run
+ * with `this` as the session, and field initializers fill in missing values
+ * (saved only once changed). No `#private` fields: `this` is a proxy.
+ *
+ * ```ts
+ * class Cart {
+ *   items: string[] = [];
+ *   coupon?: string;
+ *   get count() { return this.items.length; }
+ *   add(item: string) { this.items.push(item); }
+ * }
+ *
+ * @session(Cart) accessor cart!: Session<Cart>;
+ * this.cart.add("socks"); // this.cart.count is 1, and it's saved
  * ```
  */
-export const session = createAccessor((ctx): import("../session/session.js").Session<any> => ctx.session, { name: "session" });
+export const session = createAccessor(
+  (ctx, shape?: SessionShape) => (shape ? shapeSession(ctx.session, shape) : ctx.session),
+  { name: "session" },
+) as unknown as SessionDecorator;
 
 const cookieAccessor = createAccessor<unknown, [name: string, options?: AnyOptions]>(
   (ctx, name, options) => {

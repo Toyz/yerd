@@ -2,8 +2,8 @@
  * Sessions.
  *
  * Enabled with `app.sessions(...)`. Read with `@session accessor session!: Session`
- * or `currentContext().session`. Give it a shape per route, which types
- * get/set/delete:
+ * or `currentContext().session`. Give it a shape per route, whose fields
+ * become typed properties (`session.items`):
  *
  * ```ts
  * interface Cart { items?: string[]; coupon?: string }
@@ -185,12 +185,97 @@ export function unseal<T>(secrets: readonly string[], sealed: string): T | undef
 type Key<D> = Extract<keyof D, string>;
 
 /**
- * One request's view of the session. Changes are saved after the handler
- * runs. `D` is the shape get/set/delete are typed by: your own interface
- * (`Session<Cart>`), or the merged `SessionData` by default.
+ * Session values as properties (`session.cart`), read and written through
+ * get/set/delete. Optional as you declare them: mark a field `?` unless it
+ * has a default (a field initializer on a shape class). Fields named like a
+ * Session member (`get`, `id`, `flash`, ...) are left out: use get()/set()
+ * for those.
  */
-export class Session<D extends object = SessionData> {
+export type SessionFields<D> = Omit<D, keyof SessionApi<D>>;
+
+/** A class describing a session's shape: data fields (initializers are defaults), getters and methods. */
+export type SessionShape<T extends object = object> = new () => T;
+
+/** The real instance behind a session proxy. */
+const RAW: unique symbol = Symbol("yerd.session.raw");
+/** Put a default into the data without counting it as a change. */
+const ADOPT: unique symbol = Symbol("yerd.session.adopt");
+
+const NO_SHAPE = { proto: null as object | null, defaults: {} as Data };
+
+/**
+ * Routes a property the session doesn't have to the shape class (its methods
+ * and accessors, called with `this` as the session) and then to the data
+ * (get/set/delete, falling back to the shape's defaults). Session members
+ * are read off the real instance, methods bound to it: private fields don't
+ * work through a proxy.
+ */
+function handler({ proto, defaults }: { proto: object | null; defaults: Data }): ProxyHandler<SessionApi<Data>> {
+  const onShape = (key: string) => proto !== null && key in proto;
+  return {
+    get(target, key, receiver) {
+      if (typeof key === "symbol" || key in target) {
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" && key !== RAW ? value.bind(target) : value;
+      }
+      if (onShape(key)) {
+        const value = Reflect.get(proto!, key, receiver);
+        return typeof value === "function" ? value.bind(receiver) : value;
+      }
+      const value = target.get(key);
+      if (value !== undefined || !Object.hasOwn(defaults, key)) return value;
+      // Kept in the data so in-place changes (`cart.items.push(x)`) stick; saved only if changed.
+      target[ADOPT](key, defaults[key]);
+      return defaults[key];
+    },
+    set(target, key, value, receiver) {
+      if (typeof key === "symbol" || key in target) return Reflect.set(target, key, value, target);
+      if (onShape(key)) return Reflect.set(proto!, key, value, receiver);
+      if (value === undefined) target.delete(key);
+      else target.set(key, value);
+      return true;
+    },
+    deleteProperty(target, key) {
+      if (typeof key === "symbol" || key in target) return Reflect.deleteProperty(target, key);
+      target.delete(key);
+      return true;
+    },
+    has(target, key) {
+      if (key in target) return true;
+      if (typeof key !== "string") return false;
+      return onShape(key) || Object.hasOwn(defaults, key) || target.get(key) !== undefined;
+    },
+  };
+}
+
+const plain = handler(NO_SHAPE);
+const views = new WeakMap<object, Map<SessionShape, object>>();
+
+/**
+ * The session seen through a shape class: its methods and getters work on
+ * the session (`this.items` is the session's `items`), and its field
+ * initializers are defaults for missing values. One view per session and
+ * class, so `@session(Cart)` on two classes in a request share it.
+ */
+export function shapeSession<T extends object>(session: Session<object>, shape: SessionShape<T>): Session<T> {
+  const raw = (session as unknown as { [RAW]: SessionApi<Data> })[RAW];
+  let byShape = views.get(raw);
+  if (!byShape) views.set(raw, (byShape = new Map()));
+  let view = byShape.get(shape);
+  if (!view) {
+    // A fresh instance per request: its field values are this request's defaults.
+    // (`coupon?: string` is an own field holding undefined: not a default.)
+    const defaults = Object.fromEntries(Object.entries(new shape()).filter(([, v]) => v !== undefined));
+    view = new Proxy(raw, handler({ proto: shape.prototype as object, defaults }));
+    byShape.set(shape, view);
+  }
+  return view as Session<T>;
+}
+
+export class SessionApi<D> {
   #data: Data;
+  /** The data as loaded (plus adopted defaults), to notice changes made in place (`session.cart.push(x)`). */
+  #base: Data;
   #incomingFlash: Data;
   #outgoingFlash: Data = {};
   #dirty = false;
@@ -207,8 +292,21 @@ export class Session<D extends object = SessionData> {
     createdAt: number = record?.createdAt ?? Date.now(),
   ) {
     this.#data = record ? { ...record.data } : {};
+    this.#base = structuredClone(this.#data);
     this.#incomingFlash = record ? { ...record.flash } : {};
     this.#createdAt = createdAt;
+    return new Proxy(this, plain as ProxyHandler<this>);
+  }
+
+  /** @internal */
+  get [RAW](): this {
+    return this;
+  }
+
+  /** @internal */
+  [ADOPT](key: string, value: unknown): void {
+    this.#data[key] = value;
+    this.#base[key] = structuredClone(value);
   }
 
   /** When the session started, in ms since the epoch. */
@@ -233,10 +331,7 @@ export class Session<D extends object = SessionData> {
     return this.id === undefined && Object.keys(this.#data).length === 0 && !this.#dirty;
   }
 
-  /**
-   * A value, or undefined. Changing a returned object in place doesn't mark
-   * the session changed; set() it again to be sure it's saved.
-   */
+  /** A value, or undefined. Changing a returned object in place is saved too. */
   get<K extends Key<D>>(key: K): D[K] | undefined {
     return this.#data[key] as D[K] | undefined;
   }
@@ -301,7 +396,7 @@ export class Session<D extends object = SessionData> {
   /** @internal */
   get state() {
     return {
-      dirty: this.#dirty,
+      dirty: this.#dirty || JSON.stringify(this.#data) !== JSON.stringify(this.#base),
       regenerated: this.#regenerated,
       destroyed: this.#destroyed,
       /** Destroyed, then started again this request: the old record goes, a new id comes. */
@@ -317,6 +412,27 @@ export class Session<D extends object = SessionData> {
   }
 }
 
+/**
+ * One request's view of the session. Changes are saved after the handler
+ * runs. `D` is the shape it's typed by: your own interface (`Session<Cart>`),
+ * or the merged `SessionData` by default. Values read and write as
+ * properties too:
+ *
+ * ```ts
+ * session.cart ??= [];
+ * session.cart.push("socks"); // changed in place: still saved
+ * session.coupon = undefined; // same as delete("coupon")
+ * ```
+ */
+// Session<any> (what bare @session resolves to) is any, so the declared type decides.
+export type Session<D extends object = SessionData> = unknown extends D ? any : SessionApi<D> & SessionFields<D>;
+
+export const Session = SessionApi as new <D extends object = SessionData>(
+  record: SessionRecord | undefined,
+  id: string | undefined,
+  createdAt?: number,
+) => Session<D>;
+
 /** Options for app.sessions(). */
 export interface SessionOptions {
   /** Where data lives. Default: a CookieStore. */
@@ -327,6 +443,19 @@ export interface SessionOptions {
   absoluteMaxAge?: number;
   /** Refresh the idle expiry on activity. Default true. */
   rolling?: boolean;
+  /**
+   * Makes the id for a new (or regenerated) session, for stores that keep
+   * an id in the cookie (`kind: "id"`; a CookieStore has none, so it's
+   * refused there). Use it for ids your store or logs expect: a prefix, a
+   * ULID, a database sequence. Ids must be unique; the cookie is sealed so
+   * they can't be forged, but keep them unguessable anyway (a leaked store
+   * dump shouldn't name live sessions). Default: 32 random bytes, base64url.
+   *
+   * ```ts
+   * app.sessions({ store: redisStore, generateId: () => `sess_${randomUUID()}` });
+   * ```
+   */
+  generateId?: () => string | Promise<string>;
   /** Cookie name (without the __Host- prefix). Default "yerd_session". */
   cookieName?: string;
   /** Force Secure on or off. Default: on when the request came over HTTPS. */
