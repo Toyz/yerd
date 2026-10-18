@@ -203,7 +203,7 @@ describe("handler source", () => {
     "function () { return __awaiter(this, void 0, void 0, function* () {}) }",
     "() => __name(() => 1, 'x')",
   ])("refuses compiler helpers: %s", async (source) => {
-    await expect(handler(fn(source))).rejects.toThrow("was compiled with a helper");
+    await expect(handler(fn(source))).rejects.toThrow("onClick in <Local> uses a compiler helper");
   });
 });
 

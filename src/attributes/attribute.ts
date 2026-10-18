@@ -392,11 +392,8 @@ builtin<PrefetchValue>("prefetch", (value, { tag, props }) => {
 
 let cached: { version: number; source: string } | undefined;
 
-/**
- * A function's source as an expression, including method shorthand
- * (`client(el) {...}`). Also used for <Local> handlers (see render/attrs.ts).
- */
-export function sourceExpression(fn: Function, source = fn.toString()): string {
+/** A function's source as an expression, including method shorthand (`client(el) {...}`). */
+function sourceExpression(fn: Function, source: string): string {
   // `function ...`, `async function ...`, arrows: already expressions.
   // `async\s*`: minifiers print `async(e)=>...`.
   if (/^(async\s*)?(function\b|\(|[A-Za-z_$][\w$]*\s*=>)/.test(source)) return source;
@@ -404,10 +401,20 @@ export function sourceExpression(fn: Function, source = fn.toString()): string {
   return `({ ${source} })[${JSON.stringify(fn.name)}]`;
 }
 
-function functionExpression(name: string, fn: Function): string {
+/**
+ * The source of a function that runs in the browser (a client half, a
+ * <Local> handler: see render/attrs.ts), as an expression. Refuses compiler
+ * output that leans on helpers the browser won't have, and functions with no
+ * source to send. `label` names the function in the error.
+ */
+export function selfContainedSource(fn: Function, label: string): string {
   const source = fn.toString();
   if (/\b__(async|awaiter|generator|name)\b/.test(source)) {
-    throw new Error(`The client half of attribute "${name}" uses a compiler helper (async lowered below ES2017, or keepNames); it must be self-contained`);
+    throw new TypeError(`${label} uses a compiler helper (async lowered below ES2017, or keepNames); it's sent to the browser as source, so it must be self-contained`);
+  }
+  // Built-ins and bind() results print as `function () { [native code] }`.
+  if (source.endsWith("{ [native code] }")) {
+    throw new TypeError(`${label} is a built-in or bound function; it's sent to the browser as source, so write one inline`);
   }
   return sourceExpression(fn, source);
 }
@@ -418,7 +425,7 @@ export function attributesSource(): string {
   let lines = "";
   for (const def of registry.values()) {
     if (!def.client) continue;
-    lines += `  yerd.attribute(${JSON.stringify(def.name)}, ${functionExpression(def.name, def.client)});\n`;
+    lines += `  yerd.attribute(${JSON.stringify(def.name)}, ${selfContainedSource(def.client, `The client half of attribute "${def.name}"`)});\n`;
   }
   const source = lines ? `((yerd) => {\n${lines}})(window.yerd);\n` : "";
   cached = { version, source };

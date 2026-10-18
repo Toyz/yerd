@@ -1,4 +1,4 @@
-import { attributeVersion, customAttribute, sourceExpression, type AttributeDef } from "../attributes/attribute.js";
+import { attributeVersion, customAttribute, selfContainedSource, type AttributeDef } from "../attributes/attribute.js";
 import { cssClassesIn, keyframesIn } from "./css.js";
 import { escapeHtml, isJsonText, isRawHtml } from "./escape.js";
 import { bindingSpec, isBinding, type Binding } from "./local.js";
@@ -274,7 +274,7 @@ function attributes(props: Record<string, unknown>, tag: string, custom: boolean
         if (local) {
           // The name becomes part of an attribute name, so it's checked like one.
           if (!info.valid) throw new TypeError(`Invalid attribute name: ${JSON.stringify(name)}`);
-          out += ` data-yx-on-${name.slice(2).toLowerCase()}="${escapeHtml(handlerSource(name, value))}"`;
+          out += ` data-yx-on-${name.slice(2).toLowerCase()}="${escapeHtml(selfContainedSource(value, `${name} in <Local>`))}"`;
         }
         continue;
       }
@@ -338,21 +338,4 @@ function attributes(props: Record<string, unknown>, tag: string, custom: boolean
   if (styleText !== undefined) keyframesIn(styleText, found!);
   if (binds) out += ` data-yx-bind="${escapeHtml(binds.join(";"))}"`;
   return out;
-}
-
-/**
- * A <Local> handler's source as an expression (method shorthand included, as
- * from a spread `{ onClick() {...} }`), refusing compiler output that leans on
- * helpers the browser won't have, and functions that have no source to send.
- */
-function handlerSource(name: string, fn: Function): string {
-  const source = fn.toString();
-  if (/\b__(async|awaiter|generator|name)\b/.test(source)) {
-    throw new TypeError(`${name} in <Local> was compiled with a helper (async lowered below ES2017, or keepNames); handlers are sent as source and must be self-contained`);
-  }
-  // Built-ins and bind() results print as `function () { [native code] }`.
-  if (source.endsWith("{ [native code] }")) {
-    throw new TypeError(`${name} in <Local> is a built-in or bound function; handlers are sent as source, so write one inline`);
-  }
-  return sourceExpression(fn, source);
 }

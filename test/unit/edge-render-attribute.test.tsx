@@ -215,4 +215,9 @@ describe("client half source", () => {
     attribute("probe", { client: fn("function () { return __awaiter(this, void 0, void 0, function* () {}) }") });
     expect(() => attributesSource()).toThrow('The client half of attribute "probe" uses a compiler helper');
   });
+
+  it("refuses built-in and bound functions: there's no source to send", () => {
+    attribute("probe-bound", { client: (() => {}).bind(null) });
+    expect(() => attributesSource()).toThrow('The client half of attribute "probe-bound" is a built-in or bound function');
+  });
 });
