@@ -8,9 +8,9 @@ import { css } from "@toyz/loom";
 export const pageStyles = css`
   :host {
     display: block;
-    max-width: 920px;
+    max-width: 1120px;
     margin: 0 auto;
-    padding: 40px 40px 96px;
+    padding: 40px 48px 96px;
   }
   @media (max-width: 760px) {
     :host { padding: 24px 18px 72px; }
@@ -102,7 +102,7 @@ export const pageStyles = css`
   .badge.kind.interface, .badge.kind.type { color: var(--tok-keyword); }
   .badge.kind.const { color: var(--tok-decorator); }
 
-  .prose { max-width: 74ch; }
+  .prose { max-width: 90ch; }
   .prose p, .prose li { line-height: 1.7; }
   .prose h2 { margin-top: 2.6em; }
   .prose h2:first-child, .prose h1 + h2 { margin-top: 1.2em; }

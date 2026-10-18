@@ -7,8 +7,8 @@ import { onCopyClick } from "../ui";
 import { renderMarkdown, type Heading } from "../markdown";
 
 const sheet = css`
-  :host { max-width: 1120px; }
-  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 210px; gap: 56px; align-items: start; }
+  :host { max-width: 1400px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 48px; align-items: start; }
   .source { font-size: 0.8rem; margin-bottom: 18px; }
   .group { font: 700 0.72rem var(--mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); margin-bottom: 6px; }
   .prose h2, .prose h3 { scroll-margin-top: 20px; }
@@ -19,7 +19,7 @@ const sheet = css`
   .rail a.sub { padding-left: 22px; font-size: 0.8rem; color: var(--text-faint); }
   .rail a:hover { color: var(--accent); border-left-color: var(--accent); text-decoration: none; }
 
-  .pager { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 56px; max-width: 74ch; }
+  .pager { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 56px; max-width: 90ch; }
   .pager a {
     display: block; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius);
     background: var(--bg-raised); color: var(--text);
@@ -28,7 +28,7 @@ const sheet = css`
   .pager small { display: block; color: var(--text-faint); font-size: 0.75rem; }
   .pager .next { text-align: right; grid-column: 2; }
 
-  @media (max-width: 1180px) {
+  @media (max-width: 1240px) {
     .layout { grid-template-columns: minmax(0, 1fr); }
     .rail { display: none; }
   }
