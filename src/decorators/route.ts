@@ -2,8 +2,8 @@ import type { Component } from "../jsx/jsx-runtime.js";
 import { CLASS_GUARDS, type GuardRef, type GuardSpec } from "./guards.js";
 import type { YerdContext } from "../server/context.js";
 import { isMediaType, type MediaType } from "../respond/negotiate.js";
-import { createKey, metadataOf } from "./keys.js";
-import { assertPublicInstance, isDecoratorContext } from "./util.js";
+import { metadataOf } from "./keys.js";
+import { classValue, createMethodDecorator, methodFlag, methodList, methodValue, type DecoratorTarget } from "./kit.js";
 import { checkSitemapFields, type SitemapFields } from "../seo/sitemap.js";
 
 /**
@@ -265,7 +265,6 @@ export interface GroupOptions {
 
 
 export interface GroupDef {
-  className: string;
   prefix: string;
   options: GroupOptions;
 }
@@ -278,11 +277,20 @@ export interface RouteDef {
   metadata: DecoratorMetadataObject;
 }
 
-export const VERBS = createKey<VerbEntry[]>("verbs");
+/** Per handler method: the verbs it answers, in the order written. Every verb decorator adds to it. */
+const VERBS = methodList<Omit<VerbEntry, "method">>("verb");
+
+/** Every verb handler of a route class, in the order they were declared. */
+export function verbsOf(target: DecoratorTarget): VerbEntry[] {
+  const out: VerbEntry[] = [];
+  for (const [method, entries] of VERBS.entries(target)) for (const entry of entries) out.push({ ...entry, method });
+  return out;
+}
+
 /** Layouts declared with @layout on a class (route or group). */
-export const LAYOUT = createKey<LayoutSpec>("layout");
+export const LAYOUT = classValue<LayoutSpec>("layout");
 /** Layouts declared with @layout on a handler method. */
-export const METHOD_LAYOUTS = createKey<Map<string | symbol, LayoutSpec>>("layout:method");
+export const METHOD_LAYOUTS = methodValue<LayoutSpec>("layout");
 
 /** A layout declaration: the layouts, outermost first, and whether they replace the inherited chain. */
 export interface LayoutSpec {
@@ -326,9 +334,9 @@ export function layoutSpec(args: ReadonlyArray<Component<LayoutProps> | LayoutOp
   if (layouts.length === 0 && options.inherit !== false) throw new TypeError("@layout needs at least one layout (or { inherit: false } for none: see @noLayout)");
   return { layouts, isolated: options.inherit === false };
 }
-export const GROUP = createKey<GroupDef>("group");
-export const NO_LAYOUT = createKey<Set<string | symbol>>("no-layout");
-export const ACCEPTS = createKey<Map<string | symbol, string[]>>("accepts");
+export const GROUP = classValue<GroupDef>("group");
+/** Per handler method: the media types its @accepts lists. */
+export const ACCEPTS = methodValue<readonly string[]>("accepts");
 
 /** Options for @prerender. */
 export interface PrerenderOptions {
@@ -347,7 +355,6 @@ export interface PrerenderOptions {
    */
   paths?: readonly string[] | (() => readonly string[] | Promise<readonly string[]>);
 }
-export const PRERENDER = createKey<PrerenderOptions>("prerender");
 
 /**
  * Render this route's GET to a static file at build time (`vite build`).
@@ -374,18 +381,7 @@ export const PRERENDER = createKey<PrerenderOptions>("prerender");
  * }
  * ```
  */
-export function prerender(value: Function, context: ClassDecoratorContext): void;
-export function prerender(options?: PrerenderOptions): (value: Function, context: ClassDecoratorContext) => void;
-export function prerender(a?: unknown, b?: unknown): unknown {
-  const apply = (options: PrerenderOptions) => (_value: Function, context: ClassDecoratorContext) => {
-    PRERENDER.set(context.metadata, options);
-  };
-  if (typeof a === "function" && isDecoratorContext(b, "class")) {
-    apply({})(a, b);
-    return undefined;
-  }
-  return apply((a ?? {}) as PrerenderOptions);
-}
+export const prerender = classValue<PrerenderOptions>("prerender", { bare: () => ({}) });
 
 /** Every class decorated with @route, in definition order. */
 export const routeRegistry: RouteDef[] = [];
@@ -439,19 +435,19 @@ export function route(pattern: string, options: RouteOptions = {}) {
 
 function verb(name: Verb): VerbDecorator {
   const label = name === "DELETE" ? "del" : name.toLowerCase();
-  const attach = (context: ClassMethodDecoratorContext, when?: VerbEntry["when"]): void => {
-    assertPublicInstance(context, `@${label}`);
-    VERBS.ownArray<VerbEntry>(context.metadata).push({ verb: name, method: context.name, ...(when ? { when } : {}) });
-  };
-  return function (first: unknown, second?: unknown) {
-    if (isDecoratorContext(second)) return attach(second as ClassMethodDecoratorContext);
-    if (typeof first !== "function") {
-      throw new TypeError(`@${label}(...) takes a request test (a function or a guard), not a path: one route class serves one path`);
-    }
-    const test = first as When;
-    const vary = (test as { vary?: string }).vary;
-    return (_method: Function, context: ClassMethodDecoratorContext) => attach(context, { test, vary: vary?.toLowerCase() });
-  } as VerbDecorator;
+  return createMethodDecorator<[when?: When]>(label, {
+    bare: true,
+    validate(test) {
+      if (typeof test !== "function") {
+        throw new TypeError(`@${label}(...) takes a request test (a function or a guard), not a path: one route class serves one path`);
+      }
+    },
+    apply(context, test) {
+      if (test === undefined) return VERBS.add(context, { verb: name });
+      const vary = (test as { vary?: string }).vary;
+      VERBS.add(context, { verb: name, when: { test, vary: vary?.toLowerCase() } });
+    },
+  }) as unknown as VerbDecorator;
 }
 
 /**
@@ -652,15 +648,20 @@ export function layout(...args: Component<LayoutProps>[] | [...Component<LayoutP
     const merge = (existing: LayoutSpec | undefined): LayoutSpec =>
       existing ? { layouts: [...spec.layouts, ...existing.layouts], isolated: spec.isolated || existing.isolated } : spec;
     if (context.kind === "class") {
-      LAYOUT.set(context.metadata, merge(LAYOUT.hasOwn(context.metadata) ? LAYOUT.from(context.metadata) : undefined));
+      // A class's own @layouts merge; a subclass's replace the one it inherits.
+      const merged = merge(ownClassLayouts.get(context.metadata));
+      ownClassLayouts.set(context.metadata, merged);
+      LAYOUT.set(context, merged);
     } else if (context.kind === "method") {
-      const map = METHOD_LAYOUTS.ownMap<string | symbol, LayoutSpec>(context.metadata);
-      map.set(context.name, merge(map.get(context.name)));
+      METHOD_LAYOUTS.set(context, merge(METHOD_LAYOUTS.get(context.metadata, context.name)));
     } else {
       throw new TypeError("@layout goes on a route or group class, or a handler method");
     }
   };
 }
+
+/** Per class: the @layout spec its own decorators have built so far. */
+const ownClassLayouts = new WeakMap<object, LayoutSpec>();
 
 /**
  * Serve this handler only to clients that ask for one of these types in their
@@ -678,10 +679,7 @@ export function accepts(...types: [MediaType, ...MediaType[]]) {
   for (const type of types) {
     if (!isMediaType(type)) throw new TypeError(`@accepts("${type}"): not a media type (use a shorthand like "json" or a type/subtype)`);
   }
-  return (_method: Function, context: ClassMethodDecoratorContext): void => {
-    assertPublicInstance(context, "@accepts");
-    ACCEPTS.ownMap<string | symbol, string[]>(context.metadata).set(context.name, types);
-  };
+  return ACCEPTS(types);
 }
 
 /**
@@ -700,10 +698,7 @@ export function accepts(...types: [MediaType, ...MediaType[]]) {
  * }
  * ```
  */
-export function noLayout(_method: Function, context: ClassMethodDecoratorContext): void {
-  assertPublicInstance(context, "@noLayout");
-  NO_LAYOUT.ownSet<string | symbol>(context.metadata).add(context.name);
-}
+export const noLayout = methodFlag("noLayout");
 
 /**
  * A route group: one prefix, layout and meta for many routes. Routes join with
@@ -722,9 +717,7 @@ export function noLayout(_method: Function, context: ClassMethodDecoratorContext
 export function group(prefix: string, options: GroupOptions = {}) {
   if (!prefix.startsWith("/")) throw new TypeError(`@group prefix must start with "/": ${JSON.stringify(prefix)}`);
   if (options.sitemap) checkSitemapFields(options.sitemap, `@group ${prefix} { sitemap }`);
-  return (_value: Function, context: ClassDecoratorContext): void => {
-    GROUP.set(context.metadata, { className: String(context.name ?? "anonymous"), prefix, options });
-  };
+  return GROUP({ prefix, options });
 }
 
 
@@ -757,7 +750,7 @@ export function resolveRoute(def: RouteDef): ResolvedRoute {
     if (seen.has(cls)) throw new Error(`group cycle through ${cls.name}`);
     seen.add(cls);
     const metadata = metadataOf(cls);
-    const groupDef = GROUP.from(metadata);
+    const groupDef = GROUP.get(metadata);
     if (!groupDef) throw new Error(`${cls.name} is used as a group but has no @group decorator`);
     chain.unshift(groupDef);
     groupMetadata.set(groupDef, metadata);
@@ -772,7 +765,7 @@ export function resolveRoute(def: RouteDef): ResolvedRoute {
     prefix = joinPaths(prefix, g.prefix);
     const metadata = groupMetadata.get(g)!;
     // The group's options and any @layout / @guards written on the group class itself.
-    const declared = LAYOUT.from(metadata);
+    const declared = LAYOUT.get(metadata);
     if (g.options.inheritLayouts === false || declared?.isolated) {
       layouts = [];
       isolated = true;
@@ -782,7 +775,7 @@ export function resolveRoute(def: RouteDef): ResolvedRoute {
     meta = { ...meta, ...g.options.meta };
     guards.push(...(g.options.guards ?? []), ...(CLASS_GUARDS.from(metadata) ?? []));
   }
-  const own = LAYOUT.from(def.metadata);
+  const own = LAYOUT.get(def.metadata);
   if (own?.isolated) isolated = true;
   layouts = applyLayouts(layouts, own);
   guards.push(...(def.options.guards ?? []));

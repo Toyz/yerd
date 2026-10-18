@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { YerdError, accepts, catches, get, guards, negotiate, noLayout, metadataOf, res, status } from "@toyz/yerd";
 import { assertStatus } from "../../src/respond/response.js";
 import { coerce } from "../../src/respond/coerce.js";
-import { ACCEPTS, NO_LAYOUT } from "../../src/decorators/route.js";
+import { ACCEPTS } from "../../src/decorators/route.js";
 import { expandType, isMediaType, type MediaType } from "../../src/respond/negotiate.js";
 import { assertPublicInstance, isAsyncIterable, isDecoratorContext } from "../../src/decorators/util.js";
 
@@ -47,10 +47,10 @@ describe("@accepts and @noLayout", () => {
       @get @accepts("csv") csv() {}
       @get @noLayout other() {}
     }
-    expect([...ACCEPTS.from(metadataOf(Base))!.keys()]).toEqual(["data"]);
-    expect([...ACCEPTS.from(metadataOf(Child))!.keys()]).toEqual(["data", "csv"]);
-    expect([...NO_LAYOUT.from(metadataOf(Base))!]).toEqual(["part"]);
-    expect([...NO_LAYOUT.from(metadataOf(Child))!]).toEqual(["part", "other"]);
+    expect([...ACCEPTS.entries(Base).keys()]).toEqual(["data"]);
+    expect([...ACCEPTS.entries(Child).keys()]).toEqual(["data", "csv"]);
+    expect([...noLayout.members(metadataOf(Base))]).toEqual(["part"]);
+    expect([...noLayout.members(metadataOf(Child))]).toEqual(["part", "other"]);
   });
 });
 

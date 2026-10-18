@@ -7,7 +7,7 @@ import { brotliCompressSync, gzipSync } from "node:zlib";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, extname, join } from "node:path";
 import { ACCESSORS, ARGS, type Resolver } from "../decorators/kit.js";
-import { ACCEPTS, METHOD_LAYOUTS, NO_LAYOUT, PRERENDER, applyLayouts, joinLayouts, resetRouteRegistry, type When, VERBS, resolveRoute, routeRegistry, type LayoutProps, type PageMeta, type ResolvedRoute, type RouteDef, type Verb } from "../decorators/route.js";
+import { ACCEPTS, METHOD_LAYOUTS, noLayout, prerender, applyLayouts, joinLayouts, resetRouteRegistry, type When, verbsOf, resolveRoute, routeRegistry, type LayoutProps, type PageMeta, type ResolvedRoute, type RouteDef, type Verb } from "../decorators/route.js";
 import { choose, expandType } from "../respond/negotiate.js";
 import { Container, Scope, ServiceCollection, currentServices, keyName, runWithServices, type Lifetime, type Registration } from "../di/container.js";
 import {
@@ -781,7 +781,7 @@ export class YerdApp {
     const base = publicBase(options.base);
     this.#writeCssBundle(outDir, base);
     const allowed = this.#options.routes ? new Set(this.#options.routes) : undefined;
-    const defs = routeRegistry.filter((d) => PRERENDER.from(d.metadata) && (!allowed || allowed.has(d.ctor)));
+    const defs = routeRegistry.filter((d) => prerender.get(d.metadata) && (!allowed || allowed.has(d.ctor)));
     // The sitemap is generated with the app started, as it is when served:
     // services filled in by @onBoot hooks (a catalog, say) have their data.
     const sitemap = this.#sitemap?.origin ? this.#sitemap : undefined;
@@ -795,7 +795,7 @@ export class YerdApp {
     const extra: string[] = [];
     try {
       for (const def of defs) {
-        const options = PRERENDER.from(def.metadata)!;
+        const options = prerender.get(def.metadata)!;
         const pattern = resolveRoute(def).pattern;
         const hasParams = paramNames(pattern).length > 0;
         const source = options.paths;
@@ -1066,7 +1066,7 @@ export class YerdApp {
       const info: RouteInfo = { pattern: resolved.pattern, paramNames: paramNames(resolved.pattern), className: def.className, session: resolved.session };
       const lifetime = lifetimeOf({ lifetime: def.options.lifetime, metadata: def.metadata }, "scoped");
       if (this.#sitemap) mapped.push({ def, pattern: info.pattern, lifetime, sitemap: resolved.sitemap });
-      const verbs = VERBS.from(def.metadata) ?? [];
+      const verbs = verbsOf(def.metadata);
       if (verbs.length === 0) problems.push(`${def.className} (${info.pattern}) has no verb methods (@get, @post, ...)`);
 
       for (const accessor of ACCESSORS.from(def.metadata) ?? []) {
@@ -1089,7 +1089,7 @@ export class YerdApp {
       }
 
       const layouts = resolved.isolated ? resolved.layouts : joinLayouts(this.#layouts, resolved.layouts);
-      const methodLayouts = METHOD_LAYOUTS.from(def.metadata);
+      const methodLayouts = METHOD_LAYOUTS.entries(def.metadata);
       const classGuards = [...this.#appGuards, ...resolved.guards, ...(CLASS_GUARDS.from(def.metadata) ?? [])];
       // Actions run behind the class's guards plus their own method guards.
       for (const name of ACTIONS.from(def.metadata)?.keys() ?? []) {
@@ -1097,8 +1097,8 @@ export class YerdApp {
           if (typeof spec === "string") referencedGuards.push([`${def.className}.${name}`, spec]);
         }
       }
-      const bareMethods = NO_LAYOUT.from(def.metadata);
-      const acceptsByMethod = ACCEPTS.from(def.metadata);
+      const bareMethods = noLayout.members(def.metadata);
+      const acceptsByMethod = ACCEPTS.entries(def.metadata);
       for (const { verb, method, when } of verbs) {
         const byVerb = groups.get(info.pattern) ?? new Map<Verb, Handler[]>();
         groups.set(info.pattern, byVerb);
@@ -1430,7 +1430,7 @@ export class YerdApp {
               if (typeof fn !== "function") throw new Error(`${def.className}.${String(method)} (@sitemap) is not a method`);
               return (fn as () => unknown).call(instance);
             },
-      paths: PRERENDER.from(def.metadata)?.paths,
+      paths: prerender.get(def.metadata)?.paths,
     };
   }
 
