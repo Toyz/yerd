@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Logger } from "./log/logger.js";
-import { raw } from "./render/escape.js";
+import { escapeHtml, raw } from "./render/escape.js";
 
 interface ManifestEntry {
   file: string;
@@ -107,6 +107,5 @@ export function assetUrl(path: string): string {
 
 /** `<link rel="stylesheet">` for a source stylesheet, hashed in production. */
 export function Stylesheet({ href }: { href: string }) {
-  const url = assetUrl(href).replace(/"/g, "&quot;");
-  return raw(`<link rel="stylesheet" href="${url}">`);
+  return raw(`<link rel="stylesheet" href="${escapeHtml(assetUrl(href))}">`);
 }
