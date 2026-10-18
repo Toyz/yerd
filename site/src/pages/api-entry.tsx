@@ -1,32 +1,77 @@
-/** One export: import line, signature, docs, examples, and its members with their own version badges. */
+/**
+ * One export: the signature up top with its import line, the docs and
+ * examples, a compact list of its members followed by each one in full, and
+ * the types that belong to it.
+ */
 
 import { LoomElement, component, css, mount, prop, reactive, styles, watch } from "@toyz/loom";
 import { route } from "@toyz/loom/router";
 import { entryId, linkContext, loadApi, loadGuides, resolveApi, sectionId, sourceUrl, type Api, type Entry, type GuideInfo, type Member } from "../data";
-import { Code, KindBadge, Markdown, SinceBadge } from "../ui";
+import { SECTION_INFO } from "../sections";
+import { Code, KindBadge, Markdown, SinceBadge, onCopyClick, summary } from "../ui";
 
 const sheet = css`
-  .crumbs { font-size: 0.82rem; color: var(--text-faint); margin-bottom: 10px; }
-  .title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
-  .title h1 { font-family: var(--mono); font-size: 1.7rem; margin: 0; word-break: break-all; }
-  .facts { display: flex; gap: 14px; flex-wrap: wrap; font-size: 0.82rem; color: var(--text-faint); margin: 8px 0 18px; }
-  .deprecated-note { border-left: 3px solid var(--danger); background: rgba(240, 139, 139, 0.08); padding: 8px 14px; border-radius: 0 var(--radius) var(--radius) 0; margin: 12px 0; }
+  article { max-width: 880px; }
+  .crumbs { font-size: 0.88rem; color: var(--text-faint); margin-bottom: 12px; }
+  .crumbs a { color: var(--text-faint); text-decoration: none; }
+  .crumbs a:hover { color: var(--accent); text-decoration: underline; }
+  .title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .title h1 { font-family: var(--mono); font-weight: 600; font-size: clamp(1.6rem, 1.3rem + 1.2vw, 2.1rem); letter-spacing: -0.01em; margin: 0; overflow-wrap: anywhere; }
+  .facts { display: flex; gap: 6px 20px; flex-wrap: wrap; font-size: 0.88rem; color: var(--text-faint); margin: 0 0 22px; }
+  .facts code { background: none; padding: 0; color: var(--text-dim); }
+  .facts a { color: var(--text-dim); }
+
+  /* The signature is the page's headline. */
+  .sig { border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; margin: 0 0 28px; background: var(--code-bg); }
+  .sig .import { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 18px; border-bottom: 1px solid var(--border); background: var(--bg-raised); }
+  .sig .import pre.code { flex: 1; margin: 0; padding: 0; border: 0; background: none; font-size: 0.8rem; color: var(--text-dim); }
+  .sig .import button {
+    font: 700 0.75rem var(--font); padding: 4px 10px; border-radius: 4px; cursor: pointer; flex: none;
+    border: 1px solid var(--border-strong); background: var(--bg); color: var(--text-dim);
+  }
+  .sig .import button:hover { color: var(--accent); border-color: var(--accent-dim); }
+  .sig pre.signature { margin: 0; border: 0; border-radius: 0; font-size: 0.95rem; padding: 18px; }
+
+  .deprecated-note { border-left: 3px solid var(--danger); background: var(--danger-bg); color: var(--text); padding: 8px 14px; border-radius: 0 var(--radius) var(--radius) 0; margin: 12px 0; }
   .empty { color: var(--text-faint); font-style: italic; }
-  .member { border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 16px 6px; margin: 12px 0; background: var(--bg-raised); scroll-margin-top: 20px; }
-  .member.target { border-color: var(--accent-dim); box-shadow: 0 0 0 3px var(--accent-bg); }
-  .member-head h3 a { color: inherit; }
-  .member-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 0; }
-  .member-head h3 { font-family: var(--mono); font-size: 0.98rem; margin: 0; }
-  .member-head .src { margin-left: auto; font-size: 0.75rem; }
-  .member pre.signature { margin: 10px 0; }
+  h2 .count { color: var(--text-faint); font-family: var(--font); font-size: 0.95rem; margin-left: 4px; }
+
+  /* Members: an index you can scan, then each one in full. */
+  ul.index { list-style: none; margin: 0 0 28px; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; border-top: 1px solid var(--border); }
+  ul.index li { margin: 0; border-bottom: 1px solid var(--border); min-width: 0; }
+  ul.index a { display: flex; align-items: baseline; gap: 10px; padding: 7px 4px; text-decoration: none; color: var(--text); min-width: 0; }
+  ul.index a:hover { background: var(--bg-hover); }
+  ul.index a:hover .m-name { color: var(--accent); }
+  .m-name { font: 600 0.88rem var(--mono); white-space: nowrap; }
+  .m-kind { font-size: 0.78rem; color: var(--text-faint); white-space: nowrap; }
+  .m-doc { font-size: 0.84rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+
+  .member { padding: 18px 0 8px; border-top: 1px solid var(--border); scroll-margin-top: calc(var(--top) + 16px); }
+  .member.target { border-top: 2px solid var(--hat); }
+  .member-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .member-head h3 { font-family: var(--mono); font-size: 1.02rem; font-weight: 600; margin: 0; }
+  .member-head h3 a { color: inherit; text-decoration: none; }
+  .member-head h3 a:hover { color: var(--accent); text-decoration: underline; }
+  .member-head .kind { font-size: 0.8rem; color: var(--text-faint); }
+  .src { margin-left: auto; font-size: 0.82rem; color: var(--text-faint) !important; }
+  .member pre.signature { margin: 10px 0 12px; font-size: 0.84rem; }
+  .member .prose { font-size: 0.98rem; }
   .member .prose p:first-child { margin-top: 4px; }
-  h2 .count { color: var(--text-faint); font-weight: 400; font-size: 0.9rem; }
-  .part { border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 18px 12px; margin: 16px 0; scroll-margin-top: 20px; }
-  .part.target { border-color: var(--accent-dim); box-shadow: 0 0 0 3px var(--accent-bg); }
-  .part-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
-  .part-head h3 { font-family: var(--mono); font-size: 1.1rem; margin: 0; }
-  .part-head h3 a { color: inherit; }
-  .part .member { background: var(--bg); }
+
+  .part { margin: 18px 0; padding: 4px 22px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-raised); scroll-margin-top: calc(var(--top) + 16px); }
+  .part.target { border-color: var(--hat); }
+  .part-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  .part-head h3 { font-family: var(--mono); font-size: 1.12rem; font-weight: 600; margin: 0; }
+  .part-head h3 a { color: inherit; text-decoration: none; }
+  .part .tag { --hole: var(--bg-raised); }
+  .part .member:first-of-type { margin-top: 8px; }
+
+  @media (max-width: 760px) {
+    ul.index { grid-template-columns: minmax(0, 1fr); }
+    .sig pre.signature { font-size: 0.86rem; padding: 14px; }
+    .sig .import { padding-left: 14px; }
+    .part { padding: 2px 14px 10px; }
+  }
 `;
 
 /**
@@ -55,6 +100,7 @@ export class PageApiEntry extends LoomElement {
   @prop({ param: "id" }) accessor id = "";
   @reactive accessor api: Api | undefined = undefined;
   @reactive accessor guides: GuideInfo[] = [];
+  @reactive accessor copied = false;
 
   /** A member to scroll to (the member route sets it). */
   get focusMember(): string {
@@ -87,28 +133,57 @@ export class PageApiEntry extends LoomElement {
     return this.api?.entries.find((e) => entryId(e) === this.id)?.partOf ? this.id.slice(this.id.indexOf(".") + 1) : undefined;
   }
 
+  #linker(api: Api, self: string) {
+    return (name: string) => {
+      const id = resolveApi(api, name);
+      return id && id !== self ? id : undefined;
+    };
+  }
+
+  /** The members as one scannable list, each linking to its full entry below. */
+  #index(members: Member[], self: string) {
+    if (members.length < 4) return null;
+    return (
+      <ul class="index">
+        {members.map((m) => (
+          <li loom-key={`${m.static ? "static " : ""}${m.name}`}>
+            <a href={`#/api/${self}/${m.name}`}>
+              <span class="m-name">
+                {m.static ? "static " : ""}
+                {m.name}
+              </span>
+              <span class="m-kind">{m.kind}</span>
+              <span class="m-doc">{summary(m.doc)}</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
   /** A type documented on this page: its signature, docs, examples and members. */
   #part(part: Entry, api: Api, focused: boolean) {
     const self = entryId(part);
     const ctx = linkContext(api, this.guides, undefined, self);
-    const link = (name: string) => {
-      const id = resolveApi(api, name);
-      return id && id !== self ? id : undefined;
-    };
     const members = [...(part.members ?? [])].sort((a, b) => MEMBER_ORDER[a.kind] - MEMBER_ORDER[b.kind]);
     return (
       <section class={`part ${focused ? "target" : ""}`} id={`p-${part.name}`} loom-key={part.name}>
         <div class="part-head">
-          <h3><a href={`#/api/${self}`}>{part.name}</a></h3>
+          <h3>
+            <a href={`#/api/${self}`}>{part.name}</a>
+          </h3>
           <KindBadge kind={part.kind} />
           <SinceBadge since={part.since} />
-          <a class="src" href={sourceUrl(api, part.source.file, part.source.line)} target="_blank" rel="noopener">source</a>
+          <a class="src" href={sourceUrl(api, part.source.file, part.source.line)} target="_blank" rel="noopener">
+            Source
+          </a>
         </div>
-        <Code class="signature" code={part.signature} link={link} />
+        <Code class="signature" code={part.signature} link={this.#linker(api, self)} />
         {part.doc ? <Markdown text={part.doc} ctx={ctx} /> : null}
         {(part.examples ?? []).map((ex) => (
           <Code code={ex} />
         ))}
+        {this.#index(members, self)}
         {members.map((m) => this.#member(m, part, api))}
       </section>
     );
@@ -117,10 +192,6 @@ export class PageApiEntry extends LoomElement {
   #member(m: Member, entry: Entry, api: Api) {
     const self = entryId(entry);
     const ctx = linkContext(api, this.guides, undefined, `${self}/${m.name}`);
-    const link = (name: string) => {
-      const id = resolveApi(api, name);
-      return id && id !== self ? id : undefined;
-    };
     return (
       <div class={`member ${m.name === this.focusMember ? "target" : ""}`} id={`m-${m.name}`} loom-key={`${m.static ? "static " : ""}${m.name}`}>
         <div class="member-head">
@@ -130,14 +201,16 @@ export class PageApiEntry extends LoomElement {
               {m.name}
             </a>
           </h3>
-          <span class="badge kind">{m.kind}</span>
+          <span class="kind">{m.kind}</span>
           <SinceBadge since={m.since} />
           {m.deprecated ? <span class="badge deprecated">deprecated</span> : null}
           {m.line ? (
-            <a class="src" href={sourceUrl(api, entry.source.file, m.line)} target="_blank" rel="noopener">source</a>
+            <a class="src" href={sourceUrl(api, entry.source.file, m.line)} target="_blank" rel="noopener">
+              Source
+            </a>
           ) : null}
         </div>
-        <Code class="signature" code={m.signature} link={link} />
+        <Code class="signature" code={m.signature} link={this.#linker(api, self)} />
         {m.deprecated ? <div class="deprecated-note">{m.deprecated}</div> : null}
         {m.doc ? <Markdown text={m.doc} ctx={ctx} /> : null}
         {(m.examples ?? []).map((ex) => (
@@ -145,6 +218,13 @@ export class PageApiEntry extends LoomElement {
         ))}
       </div>
     );
+  }
+
+  #copyImport(line: string) {
+    void navigator.clipboard?.writeText(line).then(() => {
+      this.copied = true;
+      setTimeout(() => (this.copied = false), 1200);
+    });
   }
 
   update() {
@@ -159,22 +239,26 @@ export class PageApiEntry extends LoomElement {
         <div>
           <h1>Not found</h1>
           <p>
-            No export <code>{this.id}</code>. <a href="#/api">All exports</a>
+            No export is called <code>{this.id}</code>. Try the <a href="#/api">API index</a> or the search.
           </p>
         </div>
       );
     }
     const self = entryId(entry);
     const ctx = linkContext(api, this.guides, undefined, self);
-    const link = (name: string) => {
-      const id = resolveApi(api, name);
-      return id && id !== self ? id : undefined;
-    };
     const members = [...(entry.members ?? [])].sort((a, b) => MEMBER_ORDER[a.kind] - MEMBER_ORDER[b.kind]);
     const typeOnly = entry.kind === "interface" || entry.kind === "type";
     const importLine = `import { ${typeOnly ? `type ${entry.name}` : entry.name} } from "${entry.module}";`;
+    const guide = SECTION_INFO[entry.section]?.guide;
+    // Types this page owns (only it uses them), then shared types its own
+    // signature takes (yerd(options?: YerdOptions)), each with its members.
+    const owned = (entry.parts ?? [])
+      .map((name) => api.entries.find((e) => e.module === entry.module && e.name === name))
+      .filter((part): part is Entry => part !== undefined);
+    const used = usedTypes(entry, api).filter((t) => !owned.includes(t));
+    const types = [...owned, ...used];
     return (
-      <article>
+      <article onClick={onCopyClick}>
         <div class="crumbs">
           <a href="#/api">API</a> / <a href={`#/api/section/${sectionId(entry.section)}`}>{entry.section}</a>
         </div>
@@ -185,18 +269,28 @@ export class PageApiEntry extends LoomElement {
           {entry.deprecated ? <span class="badge deprecated">deprecated</span> : null}
         </div>
         <div class="facts">
-          <span>{entry.module}</span>
+          <code>{entry.module}</code>
           <a href={sourceUrl(api, entry.source.file, entry.source.line)} target="_blank" rel="noopener">
             {entry.source.file}:{entry.source.line}
           </a>
+          {guide ? <a href={`#/guide/${guide}`}>Guide: {this.guides.find((g) => g.slug === guide)?.title ?? guide}</a> : null}
         </div>
-        <Code code={importLine} />
-        <Code class="signature" code={entry.signature} link={link} />
+
+        <div class="sig">
+          <div class="import">
+            <Code code={importLine} />
+            <button type="button" onClick={() => this.#copyImport(importLine)} aria-label="Copy the import line">
+              {this.copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <Code class="signature" code={entry.signature} link={this.#linker(api, self)} />
+        </div>
+
         {entry.deprecated ? <div class="deprecated-note">{entry.deprecated}</div> : null}
         {entry.doc ? <Markdown text={entry.doc} ctx={ctx} /> : <p class="empty">No description yet; the signature and source are above.</p>}
         {entry.examples?.length ? (
           <>
-            <h2>Examples</h2>
+            <h2>{entry.examples.length === 1 ? "Example" : "Examples"}</h2>
             {entry.examples.map((ex) => (
               <Code code={ex} />
             ))}
@@ -205,29 +299,22 @@ export class PageApiEntry extends LoomElement {
         {members.length ? (
           <>
             <h2>
-              {entry.kind === "const" ? "Properties" : "Members"} <span class="count">({members.length})</span>
+              {entry.kind === "const" ? "Properties" : "Members"}
+              <span class="count">{members.length}</span>
             </h2>
+            {this.#index(members, self)}
             {members.map((m) => this.#member(m, entry, api))}
           </>
         ) : null}
-        {(() => {
-          // Types this page owns (only it uses them), then shared types its own
-          // signature takes (yerd(options?: YerdOptions)), each with its members.
-          const owned = (entry.parts ?? [])
-            .map((name) => api.entries.find((e) => e.module === entry.module && e.name === name))
-            .filter((part): part is Entry => part !== undefined);
-          const used = usedTypes(entry, api).filter((t) => !owned.includes(t));
-          const types = [...owned, ...used];
-          if (types.length === 0) return null;
-          return (
-            <>
-              <h2>
-                {owned.length && !used.length ? "Related types" : "Types it takes"} <span class="count">({types.length})</span>
-              </h2>
-              {types.map((part) => this.#part(part, api, part.name === focusPart))}
-            </>
-          );
-        })()}
+        {types.length ? (
+          <>
+            <h2>
+              {owned.length && !used.length ? "Related types" : "Types it takes"}
+              <span class="count">{types.length}</span>
+            </h2>
+            {types.map((part) => this.#part(part, api, part.name === focusPart))}
+          </>
+        ) : null}
       </article>
     );
   }

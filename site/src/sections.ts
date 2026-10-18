@@ -22,10 +22,3 @@ export const SECTION_INFO: Record<string, { blurb: string; guide?: string }> = {
   Runtime: { blurb: "Runtime support yerd installs for you." },
 };
 
-/** Kinds grouped the way the index lists them. */
-export const KIND_GROUPS: Array<{ title: string; kinds: string[] }> = [
-  { title: "Functions and decorators", kinds: ["function"] },
-  { title: "Classes", kinds: ["class"] },
-  { title: "Constants", kinds: ["const"] },
-  { title: "Interfaces and types", kinds: ["interface", "type", "enum", "other"] },
-];
