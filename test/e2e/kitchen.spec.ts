@@ -468,6 +468,21 @@ test("about is prerendered with Dynamic parts filled in", async ({ page }) => {
   await expect(page.locator("#about-account")).toContainText("Log in");
 });
 
+test("sitemap.xml lists the public pages and every product, robots.txt points at it", async ({ request }) => {
+  const sitemap = await request.get("/sitemap.xml");
+  expect(sitemap.status()).toBe(200);
+  expect(sitemap.headers()["content-type"]).toBe("application/xml; charset=utf-8");
+  const xml = await sitemap.text();
+  const paths = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => new URL(m[1]!).pathname);
+  expect(paths).toEqual(expect.arrayContaining(["/", "/products", "/about", "/features", "/products/disco-gnome"]));
+  expect(paths.filter((p) => /^\/(admin|api|cart|login|signup|oops)(\/|$)/.test(p) || p.endsWith("/embed"))).toEqual([]);
+  expect(xml).toMatch(/<loc>[^<]+\/products\/disco-gnome<\/loc><lastmod>[^<]+<\/lastmod><priority>0\.8<\/priority>/);
+
+  const robots = await (await request.get("/robots.txt")).text();
+  expect(robots).toContain("Disallow: /admin\nDisallow: /cart\n");
+  expect(robots).toMatch(/^Sitemap: https?:\/\/[^/\s]+\/sitemap\.xml$/m);
+});
+
 test("REST API: create, patch, delete, with the API key", async ({ request }) => {
   const denied = await request.post("/api/products", { data: { name: "Nope", category: "rocks", priceCents: 100 } });
   expect(denied.status()).toBe(401);

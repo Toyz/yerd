@@ -110,7 +110,7 @@ export class ReviewPhotoRoute {
  * A product card to paste into other sites in an iframe: `bare()` HTML, no
  * layouts (so no stylesheet link and no runtime), styled inline.
  */
-@route("/products/:slug/embed")
+@route("/products/:slug/embed", { sitemap: false })
 export class ProductEmbed {
   @inject(Catalog) accessor catalog!: Catalog;
   @param("slug") accessor slug!: string;

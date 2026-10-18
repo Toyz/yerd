@@ -1,5 +1,5 @@
 import {
-  NotFound, Unauthorized, YerdError, accepts, action, currentContext, field, file, get, inject, isBot, json, negotiate, param, post, redirect, route, session, setMeta, toInt, between, trim, length, type Session,
+  NotFound, Unauthorized, YerdError, accepts, action, currentContext, field, file, get, inject, isBot, json, negotiate, param, post, redirect, route, session, setMeta, sitemap, toInt, between, trim, length, type Session,
 } from "@toyz/yerd";
 import { Ago, Price, formatMoney } from "../attributes.js";
 import { CATEGORIES, Catalog, imageUrl, type Product } from "../catalog.js";
@@ -194,6 +194,11 @@ export class ProductPage {
   }
 
   /** Crawlers: everything in the HTML, no client runtime, no forms. */
+  /** Every product in the sitemap, built with services like a request (there is none here, so no @param). */
+  @sitemap *entries() {
+    for (const product of this.catalog.all()) yield { params: { slug: product.slug }, lastmod: product.updatedAt, priority: 0.8 };
+  }
+
   @get(isBot) crawlable() {
     const product = this.#product();
     this.#describe(product);

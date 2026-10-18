@@ -1,5 +1,6 @@
-import { get, header, layout, post, prerender, redirect, route, session, type Session } from "@toyz/yerd";
+import { get, header, inject, layout, post, prerender, redirect, route, session, type Session } from "@toyz/yerd";
 import { safeNext } from "@toyz/yerd/auth";
+import { Catalog } from "../catalog.js";
 import { MarketingLayout, RootLayout } from "../layouts.js";
 import type { Prefs } from "../viewer.js";
 
@@ -68,11 +69,17 @@ export class Theme {
   }
 }
 
-/** Plain text, from a string: the robots get the catalog, not the back office. */
+/**
+ * Plain text, from a string: the shelf as it stood when `vite build` ran (a
+ * prerendered route uses services like any other). Not a page, so it stays
+ * out of the sitemap.
+ */
 @prerender
-@route("/robots.txt")
-export class Robots {
+@route("/shelf.txt", { sitemap: false })
+export class Shelf {
+  @inject(Catalog) accessor catalog!: Catalog;
+
   @get txt() {
-    return "User-agent: *\nDisallow: /admin\nDisallow: /cart\n";
+    return this.catalog.all().map((product) => `${product.name}\n`).join("");
   }
 }

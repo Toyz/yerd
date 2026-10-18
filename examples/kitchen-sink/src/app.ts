@@ -38,5 +38,12 @@ export function createApp() {
       // Request lines and spans at info everywhere; in development also Orders at debug.
       // YERD_LOG and YERD_LOG_FORMAT still win, so a deploy can change this without a rebuild.
       .logging({ filter: process.env.NODE_ENV === "production" ? "info" : "info,Orders=debug" })
+      // /sitemap.xml from the routes (products through @sitemap on their page) and a robots.txt
+      // pointing at it. The origin is fixed, so `vite build` writes both into dist/client too.
+      .sitemap({
+        origin: new URL(process.env.PUBLIC_URL ?? "http://localhost:3300").origin,
+        exclude: ["/api/**"],
+        robots: { disallow: ["/admin", "/cart"] },
+      })
   );
 }

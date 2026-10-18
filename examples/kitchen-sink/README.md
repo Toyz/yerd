@@ -57,7 +57,8 @@ Demo accounts (also listed on `/login`):
 `.errorPage(ErrorPage)`, `.sessions({ store: new MemoryStore(), generateId })`,
 `.use(timing)` (a Server-Timing middleware, `src/shop.ts`), `.use(auth)`,
 `.guard(readOnlyMode)` (`BAZAAR_READ_ONLY=1` turns every write into a 503),
-`.services((s) => s.value(ShopConfig, ...))` and `.logging({ filter })`.
+`.services((s) => s.value(ShopConfig, ...))`, `.logging({ filter })` and
+`.sitemap({ ... })`.
 
 **Routing**: `@group("/", { layout })` for the shop and auth pages,
 `@group("/admin", { layout, guards: [auth.role("staff")] })` for the back office,
@@ -207,8 +208,13 @@ the back office's order bell is a private `"staff"` room, streamed from
 **Pages and assets**: `<Stylesheet href="src/styles.css" />`,
 `assetUrl("src/hero.svg")` (both hashed by the build), an eager
 `fetchpriority="high"` hero, lazy `decoding="async"` product images with
-`width`/`height` and `srcset`, `@prerender` on `/about` and `/robots.txt`, and
+`width`/`height` and `srcset`, `@prerender` on `/about` and `/shelf.txt`, and
 `<Dynamic>` for the shopper count and account button on `/about`.
+
+**Sitemap** (`src/app.ts`): `app.sitemap({ origin, exclude: ["/api/**"], robots })`
+serves `/sitemap.xml` and `/robots.txt`; products come from `@sitemap` on
+`ProductPage`, and `/cart`, `/oops`, the auth pages and the embed opt out with
+`sitemap: false`. `PUBLIC_URL` sets the origin; the build writes both files.
 
 ## REST API
 

@@ -46,7 +46,7 @@ export class Lookbook {
 }
 
 /** A deliberate crash: the error page shows its stack in development only. */
-@route("/oops")
+@route("/oops", { sitemap: false })
 export class Oops {
   @get page(): never {
     throw new Error("A gnome tripped over the server. (This is a demo crash.)");
@@ -80,7 +80,8 @@ const FEATURES: Array<[string, Feature[]]> = [
     { name: "@cookie", href: "/", how: "View a product, then come back: \"Recently viewed\" is read from a cookie." },
     { name: "@accepts and negotiate()", href: "/products", how: "HTML here; send Accept: text/csv or application/json for the others." },
     { name: "@get(isBot) and Vary", href: "/products/disco-gnome", how: "curl -A Googlebot gets a script-free page with JSON-LD." },
-    { name: "Prerendered text file", href: "/robots.txt", how: "Written by vite build." },
+    { name: "Prerendered text file", href: "/shelf.txt", how: "The shelf as it was at build time, written by vite build." },
+    { name: "Sitemap and robots.txt", href: "/sitemap.xml", how: "app.sitemap(): the public pages, every product through @sitemap, no /api or /admin; robots.txt points at it." },
   ]],
   ["Responses", [
     { name: "res() with a layout", href: "/orders", how: "Order pages add ReceiptCard at return time." },

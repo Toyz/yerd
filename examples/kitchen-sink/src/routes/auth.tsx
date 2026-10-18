@@ -10,8 +10,8 @@ interface AuthSession {
   lastName?: string;
 }
 
-/** Login and signup: their own layout, no shop chrome. */
-@group("/", { layout: AuthLayout })
+/** Login and signup: their own layout, no shop chrome, and nothing for a search engine. */
+@group("/", { layout: AuthLayout, sitemap: false })
 export class AuthPages {}
 
 /** The first message of a validation failure, or the error's own message. */
@@ -142,7 +142,7 @@ export class SignupPage {
   }
 }
 
-@route("/logout")
+@route("/logout", { sitemap: false })
 export class LogoutRoute {
   @get page() {
     return redirect("/");

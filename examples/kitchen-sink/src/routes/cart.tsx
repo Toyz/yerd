@@ -88,7 +88,7 @@ function ShippingEstimate({ country, cents, freeFromCents, quote }: { country: s
  * method carries the guard (`@post @auth.required`): browsing and filling a
  * cart stay anonymous.
  */
-@route("/cart", { group: Shop, meta: { title: "Your cart", area: "cart" } })
+@route("/cart", { group: Shop, meta: { title: "Your cart", area: "cart" }, sitemap: false })
 export class CartPage {
   @inject(Viewer) accessor viewer!: Viewer;
   @inject(Orders) accessor orders!: Orders;
