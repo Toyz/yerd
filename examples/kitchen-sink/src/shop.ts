@@ -73,8 +73,11 @@ export function fromScript(): boolean {
   return currentContext().headers["yx"] !== undefined;
 }
 
-/** The first message of a validation failure (an HttpError listing issues), or the error's own message. */
+/** The first problem of a validation failure, with its field ("Address: Can't be empty"), or the error's own message. */
 export function firstIssue(error: HttpError): string {
-  const issues = (error.details as { issues?: Array<{ message: string }> } | undefined)?.issues;
-  return issues?.[0]?.message ?? error.message;
+  const issue = (error.details as { issues?: Array<{ path: string; message: string }> } | undefined)?.issues?.[0];
+  if (!issue) return error.message;
+  if (!issue.path || issue.path === "(root)") return issue.message;
+  const field = issue.path.replace(/\[\d+\]$/, "");
+  return `${field[0]!.toUpperCase()}${field.slice(1)}: ${issue.message}`;
 }

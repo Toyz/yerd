@@ -4,7 +4,7 @@ import { CheckoutForm, Orders, PaymentDeclined, type Cart } from "../cart.js";
 import { OrderPlaced, QuoteShipping } from "../events.js";
 import { CartBadge } from "../layouts.js";
 import { COUNTRIES } from "../shipping.js";
-import { ShopConfig, firstIssue } from "../shop.js";
+import { ShopConfig, firstIssue, fromScript } from "../shop.js";
 import { auth, type User } from "../users.js";
 import { Viewer } from "../viewer.js";
 import { Shop } from "./shop.js";
@@ -95,7 +95,6 @@ export class CartPage {
   @inject(ShopConfig) accessor config!: ShopConfig;
   @inject(Events) accessor events!: Events;
   @auth.maybeUser accessor me: User | undefined;
-  @body(CheckoutForm) accessor checkoutForm!: Promise<CheckoutForm>;
 
   get cart() {
     return this.viewer.cart;
@@ -139,15 +138,28 @@ export class CartPage {
                 You'll be asked to <a href="/login?next=/cart">log in</a> first.
               </p>
             )}
-            {/* A classic form: posts to this page's @post handler, which redirects. Auto mode morphs the result in. */}
-            <form method="post" action="/cart">
-              <div class="field"><label for="name">Name</label><input class="input" id="name" name="name" autocomplete="name" required /></div>
-              <div class="field"><label for="address">Address</label><input class="input" id="address" name="address" autocomplete="street-address" required /></div>
-              <div class="row">
-                <div class="field grow"><label for="card">Card number</label><input class="input" id="card" name="card" inputmode="numeric" autocomplete="cc-number" placeholder="4242 4242 4242 4242" required /></div>
-                <div class="field"><label for="cvc">CVC</label><input class="input" id="cvc" name="cvc" inputmode="numeric" autocomplete="cc-csc" maxlength={4} required /></div>
+            {/* An action: a validation error comes back as issues, each shown under its field. */}
+            <form action={this.placeOrder}>
+              <div class="field">
+                <label for="name">Name</label><input class="input" id="name" name="name" autocomplete="name" required />
+                <span class="field-error" data-yx-error="name"></span>
               </div>
-              <p class="form-error" role="alert">{error}</p>
+              <div class="field">
+                <label for="address">Address</label><input class="input" id="address" name="address" autocomplete="street-address" required />
+                <span class="field-error" data-yx-error="address"></span>
+              </div>
+              <div class="row">
+                <div class="field grow">
+                  <label for="card">Card number</label>
+                  <input class="input" id="card" name="card" inputmode="numeric" autocomplete="cc-number" placeholder="4242 4242 4242 4242" required />
+                  <span class="field-error" data-yx-error="card"></span>
+                </div>
+                <div class="field">
+                  <label for="cvc">CVC</label><input class="input" id="cvc" name="cvc" inputmode="numeric" autocomplete="cc-csc" maxlength={4} required />
+                  <span class="field-error" data-yx-error="cvc"></span>
+                </div>
+              </div>
+              <p class="form-error" data-yx-error role="alert">{error}</p>
               <button class="btn btn-block">Place order</button>
               <p class="muted small">Test cards: 4242 4242 4242 4242 works, 4000 0000 0000 0002 declines.</p>
             </form>
@@ -197,12 +209,14 @@ export class CartPage {
     return this.shipping();
   }
 
-  @post @auth.required async checkout() {
+  @action @auth.required async placeOrder(_: {}, fields: ActionForm) {
     let form: CheckoutForm;
     try {
-      form = await this.checkoutForm;
+      form = fields.parse(CheckoutForm);
     } catch (error) {
-      if (!(error instanceof HttpError) || error.status >= 500) throw error;
+      // With the runtime, the issues go back as they are and land under their fields;
+      // a plain form post gets the first one as a message above the form.
+      if (!(error instanceof HttpError) || error.status >= 500 || fromScript()) throw error;
       this.cart.flash("error", firstIssue(error));
       return redirect("/cart");
     }

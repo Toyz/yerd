@@ -505,3 +505,19 @@ test("crawlers get the script-free variant, people the interactive one", async (
   expect(html).toContain("/_yerd/runtime.js");
   expect(html).toContain("Add to cart");
 });
+
+test("checkout: a validation error shows under its field, and the field is marked", async ({ page }) => {
+  await cy(page);
+  await page.locator(".add-form button:enabled").first().click();
+  await expect(page.locator("#cart-badge .badge")).toHaveText("1");
+  await page.goto("/cart");
+  await page.getByLabel("Name").fill("Cy Rock");
+  await page.getByLabel("Address").fill("sdaf");
+  await page.getByLabel("Card number").fill("4242 4242 4242 4242");
+  await page.getByLabel("CVC").fill("123");
+  await page.getByRole("button", { name: "Place order" }).click();
+  await expect(page.locator('[data-yx-error="address"]')).toHaveText("Must be 5 to 200 characters (got 4)");
+  await expect(page.getByLabel("Address")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("Address")).toBeFocused();
+  await expect(page).toHaveURL(/\/cart$/);
+});
