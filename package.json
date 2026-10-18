@@ -49,6 +49,10 @@
       "types": "./dist/src/vite/index.d.ts",
       "import": "./dist/src/vite/index.js"
     },
+    "./client": {
+      "types": "./dist/src/client/index.d.ts",
+      "import": "./dist/src/client/index.js"
+    },
     "./auth": {
       "types": "./dist/src/auth/index.d.ts",
       "import": "./dist/src/auth/index.js"

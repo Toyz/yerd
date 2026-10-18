@@ -16,6 +16,7 @@ import { escapeHtml, raw } from "./render/escape.js";
 interface ManifestEntry {
   file: string;
   css?: string[];
+  imports?: string[];
 }
 
 type Manifest = Record<string, ManifestEntry>;
@@ -36,6 +37,9 @@ interface DevAssets {
 
 const DEV_ASSETS = Symbol.for("yerd.devAssets");
 const checked = new Set<string>();
+
+/** Client modules the yerd plugin builds without being listed (see src/vite). */
+const CLIENT_MODULE = /\.client\.[jt]sx?$/;
 
 /**
  * In development, once per path: warn when an asset doesn't exist (the page
@@ -60,7 +64,7 @@ function checkDev(key: string): void {
     log.warn(`assetUrl("${key}"): no such file under ${dev.root}${dev.publicDir ? " or public/" : ""}, so the page gets a 404`);
     return;
   }
-  if (inRoot && !dev.client.some((entry) => normalize(entry) === key)) {
+  if (inRoot && !CLIENT_MODULE.test(key) && !dev.client.some((entry) => normalize(entry) === key)) {
     log.warn(`assetUrl("${key}") isn't in the yerd plugin's \`client\` option: it works in dev, but vite build won't include it, so production pages using it will fail`);
   }
 }
@@ -88,6 +92,7 @@ export function useManifest(file: string | URL, publicBase = "/"): void {
   // <client>/.vite/manifest.json
   clientDir = dirname(dirname(file instanceof URL ? fileURLToPath(file) : file));
   publicFiles.clear();
+  modules.clear();
 }
 
 /**
@@ -107,6 +112,7 @@ export function resetManifest(): void {
   clientDir = undefined;
   publicFiles.clear();
   checked.clear();
+  modules.clear();
 }
 
 /**
@@ -138,6 +144,51 @@ export function assetUrl(path: string): string {
     return base + key;
   }
   throw new Error(`${key} isn't in the Vite manifest (add it to the yerd plugin's \`client\` option) or the client build's public files`);
+}
+
+/** A client module as the browser loads it: see clientModule(). */
+export interface ClientModule {
+  url: string;
+  /** Stylesheets it needs: its own and its static imports' (production only; in dev Vite injects them). */
+  css: string[];
+  /** The chunks it imports statically, for preloading (production only). */
+  imports: string[];
+}
+
+/** Resolved client modules: a build's manifest doesn't change, so each is walked once. */
+const modules = new Map<string, ClientModule>();
+
+/**
+ * @internal A client module (islands, lazy elements, module-backed
+ * attributes) by its source path: its URL as assetUrl() would give it, plus,
+ * in production, the CSS and chunks the manifest lists for it and its
+ * imports.
+ */
+export function clientModule(path: string): ClientModule {
+  const key = normalize(path);
+  if (!manifest) {
+    checkDev(key);
+    return { url: `/${key}`, css: [], imports: [] };
+  }
+  let found = modules.get(key);
+  if (found) return found;
+  const entry = manifest[key];
+  if (!entry) throw new Error(`${key} isn't in the Vite manifest: name it *.client.ts (the yerd plugin builds those) or add it to the plugin's \`client\` option`);
+  const css = new Set<string>();
+  const imports = new Set<string>();
+  const walk = (at: ManifestEntry): void => {
+    for (const sheet of at.css ?? []) css.add(base + sheet);
+    for (const name of at.imports ?? []) {
+      const dep = manifest![name];
+      if (!dep || imports.has(base + dep.file)) continue;
+      imports.add(base + dep.file);
+      walk(dep);
+    }
+  };
+  walk(entry);
+  found = { url: base + entry.file, css: Array.from(css), imports: Array.from(imports) };
+  modules.set(key, found);
+  return found;
 }
 
 /**

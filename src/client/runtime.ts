@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { minified } from "./runtime-min.js";
-import type { Carried, Chunk, ChunkApi, ChunkName, HeldDrop, HeldInput, RuntimeHooks, Stream } from "./hooks.js";
+import type { Carried, Chunk, ChunkApi, ChunkName, HeldDrop, HeldInput, LazyRegistry, RuntimeHooks, Stream } from "./hooks.js";
 import { yerdCues } from "./runtime-cues.js";
 import { yerdDnd } from "./runtime-dnd.js";
+import { yerdLazy } from "./runtime-lazy.js";
 import { yerdLocal } from "./runtime-local.js";
 
 /**
@@ -14,11 +15,13 @@ import { yerdLocal } from "./runtime-local.js";
  * module-level helpers. Everything is a progressive enhancement of plain HTML;
  * with this script blocked, every form and link still works.
  *
- * Three features that most pages don't use are chunks, each its own
+ * Four features that most pages don't use are chunks, each its own
  * self-contained function served beside the core and imported when the page
  * first has an element that needs it: cues (sync, cue: runtime-cues.ts), dnd
- * (drop targets, dropTo: runtime-dnd.ts) and local (<Local>:
- * runtime-local.ts). Each gets the core's internal hooks (see hooks.ts) when
+ * (drop targets, dropTo: runtime-dnd.ts), local (<Local>: runtime-local.ts)
+ * and lazy (the app's own client modules: islands, lazy elements and
+ * module-backed attributes: runtime-lazy.ts). Each gets the core's internal
+ * hooks (see hooks.ts) when
  * it starts. Input that arrives for a chunk still on its way isn't lost: the
  * core starts drags itself and holds drops and <Local> input for the chunk.
  * <Scripts /> is followed by modulepreload hints for the chunks the server
@@ -71,6 +74,8 @@ import { yerdLocal } from "./runtime-local.js";
  *                       <audio>/<video>, dispatches a cancelable "yx:cue"
  * - <yerd-local>        client-side state from <Local>: data-yx-on-* handlers
  *                       run against it, data-yx-text / data-yx-bind follow it
+ * - [data-yx-island]    an <Island>: the module at that URL mounts into it when
+ *                       its data-yx-when trigger fires (the lazy chunk)
  *
  * Auto mode (<Scripts auto />, i.e. script[data-yx-auto]) drops the
  * attributes: every same-origin link boosts, every form submits with fetch
@@ -91,13 +96,16 @@ import { yerdLocal } from "./runtime-local.js";
  * (import(), which only the served module can call), `inline` holds
  * chunks to start with the core instead of loading them, and `versions` is
  * each chunk's content hash, put in its URL: a chunk from another deploy
- * than this core is never loaded against it (see outdated()).
+ * than this core is never loaded against it (see outdated()). `lazy` is the
+ * app's lazy elements and module-backed attributes: their elements also
+ * bring in the lazy chunk, which imports the modules (through `importChunk`).
  */
 export function yerdRuntime(
   base: string,
   inline?: Partial<Record<ChunkName, Chunk>>,
-  importChunk?: (url: string) => Promise<{ default: Chunk }>,
+  importChunk?: (url: string) => Promise<{ default?: unknown }>,
   versions?: Partial<Record<ChunkName, string>>,
+  lazy?: LazyRegistry,
 ): void {
   // Guard on a symbol: `<div id="yerd">` makes `window.yerd` an element.
   const mark = Symbol.for("yerd.runtime");
@@ -1511,9 +1519,12 @@ export function yerdRuntime(
   // beside the core (`base`), where <Scripts />'s modulepreload hints have
   // usually fetched it already. Inline ones (the whole runtime in one script,
   // for tests) start with the core instead.
+  const lazyApp: LazyRegistry = lazy ?? { elements: {}, attributes: {} };
   const chunkHooks: RuntimeHooks = {
     onPage, attribute, notify, runAction, serverNow, clockReady, stream, reconcile,
     drag, endDrag, carried, filesOf, dropTargets: DROP_TARGETS, outdated, runDefault, quiet: () => quieted,
+    lazy: lazyApp,
+    importModule: (url) => (importChunk ? importChunk(url) : Promise.reject(new Error(`nothing to import ${url} with`))),
   };
 
   /**
@@ -1533,7 +1544,11 @@ export function yerdRuntime(
     if (Date.now() - last > 60000) location.reload();
     else notify("This page is out of date. Reload it to keep going.");
   }
-  const triggers: Array<[ChunkName, string]> = [["cues", "[data-yx-sync], [data-yx-cue]"], ["dnd", DROP_TARGETS], ["local", "yerd-local[data-yx-local]"]];
+  // The lazy chunk's elements depend on the app: islands, its lazy tags, and its module-backed attributes.
+  const lazyFound = ["[data-yx-island]", ...Object.keys(lazyApp.elements), ...Object.keys(lazyApp.attributes).map((name) => `[${name}]`)].join(", ");
+  const triggers: Array<[ChunkName, string]> = [
+    ["cues", "[data-yx-sync], [data-yx-cue]"], ["dnd", DROP_TARGETS], ["local", "yerd-local[data-yx-local]"], ["lazy", lazyFound],
+  ];
   const anyTrigger = triggers.map(([, selector]) => selector).join(", ");
   const loading = new Set<ChunkName>();
   const ready = new Set<ChunkName>();
@@ -1562,7 +1577,7 @@ export function yerdRuntime(
     loading.add(name);
     const version = versions?.[name];
     importChunk(new URL(`runtime-${name}.js${version ? `?v=${version}` : ""}`, base).href).then(
-      (module) => start(name, module.default),
+      (module) => start(name, module.default as Chunk),
       (error: unknown) => {
         // Tried again when the page next changes.
         loading.delete(name);
@@ -1689,7 +1704,7 @@ export function yerdRuntime(
 }
 
 /** The runtime's chunks, by name; each is served at /_yerd/runtime-<name>.js. */
-const CHUNKS: Record<ChunkName, Chunk> = { cues: yerdCues, dnd: yerdDnd, local: yerdLocal };
+const CHUNKS: Record<ChunkName, Chunk> = { cues: yerdCues, dnd: yerdDnd, local: yerdLocal, lazy: yerdLazy };
 
 /** The chunks' names. */
 export const RUNTIME_CHUNKS = Object.keys(CHUNKS) as ChunkName[];
@@ -1701,7 +1716,7 @@ export interface RuntimePieces {
 }
 
 let pieces: RuntimePieces | undefined;
-const scripts = new Map<string, string>();
+const scripts = new Map<string, { registry: string; source: string }>();
 
 /**
  * A runtime function's source. It must be self-contained, so the runtime has
@@ -1724,7 +1739,7 @@ function selfContained(fn: (...args: never[]) => unknown): string {
 export function runtimePieces(): RuntimePieces {
   pieces ??= minified ?? {
     core: selfContained(yerdRuntime),
-    chunks: { cues: selfContained(yerdCues), dnd: selfContained(yerdDnd), local: selfContained(yerdLocal) },
+    chunks: { cues: selfContained(yerdCues), dnd: selfContained(yerdDnd), local: selfContained(yerdLocal), lazy: selfContained(yerdLazy) },
   };
   return pieces;
 }
@@ -1735,19 +1750,24 @@ export function runtimePieces(): RuntimePieces {
  * itself (import.meta.url) when the page needs it. `chunks: "inline"` (the
  * default) is the whole runtime in one classic script, every chunk started
  * with the core, for running it without a server (`new Function(source)()`
- * in tests); it has no import.meta to look for chunks with.
+ * in tests); it has no import.meta to look for chunks with (nor modules, so
+ * lazy ones never load there). `lazy` is the app's lazy elements and
+ * module-backed attributes, resolved to URLs (see lazyRegistry()).
  */
-export function runtimeSource({ chunks = "inline" }: { chunks?: "inline" | "split" } = {}): string {
+export function runtimeSource({ chunks = "inline", lazy }: { chunks?: "inline" | "split"; lazy?: LazyRegistry } = {}): string {
+  const registry = lazy && (Object.keys(lazy.elements).length || Object.keys(lazy.attributes).length) ? JSON.stringify(lazy) : "";
   let script = scripts.get(chunks);
-  if (script === undefined) {
+  if (script?.registry !== registry) {
     const { core, chunks: parts } = runtimePieces();
-    script =
+    const source =
       chunks === "split"
-        ? `(${core})(new URL(".", import.meta.url).href, undefined, (url) => import(url), ${JSON.stringify(Object.fromEntries(RUNTIME_CHUNKS.map((name) => [name, chunkVersion(name)])))});\n`
-        : `(${core})("", { ${RUNTIME_CHUNKS.map((name) => `${name}: ${parts[name]}`).join(", ")} });\n`;
+        ? `(${core})(new URL(".", import.meta.url).href, undefined, (url) => import(url), ${JSON.stringify(Object.fromEntries(RUNTIME_CHUNKS.map((name) => [name, chunkVersion(name)])))}${registry ? `, ${registry}` : ""});\n`
+        : `(${core})("", { ${RUNTIME_CHUNKS.map((name) => `${name}: ${parts[name]}`).join(", ")} }${registry ? `, undefined, undefined, ${registry}` : ""});\n`;
+    // One per mode: the registry only changes when a dev server reloads the app.
+    script = { registry, source };
     scripts.set(chunks, script);
   }
-  return script;
+  return script.source;
 }
 
 const versions = new Map<ChunkName, string>();

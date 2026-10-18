@@ -66,7 +66,7 @@ describe("the minified runtime", () => {
   it("minifies the core and each chunk on its own, each still one self-contained function", async () => {
     const pieces = runtimePieces();
     const small = await minifyPieces(pieces);
-    expect(Object.keys(small.chunks).sort()).toEqual(["cues", "dnd", "local"]);
+    expect(Object.keys(small.chunks).sort()).toEqual(["cues", "dnd", "lazy", "local"]);
     for (const [name, fn] of [["core", small.core], ...Object.entries(small.chunks)] as Array<[string, string]>) {
       expect(fn, name).toMatch(/^(async )?function\b/);
       expect(typeof new Function(`return (${fn});`)(), name).toBe("function");

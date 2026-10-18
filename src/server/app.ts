@@ -30,7 +30,8 @@ import { SessionManager, checkSessionOptions } from "../session/manager.js";
 import type { SessionOptions } from "../session/session.js";
 import { RUNTIME_CHUNK_PREFIX, RUNTIME_PATH } from "../actions/components.js";
 import { OUTDATED_CHUNK, chunkSource, chunkVersion, runtimeSource } from "../client/runtime.js";
-import { attributesSource, resetAttributeRegistry } from "../attributes/attribute.js";
+import { attributesSource, moduleAttributes, resetAttributeRegistry } from "../attributes/attribute.js";
+import { lazyRegistry, resetLazyElements } from "../render/lazy.js";
 import { isYerdNode } from "../jsx/jsx-runtime.js";
 import { YerdResponse, isBare, redirect } from "../respond/response.js";
 import { Router, paramNames } from "../router/trie.js";
@@ -912,6 +913,7 @@ export class YerdApp {
     resetServiceRegistry();
     resetGuardRegistry();
     resetAttributeRegistry();
+    resetLazyElements();
     // Rules re-register as the modules re-run: an edited or removed css.global doesn't linger.
     resetCss();
   }
@@ -2001,14 +2003,16 @@ function withErrorHeaders(out: Outgoing, error: unknown): Outgoing {
   return out;
 }
 
-// The runtime's core (plus custom attributes' client halves) and its chunks,
+// The runtime's core (plus custom attributes' client halves, and the app's
+// lazy modules resolved to URLs for this server: source paths in dev, the
+// build's files in production) and its chunks,
 // each compressed once per distinct source (brotli and gzip, kept in memory)
 // rather than per request. `no-cache` with an ETag, so browsers revalidate
 // (a 304) instead of downloading them on every page.
 const scriptAssets = new Map<string, { source: string; etag: string; br: Uint8Array; gzip: Uint8Array; raw: Uint8Array }>();
 
 function runtimeResponse(req: IncomingMessage): Outgoing {
-  return scriptResponse(req, "", runtimeSource({ chunks: "split" }) + attributesSource());
+  return scriptResponse(req, "", runtimeSource({ chunks: "split", lazy: lazyRegistry(moduleAttributes()) }) + attributesSource());
 }
 
 /**

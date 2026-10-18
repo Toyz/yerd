@@ -1,5 +1,5 @@
 /**
- * What the client runtime's core hands its chunks (cues, dnd, local), and
+ * What the client runtime's core hands its chunks (cues, dnd, local, lazy), and
  * what they hand back. Types only: every chunk is a self-contained function
  * served as text (see runtime.ts), so nothing here exists in the browser.
  * The object itself is internal, passed to each chunk as it starts; it isn't
@@ -7,7 +7,28 @@
  */
 
 /** A chunk's name: also its URL, `/_yerd/runtime-<name>.js`. */
-export type ChunkName = "cues" | "dnd" | "local";
+export type ChunkName = "cues" | "dnd" | "local" | "lazy";
+
+/** A client module the lazy chunk imports: its URL, when to import it, and the stylesheets it needs (from the Vite manifest). */
+export interface LazyModule {
+  url: string;
+  /** "load", "idle", "visible", "interaction" or "media:<query>". */
+  when: string;
+  /** Linked before the module runs. Only in production: in dev, Vite's own client injects a module's CSS. */
+  css?: string[];
+}
+
+/**
+ * The app's lazy elements and module-backed attributes, as the server
+ * resolved them (sent with the runtime script). Islands carry their own
+ * module on the element, so they aren't listed.
+ */
+export interface LazyRegistry {
+  /** Custom element tag -> the module that defines it. */
+  elements: Record<string, LazyModule>;
+  /** Attribute name -> the module whose default export is its client half. */
+  attributes: Record<string, LazyModule>;
+}
 
 /** A server-sent event stream that reopens itself (see stream() in the core). */
 export interface Stream {
@@ -81,6 +102,10 @@ export interface RuntimeHooks {
   runDefault(event: Event): void;
   /** True while the core re-submits a form whose <Local> submit handlers already ran in a replay: they sit this one out. */
   quiet(): boolean;
+  /** lazy: the app's lazy elements and module-backed attributes. */
+  lazy: LazyRegistry;
+  /** lazy: import() an app module (only the served script can call import(), so the core lends its own). */
+  importModule(url: string): Promise<{ default?: unknown }>;
 }
 
 /** What a chunk may hand back to the core. */

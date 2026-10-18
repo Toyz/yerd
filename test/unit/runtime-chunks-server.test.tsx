@@ -94,7 +94,7 @@ describe("the chunk endpoints", () => {
     expect(html).toContain(hint("dnd"));
   });
 
-  it.each(["cues", "dnd", "local"])("serve the %s chunk as a module, like the core: compressed, with an ETag, revalidated", async (name) => {
+  it.each(["cues", "dnd", "local", "lazy"])("serve the %s chunk as a module, like the core: compressed, with an ETag, revalidated", async (name) => {
     const path = `/_yerd/runtime-${name}.js`;
     const plain = await fetch(server.url + path, { headers: { "accept-encoding": "identity" } });
     expect(plain.status).toBe(200);
@@ -122,7 +122,7 @@ describe("the chunk endpoints", () => {
     expect(new Set(tags).size).toBe(4);
   });
 
-  it.each(["cues", "dnd", "local"])("serve the %s chunk's current version for good: its URL changes when it does", async (name) => {
+  it.each(["cues", "dnd", "local", "lazy"])("serve the %s chunk's current version for good: its URL changes when it does", async (name) => {
     const res = await fetch(`${server.url}/_yerd/runtime-${name}.js?v=${chunkVersion(name)}`);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
@@ -138,7 +138,7 @@ describe("the chunk endpoints", () => {
 
   it("the core carries each chunk's version", async () => {
     const core = await (await fetch(server.url + "/_yerd/runtime.js", { headers: { "accept-encoding": "identity" } })).text();
-    for (const name of ["cues", "dnd", "local"]) expect(core).toContain(`"${name}":"${chunkVersion(name)}"`);
+    for (const name of ["cues", "dnd", "local", "lazy"]) expect(core).toContain(`"${name}":"${chunkVersion(name)}"`);
   });
 
   it("an unknown chunk name is a 404, for GET and HEAD alike", async () => {

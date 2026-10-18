@@ -54,6 +54,10 @@ export { raw, escapeHtml, json, type RawHtml } from "./render/escape.js";
 export { css, keyframes, Styles } from "./render/css.js";
 export { Dynamic, type DynamicProps } from "./render/dynamic.js";
 export { Local, eq, not, type LocalProps } from "./render/local.js";
+export {
+  Island, island, lazyElement, resetLazyElements,
+  type IslandProps, type IslandComponentProps, type LazyElementDef, type LazyElementOptions, type LoadTrigger,
+} from "./render/lazy.js";
 export { Fragment, createElement, type Child, type Component, type YerdNode } from "./jsx/jsx-runtime.js";
 export { status, setHeader, catches } from "./decorators/response.js";
 export { isBot } from "./server/bots.js";

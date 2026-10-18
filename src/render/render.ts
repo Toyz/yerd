@@ -17,13 +17,15 @@
  */
 
 import { Fragment, isYerdNode, jsx, type Child, type YerdNode } from "../jsx/jsx-runtime.js";
-import { elementAttributes, renderAttributes } from "./attrs.js";
+import { elementAttributes, lazyAttributes, renderAttributes } from "./attrs.js";
 import { escapeHtml, isRawHtml, raw, type RawHtml } from "./escape.js";
 import { formAction, isBoundAction } from "../actions/action.js";
 import { DYNAMIC_ID, Dynamic, type DynamicProps } from "./dynamic.js";
 import { Styles, stylesFor } from "./css.js";
 import { Local, bindingSpec, isBinding, localState, stateName, type Binding, type LocalProps } from "./local.js";
 import { Scripts, chunkHints } from "../actions/components.js";
+import { Island, islandNode, lazyElementFor, type IslandProps } from "./lazy.js";
+import { clientModule } from "../assets.js";
 
 const VOID_ELEMENTS = new Set([
   "area", "base", "br", "col", "embed", "hr", "img", "input",
@@ -43,15 +45,18 @@ const VOID = 1;
 const HOLDS_CSS = 2;
 const OWN_CSS = 4;
 const RAW_TEXT = 8;
+/** A custom element's name (it has a dash): maybe a lazy element. */
+const CUSTOM_TAG = 16;
 
 const VALID_TAG = /^[a-zA-Z][a-zA-Z0-9-]*$/;
 
 // The client runtime's chunks, as bits of State.needs: what the page's
 // elements need, preloaded after <Scripts /> (see placeHints).
-const CHUNK_NAMES = ["cues", "dnd", "local"] as const;
+const CHUNK_NAMES = ["cues", "dnd", "local", "lazy"] as const;
 const CUES = 1;
 const DND = 2;
 const LOCAL = 4;
+const LAZY = 8;
 
 // Tags repeat constantly: each is checked and classified the first time it's
 // seen, then it's one Map lookup per element (capped).
@@ -64,7 +69,8 @@ function tagFlags(tag: string): number {
   flags = (VOID_ELEMENTS.has(tag) ? VOID : 0)
     | (HOLDS_CSS_ELEMENTS.has(tag) ? HOLDS_CSS : 0)
     | (OWN_CSS_ELEMENTS.has(tag) ? OWN_CSS : 0)
-    | (tag === "script" || tag === "style" ? RAW_TEXT : 0);
+    | (tag === "script" || tag === "style" ? RAW_TEXT : 0)
+    | (tag.includes("-") ? CUSTOM_TAG : 0);
   if (tags.size < 1024) tags.set(tag, flags);
   return flags;
 }
@@ -117,8 +123,10 @@ interface State {
   cssAnchor: number | undefined;
   /** Rules on their way to cssAnchor: spliced in once, when the buffer is flushed or the render ends. */
   cssHead: string;
-  /** The runtime chunks the elements rendered so far need (CUES | DND | LOCAL). */
+  /** The runtime chunks the elements rendered so far need (CUES | DND | LOCAL | LAZY). */
   needs: number;
+  /** Client modules to preload with the chunks: islands, lazy elements and module-backed attributes that load at once ("load"). */
+  modules: Set<string> | undefined;
   /**
    * Just after <Scripts /> in the buffer, while the buffer still holds it:
    * where the chunks' modulepreload hints go when the buffer is flushed or
@@ -204,7 +212,8 @@ function placeHints(state: State): void {
   if (at === undefined) return;
   state.scriptsAnchor = undefined;
   if (!state.needs) return;
-  const hints = chunkHints(CHUNK_NAMES.filter((_, i) => state.needs & (1 << i)));
+  let hints = chunkHints(CHUNK_NAMES.filter((_, i) => state.needs & (1 << i)));
+  if (state.modules) for (const url of state.modules) hints += `<link rel="modulepreload" href="${escapeHtml(url)}">`;
   state.buffer = state.buffer.slice(0, at) + hints + state.buffer.slice(at);
   if (state.cssAnchor !== undefined && state.cssAnchor >= at) state.cssAnchor += hints.length;
 }
@@ -341,6 +350,7 @@ function renderNode(node: YerdNode, state: State): Step {
       return undefined;
     }
     if (type === Local) return renderLocal(props as unknown as LocalProps<object>, state);
+    if (type === Island) return renderIsland(node, state);
     if (type === Scripts) {
       write(state, (Scripts(props as { auto?: boolean }) as RawHtml).html);
       // The first one gets the hints, while the head is still in the buffer.
@@ -403,6 +413,11 @@ function openElement(type: string, flags: number, props: Record<string, unknown>
     state.needs |= chunksFor(rewritten.attrs);
     attrs = renderAttributes(rewritten.attrs, type, true, local, state.cssFound);
     hidden = rewritten.hidden;
+  }
+  if (lazyAttributes.length) noteLazyAttributes(state);
+  if (flags & CUSTOM_TAG) {
+    const lazy = lazyElementFor(type);
+    if (lazy) needsModule(state, lazy.src, lazy.when === "load");
   }
   if (state.cssFound.size) writeClassStyles(state);
   if (flags & HOLDS_CSS) {
@@ -500,6 +515,36 @@ function rewriteProps(type: string, props: Record<string, unknown>): { attrs: Re
     };
   }
   return { attrs, hidden };
+}
+
+/**
+ * The page uses a lazy client module (a lazy element, a module-backed
+ * attribute): the lazy chunk is needed, and so, when it loads at once, is
+ * the module and what it imports.
+ */
+function needsModule(state: State, src: string, now: boolean): void {
+  state.needs |= LAZY;
+  if (!now) return;
+  const module = clientModule(src);
+  state.modules ??= new Set();
+  state.modules.add(module.url);
+  for (const url of module.imports) state.modules.add(url);
+}
+
+/** The module-backed attributes the element just written carries (see lazyAttributes in attrs.ts). */
+function noteLazyAttributes(state: State): void {
+  for (const def of lazyAttributes) needsModule(state, def.client as string, def.when === "load");
+  lazyAttributes.length = 0;
+}
+
+/** An <Island>: its <yerd-island> element, keyed by the Island's own key if it has one. */
+function renderIsland(node: YerdNode, state: State): Step {
+  const island = islandNode(node.props as unknown as IslandProps, node.key);
+  if (emitting(state)) {
+    state.needs |= LAZY;
+    if (island.preload) for (const url of island.preload) (state.modules ??= new Set()).add(url);
+  }
+  return renderNode(island.node, state);
 }
 
 /** The runtime chunks rewritten attributes need: cues for sync and cues, dnd for a drop target. */
@@ -679,6 +724,7 @@ export async function* renderToStream(child: Child, options: RenderOptions = {})
     cssAnchor: undefined,
     cssHead: "",
     needs: 0,
+    modules: undefined,
     scriptsAnchor: undefined,
     cssHeld: undefined,
     cssOuter: undefined,

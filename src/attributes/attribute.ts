@@ -1,3 +1,5 @@
+import { checkTrigger, type LoadTrigger } from "../render/lazy.js";
+
 /**
  * Custom attributes, after loom's @attribute controllers: behaviour attached
  * to any element by an attribute, instead of a custom tag.
@@ -21,6 +23,9 @@
  * appended to /_yerd/runtime.js), so like the runtime itself it must be
  * self-contained: no imports, nothing from the enclosing module. Everything it
  * needs comes in through its arguments, including `yerd`, the runtime's API.
+ *
+ * A client half that needs imports can be a module instead:
+ * `client: "src/attrs/sortable.client.ts"`, loaded only where it's used.
  *
  * JSX types: declare the prop once, so `<button tooltip="...">` type-checks.
  *
@@ -242,8 +247,23 @@ export interface AttributeOptions<V> {
    * name, objects as JSON.
    */
   render?: RenderAttribute<V>;
-  /** Client half: runs in the browser for each element carrying the attribute. Must be self-contained (it's sent as source text). */
-  client?: ClientSetup;
+  /**
+   * Client half: a self-contained function (sent as source), or a client
+   * module's path whose default export is that function, loaded when needed.
+   *
+   * ```ts
+   * export const sortable = attribute("sortable", { client: "src/attrs/sortable.client.ts", when: "visible" });
+   * ```
+   */
+  client?: ClientSetup | string;
+  /**
+   * With a module client half: when to import it. Default "load".
+   *
+   * ```ts
+   * attribute("confetti", { client: "src/attrs/confetti.client.ts", when: "interaction" });
+   * ```
+   */
+  when?: LoadTrigger;
 }
 
 /** A defined custom attribute, as returned by attribute(). */
@@ -252,8 +272,10 @@ export interface AttributeDef<V = unknown> {
   readonly name: string;
   /** The server half, if any. */
   readonly render: RenderAttribute<V> | undefined;
-  /** The client half, if any. */
-  readonly client: ClientSetup | undefined;
+  /** The client half, if any: a function, or a client module's source path. */
+  readonly client: ClientSetup | string | undefined;
+  /** When a module client half is imported; undefined for an inline one. */
+  readonly when: LoadTrigger | undefined;
 }
 
 const VALID_NAME = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
@@ -302,7 +324,11 @@ export function attribute<V = string>(name: string, options: AttributeOptions<V>
   if (!VALID_NAME.test(name)) throw new TypeError(`Custom attribute names are lowercase words joined by dashes; got ${JSON.stringify(name)}`);
   if (builtins.has(name) || RESERVED.has(name)) throw new TypeError(`"${name}" is a built-in yerd attribute`);
   if (registry.has(name)) throw new TypeError(`Custom attribute "${name}" is defined twice`);
-  const def: AttributeDef<V> = { name, render: options.render, client: options.client };
+  const { client } = options;
+  if (typeof client === "string" && !client) throw new TypeError(`attribute("${name}"): client is an empty module path`);
+  if (typeof client !== "string" && options.when !== undefined) throw new TypeError(`attribute("${name}"): \`when\` is for a client half that's a module (client: "src/....client.ts")`);
+  const when = typeof client === "string" ? checkTrigger(options.when ?? "load", `attribute("${name}")`) : undefined;
+  const def: AttributeDef<V> = { name, render: options.render, client, when };
   registry.set(name, def);
   version++;
   return def;
@@ -331,7 +357,14 @@ export function resetAttributeRegistry(): void {
 }
 
 function builtin<V>(name: string, render: RenderAttribute<V>): void {
-  builtins.set(name, { name, render, client: undefined });
+  builtins.set(name, { name, render, client: undefined, when: undefined });
+}
+
+/** @internal The custom attributes whose client half is a module: what the lazy chunk loads (see render/lazy.ts lazyRegistry()). */
+export function moduleAttributes(): Array<{ name: string; src: string; when: LoadTrigger }> {
+  const out: Array<{ name: string; src: string; when: LoadTrigger }> = [];
+  for (const def of registry.values()) if (typeof def.client === "string") out.push({ name: def.name, src: def.client, when: def.when! });
+  return out;
 }
 
 // ── prefetch ──
@@ -424,7 +457,8 @@ export function attributesSource(): string {
   if (cached?.version === version) return cached.source;
   let lines = "";
   for (const def of registry.values()) {
-    if (!def.client) continue;
+    // Module client halves are the lazy chunk's.
+    if (typeof def.client !== "function") continue;
     lines += `  yerd.attribute(${JSON.stringify(def.name)}, ${selfContainedSource(def.client, `The client half of attribute "${def.name}"`)});\n`;
   }
   const source = lines ? `((yerd) => {\n${lines}})(window.yerd);\n` : "";

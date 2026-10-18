@@ -41,6 +41,13 @@ describe("assetUrl in development", () => {
     expect(warnings[2]).toMatch(/files in public\/ are served from the site root; write assetUrl\("favicon.svg"\)/);
   });
 
+  it("doesn't ask for *.client modules to be listed: the plugin builds those anyway", async () => {
+    const root = project();
+    writeFileSync(join(root, "src", "chart.client.ts"), "export default () => {};");
+    (globalThis as Record<symbol, unknown>)[DEV] = { root, publicDir: join(root, "public"), client: [] };
+    expect(await warningsFor(["src/chart.client.ts"])).toEqual([]);
+  });
+
   it("stays quiet outside the Vite dev server", async () => {
     expect(await warningsFor(["src/nowhere.css"])).toEqual([]);
     expect(assetUrl("src/nowhere.css")).toBe("/src/nowhere.css");

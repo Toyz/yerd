@@ -30,6 +30,14 @@ interface NameInfo {
 const names = new Map<string, NameInfo>();
 let namesVersion = -1;
 
+/**
+ * Custom attributes with a module client half, written since the renderer
+ * last looked: it empties this after each element, to preload the lazy
+ * chunk (and the module, for "load"). Module state, like walkCss below: an
+ * element's attributes are written synchronously.
+ */
+export const lazyAttributes: AttributeDef<any>[] = [];
+
 function nameInfo(name: string): NameInfo {
   let info = names.get(name);
   if (info === undefined) {
@@ -263,7 +271,10 @@ function attributes(props: Record<string, unknown>, tag: string, custom: boolean
       const def = info.custom;
       if (def) {
         const rendered = def.render ? def.render(value, { tag, props }) : defaultCustom(name, value);
-        if (rendered) out += renderAttributes(rendered, tag, false, false, found);
+        if (rendered) {
+          out += renderAttributes(rendered, tag, false, false, found);
+          if (typeof def.client === "string") lazyAttributes.push(def);
+        }
         continue;
       }
     }
