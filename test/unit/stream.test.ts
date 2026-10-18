@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  HttpError, args, event, get, is, ndjson, ndjsonBody, post, route, signal, sse, yerd,
+  YerdError, args, event, get, is, ndjson, ndjsonBody, post, route, signal, sse, yerd,
   type RunningServer,
 } from "@toyz/yerd";
 
@@ -40,7 +40,7 @@ class Beat {
 class Broken {
   @get @ndjson async *rows() {
     yield { ok: 1 };
-    throw new HttpError(409, "conflict halfway");
+    throw new YerdError(409, "conflict halfway");
   }
 }
 
@@ -177,6 +177,7 @@ describe("NDJSON request bodies", () => {
     expect(r.status).toBe(400);
     expect(await r.json()).toEqual({
       error: "Line 2 failed validation",
+      code: "validation_failed",
       line: 2,
       issues: [
         { path: "id", message: "Expected an integer" },
@@ -188,7 +189,7 @@ describe("NDJSON request bodies", () => {
   it("rejects malformed JSON lines", async () => {
     const r = await fetch(url("/import"), { method: "POST", body: '{"id":1,"name":"a"}\n{nope\n' });
     expect(r.status).toBe(400);
-    expect(await r.text()).toBe("Line 2 is not valid JSON");
+    expect((await r.json()).error).toBe("Line 2 is not valid JSON");
   });
 });
 

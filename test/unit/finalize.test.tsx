@@ -77,8 +77,8 @@ describe("requests that never reach a handler", () => {
     const app = yerd({ routes: [OnlyGet], services: [], handleSignals: false }).errorPage(Broken);
     const r = await app.request("/nope", { headers: { accept: "text/html" } });
     expect(r.status).toBe(404);
-    expect(r.headers.get("content-type")).toBe("text/plain; charset=utf-8");
-    expect(await r.text()).toBe("Not Found");
+    expect(r.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(await r.json()).toEqual({ error: "Not Found", code: "not_found" });
   });
 
   it("leave a refused cross-site post's session alone, even with an error page to show", async () => {

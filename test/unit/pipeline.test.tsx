@@ -1,7 +1,7 @@
 import { connect } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  ActionForm, HttpError, action, body, createGuard, currentContext, file, files, is, every, get, onBoot, post, res, resolve, route, service, yerd,
+  ActionForm, YerdError, action, body, createGuard, currentContext, file, files, is, every, get, onBoot, post, res, resolve, route, service, yerd,
   type Child, type LayoutProps, type RunningServer,
 } from "@toyz/yerd";
 
@@ -97,7 +97,7 @@ class Headers {
 }
 
 function Boom(): Child {
-  throw new HttpError(418, "short and stout");
+  throw new YerdError(418, "short and stout");
 }
 
 @route("/boom")

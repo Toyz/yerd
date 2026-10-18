@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { request } from "node:http";
 import {
-  ChannelBackend, Channels, HttpError, ILogger, MemoryBackend, YerdResponse, channel, event, get, inject, ndjson, route, signal, sse, yerd,
+  ChannelBackend, Channels, YerdError, ILogger, MemoryBackend, YerdResponse, channel, event, get, inject, ndjson, route, signal, sse, yerd,
   type LogRecord,
 } from "@toyz/yerd";
 import { formatEvent } from "../../src/respond/stream.js";
@@ -114,7 +114,7 @@ describe("sse() streams", () => {
     expect(await drain(sse(items("x"), { heartbeat: 0, ...options }))).toBe(`${start}data: x\n\n`);
   });
 
-  it("ends a stream that throws with a generic error event, or exposes an HttpError's message", async () => {
+  it("ends a stream that throws with a generic error event, or exposes a YerdError's message", async () => {
     async function* fails(error: unknown) {
       yield "a";
       throw error;
@@ -122,7 +122,7 @@ describe("sse() streams", () => {
     expect(await drain(sse(fails(new Error("db password leaked")), { heartbeat: 0 }))).toBe(
       'data: a\n\nevent: error\ndata: {"error":"Internal Server Error"}\n\n',
     );
-    expect(await drain(sse(fails(new HttpError(409, "conflict")), { heartbeat: 0 }))).toBe(
+    expect(await drain(sse(fails(new YerdError(409, "conflict")), { heartbeat: 0 }))).toBe(
       'data: a\n\nevent: error\ndata: {"error":"conflict"}\n\n',
     );
   });
@@ -192,9 +192,9 @@ describe("ndjson() streams", () => {
       throw error;
     }
     expect(await drain(ndjson(fails(new Error("internal"))))).toBe('1\n{"error":"Internal Server Error"}\n');
-    expect(await drain(ndjson(fails(new HttpError(422, "bad row 3"))))).toBe('1\n{"error":"bad row 3"}\n');
-    expect(await drain(ndjson(fails(new HttpError(503, "upstream token=abc"))))).toBe('1\n{"error":"Internal Server Error"}\n');
-    expect(await drain(ndjson(fails(new HttpError(400, "hidden", { expose: false }))))).toBe('1\n{"error":"Internal Server Error"}\n');
+    expect(await drain(ndjson(fails(new YerdError(422, "bad row 3"))))).toBe('1\n{"error":"bad row 3"}\n');
+    expect(await drain(ndjson(fails(new YerdError(503, "upstream token=abc"))))).toBe('1\n{"error":"Internal Server Error"}\n');
+    expect(await drain(ndjson(fails(new YerdError(400, "hidden", { expose: false }))))).toBe('1\n{"error":"Internal Server Error"}\n');
   });
 
   it("rethrows when errorLine is false", async () => {

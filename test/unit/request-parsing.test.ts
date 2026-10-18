@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import {
-  HttpError, args, body, field, file, is, ndjsonBody, parse, post, query, route, toBool, toInt, yerd,
+  YerdError, args, body, field, file, is, ndjsonBody, parse, post, query, route, toBool, toInt, yerd,
 } from "@toyz/yerd";
 import { fileProblem, isSentFile, parseBool, parseInteger, parseNumber } from "../../src/decorators/parse.js";
 
@@ -86,14 +86,14 @@ describe("booleans", () => {
       try {
         return toBool(word);
       } catch (error) {
-        return error instanceof HttpError ? "rejected" : error;
+        return error instanceof YerdError ? "rejected" : error;
       }
     })();
     const viaIs = (() => {
       try {
         return parse(Terms, { agree: word }).agree;
       } catch (error) {
-        return error instanceof HttpError ? "rejected" : error;
+        return error instanceof YerdError ? "rejected" : error;
       }
     })();
     expect(viaIs).toBe(viaToBool);
@@ -143,7 +143,10 @@ describe("@field on a JSON body", () => {
 
 describe("validators", () => {
   it("a bare false names the field", async () => {
-    expect(await send("/picky?n=3", { body: "" })).toEqual({ status: 400, body: "Invalid query parameter: n" });
+    expect(await send("/picky?n=3", { body: "" })).toEqual({
+      status: 400,
+      body: { error: "Invalid query parameter: n", code: "validation_failed", issues: [{ path: "n", message: "Invalid query parameter: n" }] },
+    });
     expect(await send("/picky?n=4", { body: "" })).toEqual({ status: 200, body: { n: 4 } });
   });
 });
@@ -178,14 +181,14 @@ describe("ndjsonBody with transform and validate", () => {
   it("names the line a validator refused", async () => {
     expect(await send("/even-lines", { body: "2\n3\n", type: "application/x-ndjson" })).toEqual({
       status: 400,
-      body: { error: "Line 2 failed validation", line: 2, issues: [{ path: "(root)", message: "Must be even" }] },
+      body: { error: "Line 2 failed validation", code: "validation_failed", line: 2, issues: [{ path: "(root)", message: "Must be even" }] },
     });
   });
 
   it("names the line a transform refused", async () => {
     expect(await send("/int-lines", { body: "1\n1.5\n", type: "application/x-ndjson" })).toEqual({
       status: 400,
-      body: { error: "Line 2 failed validation", line: 2, issues: [{ path: "(root)", message: 'Expected an integer, got "1.5"' }] },
+      body: { error: "Line 2 failed validation", code: "validation_failed", line: 2, issues: [{ path: "(root)", message: 'Expected an integer, got "1.5"' }] },
     });
   });
 });
@@ -223,7 +226,7 @@ describe("DTO issue paths", () => {
       parse(Root, { branch: { leaves: [{ n: 1 }, { n: "x" }] }, site: "not a url" });
       expect.unreachable();
     } catch (error) {
-      expect((error as HttpError).details!.issues).toEqual([
+      expect((error as YerdError).details!.issues).toEqual([
         { path: "branch.leaves[1].n", message: "Expected an integer" },
         { path: "site", message: "Expected a http or https URL" },
       ]);

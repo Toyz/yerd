@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HttpError, email, is, parse, trim, uuid } from "@toyz/yerd";
+import { YerdError, email, is, parse, trim, uuid } from "@toyz/yerd";
 
 type Uuid = string & { readonly __brand: "Uuid" };
 function toUuid(value: string): Uuid {
@@ -33,7 +33,7 @@ function issues(input: Record<string, unknown>): string[] {
     parse(Order, input);
     return [];
   } catch (error) {
-    return ((error as HttpError).details!.issues as Array<{ path: string; message: string }>).map((i) => `${i.path}: ${i.message}`);
+    return ((error as YerdError).details!.issues as Array<{ path: string; message: string }>).map((i) => `${i.path}: ${i.message}`);
   }
 }
 

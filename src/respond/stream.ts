@@ -13,7 +13,8 @@
  * a disconnect ends it straight away.
  */
 
-import { HttpError, YerdResponse } from "./response.js";
+import { YerdError } from "./errors.js";
+import { YerdResponse } from "./response.js";
 import { Logger } from "../log/logger.js";
 import { maybeContext } from "../server/context.js";
 import { isAsyncIterable, isDecoratorContext } from "../decorators/util.js";
@@ -30,9 +31,9 @@ const STREAM_HEADERS = {
   [LONG_LIVED]: "1",
 };
 
-/** What a client may see when a stream fails partway: HttpError messages if exposed, otherwise a generic one. */
+/** What a client may see when a stream fails partway: YerdError messages if exposed, otherwise a generic one. */
 function publicMessage(error: unknown): string {
-  if (error instanceof HttpError && error.expose) return error.message;
+  if (error instanceof YerdError && error.expose) return error.message;
   // The client left (or the server is shutting down) and the source stopped
   // because of it: that's an ending, not a failure.
   const aborted = (maybeContext() as { signal?: AbortSignal } | undefined)?.signal?.aborted;

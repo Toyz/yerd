@@ -131,7 +131,7 @@ export interface YerdContext {
    *
    * ```ts
    * const parsed = await ctx.body();
-   * if (parsed.kind !== "json") throw new HttpError(415, "Send JSON");
+   * if (parsed.kind !== "json") throw new UnsupportedMediaType("Send JSON");
    * ```
    */
   body(): Promise<ParsedBody>;

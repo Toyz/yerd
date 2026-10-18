@@ -12,7 +12,7 @@
  *
  * A guard returns `true` (or nothing) to continue, a string to redirect there
  * (303), `false` for 403, an Error (thrown or returned, e.g.
- * `ok || new HttpError(403)`), or anything else, which becomes the response
+ * `ok || new Forbidden()`), or anything else, which becomes the response
  * through the normal coercion table.
  *
  * Order: app guards, then the group chain outer to inner, then the route's
@@ -32,7 +32,7 @@ export type GuardResult = boolean | string | void | undefined | unknown;
  *
  * ```ts
  * const hasApiKey: GuardFn = (ctx) =>
- *   ctx.headers["x-api-key"] === process.env.API_KEY || new HttpError(401, "Bad API key");
+ *   ctx.headers["x-api-key"] === process.env.API_KEY || new Unauthorized("Bad API key");
  *
  * export const apiKey = createGuard("apiKey", hasApiKey);
  * ```
@@ -130,7 +130,7 @@ function attach(specs: readonly GuardSpec[], context: ClassDecoratorContext | Cl
  * ```tsx
  * export const businessHours = createGuard("businessHours", () => {
  *   const h = new Date().getHours();
- *   return (h >= 9 && h < 17) || new HttpError(403, "Come back during business hours");
+ *   return (h >= 9 && h < 17) || new Forbidden("Come back during business hours");
  * });
  *
  * @route("/support") @businessHours

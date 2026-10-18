@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import {
-  HttpError, action, body, currentContext, get, head, is, post, route, session, sse, status, yerd,
+  YerdError, action, body, currentContext, get, head, is, post, route, session, sse, status, yerd,
   type ActionForm, type Session,
 } from "@toyz/yerd";
 
@@ -38,7 +38,7 @@ class Empty {
 @route("/boom")
 class Boom {
   @get page(): never {
-    throw new HttpError(418, "short and stout");
+    throw new YerdError(418, "short and stout");
   }
 }
 

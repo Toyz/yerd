@@ -29,7 +29,7 @@
 import { createAccessor, type AccessorDecorator } from "../decorators/kit.js";
 import { createGuard, onGuardRegistryReset, type GuardRef } from "../decorators/guards.js";
 import { safeBack } from "../actions/action.js";
-import { HttpError } from "../respond/response.js";
+import { Forbidden, Unauthorized } from "../respond/errors.js";
 import { currentContext, maybeContext, type YerdContext } from "../server/context.js";
 import { wantsPage } from "../server/http.js";
 import type { Middleware } from "../server/app.js";
@@ -205,7 +205,7 @@ export interface Auth<User> {
    * @action async submit(_: {}, form: ActionForm) {
    *   const user = this.users.byName(form.string("name"));
    *   if (!(await verifyPassword(form.string("password"), user?.passwordHash)) || !user) {
-   *     throw new HttpError(401, "Wrong name or password");
+   *     throw new Unauthorized("Wrong name or password");
    *   }
    *   await auth.login(user);
    *   return redirect(safeNext(this.next));
@@ -286,7 +286,7 @@ export const safeNext: (value: string | null | undefined, fallback?: string) => 
  *     const user = this.users.byEmail(form.string("email"));
  *     // An unknown email still costs a full hash: timing doesn't tell.
  *     if (!(await verifyPassword(form.string("password"), user?.passwordHash)) || !user) {
- *       throw new HttpError(401, "Wrong email or password");
+ *       throw new Unauthorized("Wrong email or password");
  *     }
  *     await auth.login(user);
  *     return redirect("/account");
@@ -353,14 +353,14 @@ export function createAuth<User>(options: AuthOptions<User>): Auth<User> {
     if (current(ctx) !== undefined) return true;
     // Browsers and yerd's runtime get the login redirect; APIs get a 401.
     if (wantsPage(ctx.headers)) return `${loginPath}${loginPath.includes("?") ? "&" : "?"}next=${encodeURIComponent(ctx.path + ctx.url.search)}`;
-    throw new HttpError(401, "Sign in first");
+    throw new Unauthorized("Sign in first");
   });
 
   return {
     middleware,
     user: createAccessor((ctx): User => {
       const user = current(ctx);
-      if (user === undefined) throw new HttpError(401, "Sign in first");
+      if (user === undefined) throw new Unauthorized("Sign in first");
       return user;
     }, { name: "auth.user" }),
     maybeUser: createAccessor((ctx): User | undefined => current(ctx), { name: "auth.maybeUser" }),
@@ -370,7 +370,7 @@ export function createAuth<User>(options: AuthOptions<User>): Auth<User> {
         const user = current(ctx);
         if (user === undefined) return required.run(ctx);
         const roles = options.roles?.(user) ?? [];
-        return names.some((n) => roles.includes(n)) || new HttpError(403, "You don't have access to this");
+        return names.some((n) => roles.includes(n)) || new Forbidden("You don't have access to this");
       });
     },
     login(user: User) {

@@ -98,7 +98,7 @@ export function setHeader(name: string, value: string) {
  * Handle errors thrown by this route's handlers, guards and actions. The
  * method gets the error and returns anything a handler can; JSX is rendered
  * in the route's layouts. The response keeps the error's status (an
- * HttpError's, else 500) unless the method returns `res(..., { status })` or
+ * YerdError's, else 500) unless the method returns `res(..., { status })` or
  * a number. Return undefined to pass the error on (to `app.onError`, then the
  * error page). With no classes it handles every error. Methods are tried in
  * the order written.

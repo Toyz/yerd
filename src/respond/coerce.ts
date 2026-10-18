@@ -56,6 +56,9 @@ function isPlainData(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const proto = Object.getPrototypeOf(value);
   if (proto === Object.prototype || proto === null) return true;
+  // A YerdError has a toJSON() (its error body), but returned rather than
+  // thrown it's a mistake, not a 200.
+  if (value instanceof Error) return false;
   // Things that say how they serialize (Date, URL, anything with toJSON).
   if (typeof (value as { toJSON?: unknown }).toJSON === "function") return true;
   // Instances of your own classes (a validated DTO, a domain object) are their
@@ -163,7 +166,7 @@ export async function coerce(value: unknown, options: CoerceOptions): Promise<Ou
   const what = value instanceof Map || value instanceof Set
     ? `a ${value.constructor.name} (JSON can't represent it; convert it, e.g. Object.fromEntries(map) or [...set])`
     : value instanceof Error
-      ? "an Error (throw it, or throw an HttpError, instead of returning it)"
+      ? "an Error (throw it instead of returning it)"
       : value instanceof Response
         ? "a fetch Response (return its body, e.g. res(await response.text(), { status: response.status }))"
         : Object.prototype.toString.call(value);

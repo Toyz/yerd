@@ -8,7 +8,7 @@
 /**
  * Checks a value without changing it. Return `true` (or nothing) to accept,
  * `false` to reject with a generic 400, or a string to reject with that message.
- * Throwing an HttpError also works. Validators see the transformed value and
+ * Throwing a YerdError also works. Validators see the transformed value and
  * run in order; the first to reject wins.
  *
  * ```ts
@@ -60,7 +60,7 @@ export function parseBool(raw: string): boolean | undefined {
 /**
  * Run a field's transforms, left to right, then its validators. Returns the
  * value, or a Rejection when a validator refuses it. A step that throws
- * throws through: request accessors let an HttpError become the response,
+ * throws through: request accessors let a YerdError become the response,
  * DTOs turn the error into an issue.
  */
 export function runPipe(value: unknown, transforms: readonly ((value: any) => unknown)[], validators: readonly Validator<any>[]): unknown {

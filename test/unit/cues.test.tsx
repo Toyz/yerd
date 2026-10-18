@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
-import { ChannelBackend, Cues, HttpError, MemoryBackend, action, attribute, createGuard, get, inject, param, renderToString, route, signal, sse, yerd, type Cue, type CuesOptions } from "@toyz/yerd";
+import { ChannelBackend, Cues, YerdError, MemoryBackend, action, attribute, createGuard, get, inject, param, renderToString, route, signal, sse, yerd, type Cue, type CuesOptions } from "@toyz/yerd";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -517,7 +517,7 @@ describe("public and private rooms", () => {
   });
 
   const onTeam = createGuard("onTeam", (ctx) => {
-    return ctx.headers["x-team"] === ctx.params.id ? true : new HttpError(403, "not your team");
+    return ctx.headers["x-team"] === ctx.params.id ? true : new YerdError(403, "not your team");
   });
 
   @route("/teams/:id/cues", { guards: [onTeam] })

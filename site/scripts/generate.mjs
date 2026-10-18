@@ -43,6 +43,7 @@ const BY_FILE = {
   "src/decorators/dto.ts": "DTOs and validation",
   "src/decorators/guards.ts": "Guards",
   "src/decorators/response.ts": "Responses",
+  "src/respond/errors.ts": "Errors",
   "src/decorators/kit.ts": "Decorator kit",
   "src/decorators/keys.ts": "Decorator kit",
   "src/assets.ts": "Assets",
@@ -66,7 +67,7 @@ const BY_DIR = {
   vite: "Vite",
 };
 const SECTION_ORDER = [
-  "Server", "Routing", "Request data", "DTOs and validation", "Responses", "Rendering", "JSX",
+  "Server", "Routing", "Request data", "DTOs and validation", "Responses", "Errors", "Rendering", "JSX",
   "Actions and dynamics", "Guards", "Dependency injection", "Events", "Sessions", "Auth", "Live and streaming",
   "Logging", "Assets", "Decorator kit", "Vite", "Runtime",
 ];

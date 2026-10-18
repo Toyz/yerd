@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { HttpError, ILogger, LogFilter, get, log, route, toNumber, yerd, type LogRecord } from "@toyz/yerd";
+import { YerdError, ILogger, LogFilter, get, log, route, toNumber, yerd, type LogRecord } from "@toyz/yerd";
 import { safeFields } from "../../src/log/serialize.js";
 import { createAuth } from "@toyz/yerd/auth";
 
@@ -24,7 +24,7 @@ describe("toNumber", () => {
   it("takes decimal numbers only", () => {
     expect(toNumber("1.5")).toBe(1.5);
     expect(toNumber("-2e3")).toBe(-2000);
-    for (const bad of ["Infinity", "0x10", "1e999", "", " ", "12abc"]) expect(() => toNumber(bad), bad).toThrow(HttpError);
+    for (const bad of ["Infinity", "0x10", "1e999", "", " ", "12abc"]) expect(() => toNumber(bad), bad).toThrow(YerdError);
   });
 });
 

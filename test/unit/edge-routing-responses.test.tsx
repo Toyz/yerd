@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  HttpError, RUNTIME_PATH, YerdResponse, bare, catches, currentContext, get, post, put, redirect, res, route, serializeCookie, setHeader, status,
+  YerdError, RUNTIME_PATH, YerdResponse, bare, catches, currentContext, get, post, put, redirect, res, route, serializeCookie, setHeader, status,
   type ErrorPageProps, type LayoutProps, type RunningServer,
 } from "@toyz/yerd";
 import { rawGet, serve } from "./edge-routing-helpers.js";
@@ -177,7 +177,7 @@ class Declared {
   throws(): never {
     currentContext().setHeader("x-ctx", "1");
     currentContext().setCookie("attempts", "1");
-    throw new HttpError(401, "Nope");
+    throw new YerdError(401, "Nope");
   }
 
   @get(() => currentContext().headers["x-v"] === "bad-ctx-status")
@@ -430,7 +430,7 @@ const throws: Record<string, () => unknown> = {
   notFound: () => { throw new NotFoundError("cat"); },
   app: () => { throw new AppError("generic app"); },
   unrelated: () => { throw new Unrelated("unrelated"); },
-  http: () => { throw new HttpError(409, "conflict"); },
+  http: () => { throw new YerdError(409, "conflict"); },
   passThrough: () => { throw new TypeError("pass me on"); },
   catcherThrows: () => { throw new RangeError("range"); },
   string: () => { throw "a string"; },
@@ -446,7 +446,7 @@ class Errors {
 
   @catches(NotFoundError) missing(error: NotFoundError) { return <p>no {error.what}</p>; }
   @catches(AppError) app(error: AppError) { return res(`app: ${error.message}`, { status: 503 }); }
-  @catches(HttpError) http(error: HttpError) { return `http ${error.status}`; }
+  @catches(YerdError) http(error: YerdError) { return `http ${error.status}`; }
   @catches(RangeError) broken(): never { throw new Error("the catcher broke"); }
   @catches() rest(error: unknown) {
     if (error instanceof TypeError) return undefined;
@@ -463,12 +463,12 @@ class PlainErrors {
 }
 
 @route("/http-err")
-class HttpErrors {
+class YerdErrors {
   @get show(): never {
     const q = currentContext().query;
     const code = Number(q.get("status"));
     const expose = q.get("expose");
-    throw new HttpError(code, q.get("message") ?? undefined, {
+    throw new YerdError(code, q.get("message") ?? undefined, {
       ...(expose === null ? {} : { expose: expose === "1" }),
       ...(q.get("details") ? { details: { field: "qty" } } : {}),
     });
@@ -490,7 +490,7 @@ describe("@catches", () => {
   afterAll(() => s.close());
 
   it.each([
-    // JSX renders in the route's layouts and keeps the error's status (500 for non-HttpErrors).
+    // JSX renders in the route's layouts and keeps the error's status (500 for non-YerdErrors).
     ["notFound", 500, "<!doctype html><html><head><title>site</title></head><body><p>no cat</p></body></html>"],
     // A parent class catches subclasses; the first matching method wins.
     ["app", 503, "app: generic app"],
@@ -520,10 +520,10 @@ describe("@catches", () => {
   });
 });
 
-describe("HttpError and thrown values without handlers", () => {
+describe("YerdError and thrown values without handlers", () => {
   let s: RunningServer;
   beforeAll(async () => {
-    s = await serve([PlainErrors, HttpErrors, ThrownNumber]);
+    s = await serve([PlainErrors, YerdErrors, ThrownNumber]);
   });
   afterAll(() => s.close());
 
@@ -548,16 +548,16 @@ describe("HttpError and thrown values without handlers", () => {
     expect(await r.text()).toBe(body);
   });
 
-  it.each([100, 101, 103, 199, 600, 1000, 0, -1])("new HttpError(%i) is itself an error: a plain 500", async (code) => {
+  it.each([100, 101, 103, 199, 600, 1000, 0, -1])("new YerdError(%i) is itself an error: a plain 500", async (code) => {
     const r = await rawGet(s.url, `/http-err?status=${code}&message=x`);
     expect(r.status).toBe(500);
     expect(r.headers["x-content-type-options"]).toBe("nosniff");
     expect(r.body).toBe("Internal Server Error");
   });
 
-  it("HttpError refuses a non-integer status", () => {
-    expect(() => new HttpError(404.5)).toThrow(/200-599/);
-    expect(() => new HttpError(NaN)).toThrow(/200-599/);
+  it("YerdError refuses a non-integer status", () => {
+    expect(() => new YerdError(404.5)).toThrow(/200-599/);
+    expect(() => new YerdError(NaN)).toThrow(/200-599/);
   });
 
   it.each([
@@ -596,11 +596,11 @@ describe("onError and the error page", () => {
   let s: RunningServer;
   let broken: RunningServer;
   beforeAll(async () => {
-    s = await serve([PlainErrors, HttpErrors], (app) =>
+    s = await serve([PlainErrors, YerdErrors], (app) =>
       app.layout(Root).errorPage(ErrorPage).onError((error, ctx) => {
         if (ctx.path === "/plain-err/app") return res(<p>maintenance</p>, { status: 503 });
         if (error instanceof Unrelated) return 410;
-        if (error instanceof HttpError && error.status === 404 && ctx.path.startsWith("/api/")) return { error: "no such endpoint" };
+        if (error instanceof YerdError && error.status === 404 && ctx.path.startsWith("/api/")) return { error: "no such endpoint" };
         if (ctx.path === "/plain-err/catcherThrows") throw new Error("onError broke");
         return undefined;
       }),
@@ -653,10 +653,11 @@ describe("onError and the error page", () => {
     expect(text).not.toContain("secret");
   });
 
-  it("API clients and the runtime's own requests get plain text", async () => {
-    expect(await (await fetch(`${s.url}/nowhere`)).text()).toBe("Not Found");
-    expect(await (await fetch(`${s.url}/nowhere`, { headers: { accept: "application/json" } })).text()).toBe("Not Found");
-    expect(await (await fetch(`${s.url}/nowhere`, { headers: { ...html, yx: "1" } })).text()).toBe("Not Found");
+  it("API clients and the runtime's own requests get the JSON error body", async () => {
+    const body = { error: "Not Found", code: "not_found" };
+    expect(await (await fetch(`${s.url}/nowhere`)).json()).toEqual(body);
+    expect(await (await fetch(`${s.url}/nowhere`, { headers: { accept: "application/json" } })).json()).toEqual(body);
+    expect(await (await fetch(`${s.url}/nowhere`, { headers: { ...html, yx: "1" } })).json()).toEqual(body);
   });
 
   it("an error page that throws falls back to the plain response", async () => {
@@ -665,7 +666,7 @@ describe("onError and the error page", () => {
     expect(await r.text()).toBe("Internal Server Error");
     const missing = await fetch(`${broken.url}/nowhere`, { headers: html });
     expect(missing.status).toBe(404);
-    expect(await missing.text()).toBe("Not Found");
+    expect((await missing.json()).error).toBe("Not Found");
   });
 });
 

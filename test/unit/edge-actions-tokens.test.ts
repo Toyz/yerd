@@ -6,7 +6,7 @@ import {
   type TokenPayload,
 } from "../../src/actions/action.js";
 import { crossSiteReason } from "../../src/server/app.js";
-import { HttpError } from "../../src/respond/response.js";
+import { YerdError } from "../../src/respond/errors.js";
 
 const A = "a".repeat(32);
 const B = "b".repeat(32);
@@ -17,7 +17,7 @@ function outcome(fn: () => unknown): string {
     fn();
     return "ok";
   } catch (error) {
-    return error instanceof HttpError ? `${error.status} ${error.message}` : `throws ${(error as Error).name}: ${(error as Error).message}`;
+    return error instanceof YerdError ? `${error.status} ${error.message}` : `throws ${(error as Error).name}: ${(error as Error).message}`;
   }
 }
 

@@ -90,7 +90,7 @@ describe("DTO bodies", () => {
     expect(r.status).toBe(400);
     expect(r.headers.get("content-type")).toMatch(/^application\/json/);
     expect(await r.json()).toEqual({
-      error: "Validation failed",
+      error: "Validation failed", code: "validation_failed",
       issues: [
         { path: "email", message: "that is not an email" },
         { path: "age", message: "Must be from 13 to 120 (got 7)" },
@@ -104,7 +104,7 @@ describe("DTO bodies", () => {
   it("requires declared fields without defaults", async () => {
     const r = await json("/signup/1", "POST", {});
     expect(await r.json()).toEqual({
-      error: "Validation failed",
+      error: "Validation failed", code: "validation_failed",
       issues: [
         { path: "email", message: "Required" },
         { path: "age", message: "Required" },
@@ -114,7 +114,7 @@ describe("DTO bodies", () => {
 
   it("rejects a non-object body", async () => {
     const r = await json("/signup/1", "POST", [1, 2]);
-    expect(await r.json()).toEqual({ error: "Validation failed", issues: [{ path: "(root)", message: "Expected an object" }] });
+    expect(await r.json()).toEqual({ error: "Validation failed", code: "validation_failed", issues: [{ path: "(root)", message: "Expected an object" }] });
   });
 
   it("accepts the same DTO from a URL-encoded form, converting numeric strings", async () => {
@@ -125,7 +125,7 @@ describe("DTO bodies", () => {
   it("is required: no body is a 400", async () => {
     const r = await fetch(server.url + "/signup/1", { method: "POST" });
     expect(r.status).toBe(400);
-    expect(await r.text()).toBe("Missing required request body: body");
+    expect((await r.json()).error).toBe("Missing required request body: body");
   });
 
   it("passes the validated instance through @args", async () => {
@@ -138,7 +138,7 @@ describe("raw bodies and fields", () => {
   it("answers 400 for invalid JSON", async () => {
     const r = await fetch(server.url + "/signup/1", { method: "POST", headers: { "content-type": "application/json" }, body: "{nope" });
     expect(r.status).toBe(400);
-    expect(await r.text()).toBe("Request body is not valid JSON");
+    expect((await r.json()).error).toBe("Request body is not valid JSON");
   });
 
   it("doesn't read or require the body for handlers that don't touch it", async () => {
@@ -152,7 +152,7 @@ describe("raw bodies and fields", () => {
     expect(await ok.json()).toEqual({ email: "ada@example.com" });
     const bad = await fetch(server.url + "/signup/1", { method: "PUT", body: new URLSearchParams({ email: "nope" }) });
     expect(bad.status).toBe(400);
-    expect(await bad.text()).toBe("that is not an email");
+    expect((await bad.json()).error).toBe("that is not an email");
   });
 
   it("reads form fields from a JSON object body too", async () => {

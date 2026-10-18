@@ -374,7 +374,7 @@ export function seal(secrets: readonly string[], value: unknown): string {
  *
  * ```ts
  * const opened = unseal<{ userId: string; exp: number }>(secrets, token);
- * if (!opened || opened.exp < Date.now()) throw new HttpError(401, "Link expired");
+ * if (!opened || opened.exp < Date.now()) throw new Gone("Link expired");
  * ```
  */
 export function unseal<T>(secrets: readonly string[], sealed: string): T | undefined {

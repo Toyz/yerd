@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  BootError, HttpError, args, between, field, get, header, layout, lower, matches, oneOf, param, params, post, query, route, toInt, trim, yerd,
+  BootError, YerdError, args, between, field, get, header, layout, lower, matches, oneOf, param, params, post, query, route, toInt, trim, yerd,
   type Child, type RunningServer,
 } from "@toyz/yerd";
 
@@ -59,7 +59,7 @@ class Fail {
     throw new Error("secret internals");
   }
   @post forbidden(): never {
-    throw new HttpError(403, "not yours");
+    throw new YerdError(403, "not yours");
   }
 }
 
@@ -108,7 +108,7 @@ describe("app", () => {
   it("turns a bad parse into a 400 with the parser's message", async () => {
     const r = await at("/users/abc");
     expect(r.status).toBe(400);
-    expect(await r.text()).toBe('Expected an integer, got "abc"');
+    expect((await r.json()).error).toBe('Expected an integer, got "abc"');
   });
 
   it("prefers static routes over params", async () => {
@@ -123,7 +123,7 @@ describe("app", () => {
     expect(await updated.json()).toEqual({ updated: 3, name: "Ada" });
     const nameless = await at("/users/3", { method: "POST" });
     expect(nameless.status).toBe(400);
-    expect(await nameless.text()).toBe("Missing required form field: name");
+    expect((await nameless.json()).error).toBe("Missing required form field: name");
   });
 
   it("answers 404, 405 with Allow, and HEAD via GET", async () => {
@@ -136,7 +136,7 @@ describe("app", () => {
     expect(await h.text()).toBe("");
   });
 
-  it("hides internal errors and exposes HttpError messages", async () => {
+  it("hides internal errors and exposes YerdError messages", async () => {
     const quiet = console.error;
     console.error = () => {};
     try {
@@ -163,24 +163,24 @@ describe("app", () => {
   it("rejects values a pipeline step refuses", async () => {
     const tooBig = await at("/search/99?q=x");
     expect(tooBig.status).toBe(400);
-    expect(await tooBig.text()).toBe("Must be from 1 to 50 (got 99)");
+    expect((await tooBig.json()).error).toBe("Must be from 1 to 50 (got 99)");
     const badSort = await at("/search/5?q=x&sort=sideways");
-    expect(await badSort.text()).toBe('Expected one of asc, desc, got "sideways"');
+    expect((await badSort.json()).error).toBe('Expected one of asc, desc, got "sideways"');
   });
 
   it("runs validators in order with their own messages, or a generic one for false", async () => {
     const notWord = await at("/search/5?q=two%20words");
     expect(notWord.status).toBe(400);
-    expect(await notWord.text()).toBe("q must be a word");
+    expect((await notWord.json()).error).toBe("q must be a word");
     const reserved = await at("/search/5?q=admin");
     expect(reserved.status).toBe(400);
-    expect(await reserved.text()).toBe("Invalid query parameter: q");
+    expect((await reserved.json()).error).toBe("Invalid query parameter: q");
   });
 
   it("answers 400 for a missing required value", async () => {
     const r = await at("/search/5");
     expect(r.status).toBe(400);
-    expect(await r.text()).toBe("Missing required query parameter: q");
+    expect((await r.json()).error).toBe("Missing required query parameter: q");
   });
 
   it("sets nosniff on every response", async () => {

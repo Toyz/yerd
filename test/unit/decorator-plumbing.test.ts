@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HttpError, accepts, catches, get, guards, negotiate, noLayout, metadataOf, res, status } from "@toyz/yerd";
+import { YerdError, accepts, catches, get, guards, negotiate, noLayout, metadataOf, res, status } from "@toyz/yerd";
 import { assertStatus } from "../../src/respond/response.js";
 import { coerce } from "../../src/respond/coerce.js";
 import { ACCEPTS, NO_LAYOUT } from "../../src/decorators/route.js";
@@ -116,7 +116,7 @@ describe("assertStatus", () => {
     expect(() => assertStatus(200.5, "here")).toThrow(TypeError);
     expect(() => assertStatus(599, "here")).not.toThrow();
     expect(() => res(null, { status: 600 })).toThrow("res(): 600 isn't a response status code (200-599)");
-    expect(() => new HttpError(102)).toThrow("new HttpError(): 102 isn't a response status code (200-599)");
+    expect(() => new YerdError(102)).toThrow("new YerdError(): 102 isn't a response status code (200-599)");
     expect(() => status(1000)).toThrow("@status: 1000 isn't a response status code (200-599)");
     await expect(coerce(42, { layouts: [] })).rejects.toThrow("A handler's returned status: 42 isn't a response status code (200-599)");
   });

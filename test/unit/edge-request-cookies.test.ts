@@ -188,13 +188,13 @@ describe("@cookie and Set-Cookie over HTTP", () => {
   it("a required cookie that's missing is a 400", async () => {
     const r = await withCookie("theme=dark");
     expect(r.status).toBe(400);
-    expect(await r.text()).toBe("Missing required cookie: sid");
+    expect((await r.json()).error).toBe("Missing required cookie: sid");
   });
 
   it("a cookie that fails its transform is a 400 with the transform's message", async () => {
     const r = await withCookie("sid=x; n=4.2");
     expect(r.status).toBe(400);
-    expect(await r.text()).toBe('Expected an integer, got "4.2"');
+    expect((await r.json()).error).toBe('Expected an integer, got "4.2"');
   });
 
   it("the first of duplicate cookies wins, and an empty value is still present", async () => {

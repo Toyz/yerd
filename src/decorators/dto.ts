@@ -17,7 +17,7 @@
  * ```
  */
 
-import { HttpError } from "../respond/response.js";
+import { ValidationFailed } from "../respond/errors.js";
 import { createKey, metadataOf } from "./keys.js";
 import { assertPublicInstance } from "./util.js";
 import type { FieldOutput, IsValidPipe, Pipe, PipeError, Transform } from "./request.js";
@@ -25,15 +25,15 @@ import { email, fileProblem, parseBool, parseInteger, parseNumber, Rejection, ru
 
 /**
  * One problem found while validating, with a path like `address.city` or
- * `tags[2]`. A failed DTO throws a 400 HttpError whose `details.issues` lists
- * every one; catch it to show them your own way.
+ * `tags[2]`. A failed DTO throws a ValidationFailed (a 400) whose `issues`
+ * lists every one; catch it to show them your own way.
  *
  * ```ts
  * try {
  *   parse(Signup, raw);
  * } catch (error) {
- *   if (!(error instanceof HttpError) || !error.details) throw error;
- *   for (const { path, message } of error.details.issues as Issue[]) console.log(`${path}: ${message}`);
+ *   if (!(error instanceof ValidationFailed)) throw error;
+ *   for (const { path, message } of error.issues) console.log(`${path}: ${message}`);
  * }
  * ```
  */
@@ -518,7 +518,7 @@ export const is = {
   },
 
   /**
-   * Anything a function can turn `unknown` into. Throw (an HttpError or any
+   * Anything a function can turn `unknown` into. Throw (a YerdError or any
    * Error) to reject; the error's message becomes the issue. The field type
    * is the function's return type.
    *
@@ -594,8 +594,8 @@ function parseDto<T>(dto: DtoClass<T>, raw: unknown, path: Path, issues: Issue[]
 }
 
 /**
- * Validate `raw` against a DTO class. Returns an instance, or throws a 400
- * HttpError whose `details.issues` lists every issue. Inside a request
+ * Validate `raw` against a DTO class. Returns an instance, or throws a
+ * ValidationFailed (a 400) whose `issues` lists every issue. Inside a request
  * `@body(Dto)` and `form.parse(Dto)` do this for you; use parse() for
  * anything else: queue messages, config files, webhook payloads.
  *
@@ -605,13 +605,13 @@ function parseDto<T>(dto: DtoClass<T>, raw: unknown, path: Path, issues: Issue[]
  *   @is.string() template!: string;
  * }
  *
- * const job = parse(EmailJob, JSON.parse(message)); // throws a 400 HttpError listing every issue
+ * const job = parse(EmailJob, JSON.parse(message)); // throws a ValidationFailed listing every issue
  * ```
  */
 export function parse<T>(dto: DtoClass<T>, raw: unknown): T {
   const issues: Issue[] = [];
   const result = parseDto(dto, raw, "", issues);
-  if (result === INVALID) throw new HttpError(400, "Validation failed", { details: { issues } });
+  if (result === INVALID) throw new ValidationFailed("Validation failed", { issues });
   return result;
 }
 

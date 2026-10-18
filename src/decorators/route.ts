@@ -14,7 +14,7 @@ import { assertPublicInstance, isDecoratorContext } from "./util.js";
  * const writes: Verb[] = ["POST", "PUT", "PATCH", "DELETE"];
  *
  * const maintenance: Middleware = async (ctx, next) => {
- *   if (writes.includes(ctx.method as Verb)) throw new HttpError(503, "Read-only during maintenance");
+ *   if (writes.includes(ctx.method as Verb)) throw new ServiceUnavailable("Read-only during maintenance", { retryAfter: 300, expose: true });
  *   return next();
  * };
  * ```
@@ -588,7 +588,7 @@ export const options = verb("OPTIONS");
  * @route("/api/v1/*rest")
  * class RetiredApi {
  *   @all gone(): never {
- *     throw new HttpError(410, "API v1 is retired; use /api/v2");
+ *     throw new Gone("API v1 is retired; use /api/v2");
  *   }
  * }
  * ```

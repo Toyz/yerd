@@ -221,7 +221,7 @@ describe("JSON bodies", () => {
     '{"a":1}{"b":2}',
     "\u00a0{}",
   ])("rejects %j with a 400", async (text) => {
-    expect(await parsed("application/json", text)).toEqual({ status: 400, body: "Request body is not valid JSON" });
+    expect(await parsed("application/json", text)).toEqual({ status: 400, body: { error: "Request body is not valid JSON", code: "bad_request" } });
   });
 
   it.each([
@@ -373,13 +373,13 @@ describe("multipart bodies", () => {
     ["multipart/form-data; boundary=nope"],
   ])("a bad or missing boundary (%s) is a 400", async (type) => {
     const text = multipart(`--${boundary}\nContent-Disposition: form-data; name="a"\n\n1\n--${boundary}--\n`);
-    expect(await parsed(type, text)).toEqual({ status: 400, body: "Request body is not valid multipart/form-data" });
+    expect(await parsed(type, text)).toEqual({ status: 400, body: { error: "Request body is not valid multipart/form-data", code: "bad_request" } });
   });
 
   it("garbage with a boundary is a 400", async () => {
     expect(await parsed(`multipart/form-data; boundary=${boundary}`, "not multipart at all")).toEqual({
       status: 400,
-      body: "Request body is not valid multipart/form-data",
+      body: { error: "Request body is not valid multipart/form-data", code: "bad_request" },
     });
   });
 
@@ -389,7 +389,7 @@ describe("multipart bodies", () => {
     // clients pick boundaries that never occur in the content, so this only
     // bites hand-built bodies.
     const text = multipart(`--${boundary}\nContent-Disposition: form-data; name="a"\n\nbefore --${boundary} after\n--${boundary}--\n`);
-    expect(await parsed(`multipart/form-data; boundary=${boundary}`, text)).toEqual({ status: 400, body: "Request body is not valid multipart/form-data" });
+    expect(await parsed(`multipart/form-data; boundary=${boundary}`, text)).toEqual({ status: 400, body: { error: "Request body is not valid multipart/form-data", code: "bad_request" } });
   });
 
   it("text that merely resembles the boundary is content", async () => {
@@ -482,7 +482,7 @@ describe("NDJSON bodies, read whole", () => {
   });
 
   it("names the first bad line, counting blank lines", async () => {
-    expect(await parsed(type, '{"a":1}\n\n{nope}\n{"a":2}')).toEqual({ status: 400, body: "Line 3 is not valid JSON" });
+    expect(await parsed(type, '{"a":1}\n\n{nope}\n{"a":2}')).toEqual({ status: 400, body: { error: "Line 3 is not valid JSON", code: "bad_request" } });
   });
 
   it.each(["application/jsonl", "application/jsonlines", "application/ndjson", "Application/X-NDJSON; charset=utf-8"])("accepts %s", async (t) => {
@@ -510,7 +510,7 @@ describe("NDJSON bodies, streamed", () => {
 
   it("a bad line is a 400 naming it", async () => {
     const r = await raw("/lines", { headers: type, chunks: ["1\n2\n{bad\n4\n"] });
-    expect(r).toEqual({ status: 400, body: "Line 3 is not valid JSON" });
+    expect(r).toEqual({ status: 400, body: JSON.stringify({ error: "Line 3 is not valid JSON", code: "bad_request" }) });
   });
 
   it("the whole upload can exceed the body limit; only lines are capped", async () => {
@@ -525,12 +525,12 @@ describe("NDJSON bodies, streamed", () => {
     expect(exact.length).toBe(LIMIT);
     expect((await raw("/lines", { headers: type, chunks: [exact + "\n"] })).status).toBe(200);
     const over = JSON.stringify("x".repeat(LIMIT - 1));
-    expect(await raw("/lines", { headers: type, chunks: [over + "\n"] })).toEqual({ status: 413, body: `Line 1 is longer than ${LIMIT} bytes` });
+    expect(await raw("/lines", { headers: type, chunks: [over + "\n"] })).toEqual({ status: 413, body: JSON.stringify({ error: `Line 1 is longer than ${LIMIT} bytes`, code: "payload_too_large" }) });
   });
 
   it("an unterminated line that grows past the limit is a 413 before it ends", async () => {
     const r = await raw("/lines", { headers: type, chunks: ["1\n", "x".repeat(600), "x".repeat(600)] });
-    expect(r).toEqual({ status: 413, body: `Line 2 is longer than ${LIMIT} bytes` });
+    expect(r).toEqual({ status: 413, body: JSON.stringify({ error: `Line 2 is longer than ${LIMIT} bytes`, code: "payload_too_large" }) });
   });
 
   it("counts multi-byte characters as bytes against the limit", async () => {
@@ -543,7 +543,7 @@ describe("NDJSON bodies, streamed", () => {
     expect(JSON.parse(ok.body)).toEqual(["a", "b"]);
     const bad = await raw("/item-lines", { headers: type, chunks: ['{"name":"a"}\n{"name":2}\n'] });
     expect(bad.status).toBe(400);
-    expect(JSON.parse(bad.body)).toEqual({ error: "Line 2 failed validation", line: 2, issues: [{ path: "name", message: "Expected a string" }] });
+    expect(JSON.parse(bad.body)).toEqual({ error: "Line 2 failed validation", code: "validation_failed", line: 2, issues: [{ path: "name", message: "Expected a string" }] });
   });
 });
 
@@ -558,7 +558,7 @@ describe("the body limit", () => {
   ])("%i bytes with a Content-Length -> %i", async (n, status) => {
     const r = await send("/parsed", "text/plain", text(n));
     expect(r.status).toBe(status);
-    if (status === 413) expect(await r.text()).toBe(`Request body is larger than ${LIMIT} bytes`);
+    if (status === 413) expect(await r.json()).toEqual({ error: `Request body is larger than ${LIMIT} bytes`, code: "payload_too_large" });
   });
 
   it.each([

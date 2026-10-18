@@ -255,9 +255,9 @@ describe("paths over HTTP", () => {
     ["/r/%F0%9F%90%88", 200, '{"id":"\u{1F408}"}'],
     ["/r/%", 200, '{"id":"%"}'],
     ["/r/%3Fnot-a-query", 200, '{"id":"?not-a-query"}'],
-    ["/r/", 404, "Not Found"],
-    ["/R/new", 404, "Not Found"],
-    ["/case", 404, "Not Found"],
+    ["/r/", 404, '{"error":"Not Found","code":"not_found"}'],
+    ["/R/new", 404, '{"error":"Not Found","code":"not_found"}'],
+    ["/case", 404, '{"error":"Not Found","code":"not_found"}'],
     ["/Case", 200, "case"],
     ["/q?", 200, "q"],
     ["/q?a=%ZZ", 200, "q"],
@@ -290,7 +290,7 @@ describe("paths over HTTP", () => {
   it("a target that is neither origin-form nor a URL is a 400", async () => {
     const r = await rawGet(server.url, "*");
     expect(r.status).toBe(400);
-    expect(r.body).toBe("Bad Request");
+    expect(JSON.parse(r.body)).toEqual({ error: "Bad Request", code: "bad_request" });
   });
 
   it("OPTIONS * answers for the whole server", async () => {

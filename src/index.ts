@@ -24,7 +24,12 @@ export {
   type FieldOptions, type FileOptions, type OptionalFieldOptions, type BodyOptions, type FieldOutput, type FieldDecorator,
 } from "./decorators/request.js";
 
-export { res, redirect, bare, HttpError, YerdResponse, type ResponseInit } from "./respond/response.js";
+export { res, redirect, bare, YerdResponse, type ResponseInit } from "./respond/response.js";
+export {
+  YerdError, BadRequest, Unauthorized, Forbidden, NotFound, MethodNotAllowed, NotAcceptable, Conflict, Gone,
+  PayloadTooLarge, UnsupportedMediaType, ValidationFailed, TooManyRequests, ServiceUnavailable,
+  type YerdErrorOptions,
+} from "./respond/errors.js";
 export type { Outgoing, Body } from "./respond/coerce.js";
 export { negotiate, parseAccept, type Negotiated, type Variants } from "./respond/negotiate.js";
 export { Channels, ChannelBackend, MemoryBackend, channel, channelBackendFrom, type ChannelRef, type SubscribeOptions } from "./live/channels.js";

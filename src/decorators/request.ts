@@ -1,4 +1,4 @@
-import { HttpError } from "../respond/response.js";
+import { errorForStatus, PayloadTooLarge, UnsupportedMediaType, ValidationFailed, YerdError } from "../respond/errors.js";
 import { createAccessor, type AccessorDecorator, type AccessorOptions, type Resolves } from "./kit.js";
 import type { YerdContext } from "../server/context.js";
 import { withFiles, type FormFields, type ParsedBody } from "../server/body.js";
@@ -9,13 +9,13 @@ import { shapeSession, type Session, type SessionApi, type SessionShape } from "
 export { between, email, length, matches, uuid, type Validator } from "./parse.js";
 
 /**
- * Turns one value into another. Throw an HttpError to reject the request.
+ * Turns one value into another. Throw a YerdError to reject the request.
  * Transforms are plain functions, so writing your own is writing a function;
  * put it in any `transform` option, alone or in a pipeline.
  *
  * ```ts
  * export const slug: Transform<string, string> = (raw) => {
- *   if (!/^[a-z0-9-]+$/.test(raw)) throw new HttpError(400, `Not a slug: ${raw}`);
+ *   if (!/^[a-z0-9-]+$/.test(raw)) throw new ValidationFailed(`Not a slug: ${raw}`);
  *   return raw;
  * };
  *
@@ -221,14 +221,33 @@ function pipelineOf(options: AnyOptions | undefined): Pipeline {
   return pipeline;
 }
 
-function resolveField(kind: string, name: string, raw: unknown, pipeline: Pipeline): unknown {
-  const value = runPipe(raw, pipeline.transforms, pipeline.validators);
-  if (value instanceof Rejection) throw new HttpError(400, value.message ?? `Invalid ${kind}: ${name}`);
+/**
+ * A request value that broke its rules, as one issue at `path`: the field's
+ * name, so a form shows it by the field, or "(root)" for a whole body.
+ */
+function invalid(path: string, message: string): ValidationFailed {
+  return new ValidationFailed(message, { issues: [{ path, message }] });
+}
+
+function resolveField(kind: string, name: string, raw: unknown, pipeline: Pipeline, path = name): unknown {
+  let value: unknown;
+  try {
+    value = runPipe(raw, pipeline.transforms, pipeline.validators);
+  } catch (error) {
+    // A transform (toInt, or one of yours) can't know which field it's
+    // reading: its issue at the root is this field's. A subclass is left
+    // alone, as it was thrown.
+    if (path !== "(root)" && error instanceof ValidationFailed && error.constructor === ValidationFailed && error.issues.every((i) => i.path === "(root)")) {
+      throw new ValidationFailed(error.message, { issues: error.issues.map((i) => ({ ...i, path })), cause: error });
+    }
+    throw error;
+  }
+  if (value instanceof Rejection) throw invalid(path, value.message ?? `Invalid ${kind}: ${name}`);
   return value;
 }
 
-function missing(kind: string, name: string, pipeline: Pipeline): undefined {
-  if (pipeline.required) throw new HttpError(400, `Missing required ${kind}: ${name}`);
+function missing(kind: string, name: string, pipeline: Pipeline, path = name): undefined {
+  if (pipeline.required) throw invalid(path, `Missing required ${kind}: ${name}`);
   return undefined;
 }
 
@@ -370,10 +389,10 @@ export interface BodyOptions<O = unknown> {
 const bodyAccessor = createAccessor<Promise<unknown>, [pipeline: Pipeline]>(
   async (ctx, pipeline) => {
     const parsed = await ctx.body();
-    if (parsed.kind === "none") return missing("request body", "body", pipeline);
+    if (parsed.kind === "none") return missing("request body", "body", pipeline, "(root)");
     // A multipart form's files sit next to its fields, for is.file() in DTOs.
     const value = parsed.kind === "form" ? withFiles(parsed.value, parsed.files) : parsed.value;
-    return resolveField("request body", "body", value, pipeline);
+    return resolveField("request body", "body", value, pipeline, "(root)");
   },
   { name: "body" },
 );
@@ -492,10 +511,10 @@ export interface FileOptions {
 async function uploads(ctx: YerdContext, name: string, options: FileOptions | undefined): Promise<File[]> {
   const parsed = await ctx.body();
   const found = parsed.kind === "form" ? (parsed.files[name] ?? []).filter(isSentFile) : [];
-  if (found.length === 0 && options?.required) throw new HttpError(400, `Missing file: ${name}`);
+  if (found.length === 0 && options?.required) throw invalid(name, `Missing file: ${name}`);
   for (const file of found) {
     const problem = fileProblem(file, options);
-    if (problem) throw new HttpError(problem.status, `${name}: ${problem.message}`);
+    if (problem) throw problem.status === 413 ? new PayloadTooLarge(`${name}: ${problem.message}`) : new UnsupportedMediaType(`${name}: ${problem.message}`);
   }
   return found;
 }
@@ -541,9 +560,16 @@ type LineValue<A> = A extends DtoClass<infer T> ? T : A extends { transform: inf
  * issue at the root). Anything else, a 5xx included, passes through as is.
  */
 function lineError(line: number, error: unknown): unknown {
-  if (!(error instanceof HttpError) || error.status >= 500) return error;
+  if (!(error instanceof YerdError) || error.status >= 500) return error;
   const issues = error.details?.issues ?? [{ path: "(root)", message: error.message }];
-  return new HttpError(error.status, `Line ${line} failed validation`, { details: { line, ...error.details, issues }, cause: error });
+  // A 400 with issues comes back a ValidationFailed; anything else keeps its status's class.
+  return errorForStatus(error.status, `Line ${line} failed validation`, {
+    code: error.code,
+    expose: error.expose,
+    details: { line, ...error.details, issues },
+    headers: error.headers,
+    cause: error,
+  });
 }
 
 async function* checkedLines(source: AsyncIterable<unknown>, pipeline: Pipeline) {
@@ -556,7 +582,7 @@ async function* checkedLines(source: AsyncIterable<unknown>, pipeline: Pipeline)
     } catch (error) {
       throw lineError(line, error);
     }
-    if (out instanceof Rejection) throw lineError(line, new HttpError(400, out.message ?? "Invalid value"));
+    if (out instanceof Rejection) throw lineError(line, new ValidationFailed(out.message ?? "Invalid value"));
     yield out;
   }
 }
@@ -705,8 +731,8 @@ export const request = createAccessor((ctx) => ctx.request, { name: "request" })
 export const toInt: Transform<string, number> = (input) => {
   // Trimmed, like toNumber: " 42 " from a form is 42.
   const n = parseInteger(input);
-  if (n === undefined) throw new HttpError(400, `Expected an integer, got ${JSON.stringify(input)}`);
-  if (!Number.isSafeInteger(n)) throw new HttpError(400, `Integer out of range: ${input.trim()}`);
+  if (n === undefined) throw new ValidationFailed(`Expected an integer, got ${JSON.stringify(input)}`);
+  if (!Number.isSafeInteger(n)) throw new ValidationFailed(`Integer out of range: ${input.trim()}`);
   return n;
 };
 
@@ -722,7 +748,7 @@ export const toInt: Transform<string, number> = (input) => {
  */
 export const toNumber: Transform<string, number> = (raw) => {
   const n = parseNumber(raw);
-  if (n === undefined) throw new HttpError(400, `Expected a number, got ${JSON.stringify(raw)}`);
+  if (n === undefined) throw new ValidationFailed(`Expected a number, got ${JSON.stringify(raw)}`);
   return n;
 };
 
@@ -739,7 +765,7 @@ export const toNumber: Transform<string, number> = (raw) => {
  */
 export const toBool: Transform<string, boolean> = (raw) => {
   const value = parseBool(raw);
-  if (value === undefined) throw new HttpError(400, `Expected a boolean, got ${JSON.stringify(raw)}`);
+  if (value === undefined) throw new ValidationFailed(`Expected a boolean, got ${JSON.stringify(raw)}`);
   return value;
 };
 
@@ -774,7 +800,7 @@ export const lower: Transform<string, string> = (raw) => raw.toLowerCase();
 export function oneOf<const V extends string>(...values: V[]): Transform<string, V> {
   const allowed = new Set<string>(values);
   return (raw) => {
-    if (!allowed.has(raw)) throw new HttpError(400, `Expected one of ${values.join(", ")}, got ${JSON.stringify(raw)}`);
+    if (!allowed.has(raw)) throw new ValidationFailed(`Expected one of ${values.join(", ")}, got ${JSON.stringify(raw)}`);
     return raw as V;
   };
 }

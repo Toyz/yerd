@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  BootError, HttpError, bare, catches, createGuard, currentContext, get, group, guards, layout, noLayout, post, res, route, setMeta, yerd,
+  BootError, YerdError, bare, catches, createGuard, currentContext, get, group, guards, layout, noLayout, post, res, route, setMeta, yerd,
   type Component, type LayoutProps, type RunningServer,
 } from "@toyz/yerd";
 import { serve } from "./edge-routing-helpers.js";
@@ -297,8 +297,8 @@ const results: Record<string, () => unknown> = {
   redirect: () => "/login?next=%2Fx",
   emptyString: () => "",
   crlf: () => "/ok\r\nSet-Cookie: pwned=1",
-  httpError: () => new HttpError(401, "Who are you"),
-  thrownHttpError: () => { throw new HttpError(429, "Slow down", { details: { retryIn: 5 } }); },
+  httpError: () => new YerdError(401, "Who are you"),
+  thrownYerdError: () => { throw new YerdError(429, "Slow down", { details: { retryIn: 5 } }); },
   error: () => new Error("internal guard detail"),
   thrown: () => { throw new Error("thrown guard detail"); },
   custom: () => new Teapot("short"),
@@ -310,7 +310,7 @@ const results: Record<string, () => unknown> = {
   response: () => res("later", { status: 503, headers: { "retry-after": "10" } }),
   asyncFalse: async () => false,
   asyncTrue: async () => true,
-  asyncThrow: async () => { throw new HttpError(400, "Bad guard input"); },
+  asyncThrow: async () => { throw new YerdError(400, "Bad guard input"); },
 };
 const pick = createGuard("pick", (ctx) => results[ctx.query.get("r")!]!());
 
@@ -332,11 +332,11 @@ describe("guard results", () => {
     ["true", 200, "passed", {}],
     ["undefined", 200, "passed", {}],
     ["asyncTrue", 200, "passed", {}],
-    ["false", 403, "Forbidden", {}],
-    ["asyncFalse", 403, "Forbidden", {}],
+    ["false", 403, '{"error":"Forbidden","code":"forbidden"}', {}],
+    ["asyncFalse", 403, '{"error":"Forbidden","code":"forbidden"}', {}],
     ["redirect", 303, "", { location: "/login?next=%2Fx" }],
     ["httpError", 401, "Who are you", {}],
-    ["thrownHttpError", 429, '{"error":"Slow down","retryIn":5}', { "content-type": "application/json; charset=utf-8" }],
+    ["thrownYerdError", 429, '{"error":"Slow down","retryIn":5}', { "content-type": "application/json; charset=utf-8" }],
     ["asyncThrow", 400, "Bad guard input", {}],
     ["error", 500, "Internal Server Error", {}],
     ["thrown", 500, "Internal Server Error", {}],

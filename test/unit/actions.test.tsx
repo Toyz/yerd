@@ -115,7 +115,7 @@ describe("action forms", () => {
     const forged = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(data!, "base64url").toString()), p: { index: 1 } })).toString("base64url");
     const r = await post({ _yx: `${forged}.${sig}` });
     expect(r.status).toBe(400);
-    expect(await r.text()).toBe("Invalid action signature");
+    expect((await r.json()).error).toBe("Invalid action signature");
     expect(items).toEqual(["a", "b"]);
   });
 
@@ -129,7 +129,7 @@ describe("action forms", () => {
     const add = await addToken();
     const r = await post({ _yx: add, title: "   " }, { yx: "1" });
     expect(r.status).toBe(400);
-    expect(await r.json()).toEqual({ error: "Validation failed", issues: [{ path: "title", message: "Can't be empty" }] });
+    expect(await r.json()).toEqual({ error: "Validation failed", code: "validation_failed", issues: [{ path: "title", message: "Can't be empty" }] });
   });
 
   it("turns redirects into yx-location for scripts", async () => {

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  ActionForm, BootError, HttpError, action, createGuard, get, group, guard, guards, route, service, yerd,
+  ActionForm, BootError, YerdError, action, createGuard, get, group, guard, guards, route, service, yerd,
   type RunningServer, type YerdContext,
 } from "@toyz/yerd";
 import { createAuth, hashPassword, safeNext, verifyPassword } from "@toyz/yerd/auth";
@@ -59,7 +59,7 @@ class Login {
   }
   @action async submit(_: {}, form: ActionForm) {
     const user = [...users.values()].find((u) => u.name === form.string("name"));
-    if (!(await verifyPassword(form.string("password"), user?.passwordHash))) throw new HttpError(401, "Wrong name or password");
+    if (!(await verifyPassword(form.string("password"), user?.passwordHash))) throw new YerdError(401, "Wrong name or password");
     auth.login(user!);
   }
 }

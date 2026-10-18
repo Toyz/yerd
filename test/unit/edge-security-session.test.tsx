@@ -1,7 +1,7 @@
 // The Session API in every order, through a real server: what gets saved, what gets dropped, what cookies go out.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  HttpError, MemoryStore, Session, action, get, post, query, route, session, setHeader, yerd,
+  YerdError, MemoryStore, Session, action, get, post, query, route, session, setHeader, yerd,
   type RunningServer, type SessionStore,
 } from "@toyz/yerd";
 import { shapeSession } from "../../src/session/session.js";
@@ -39,7 +39,7 @@ class Ops {
       else if (verb === "read") seen[`flash:${key}`] = s.flash(key) ?? null;
       else if (verb === "prop") (s as unknown as Record<string, unknown>)[key] = value === undefined ? undefined : value;
       else if (verb === "throw") throw new Error("crash");
-      else if (verb === "http") throw new HttpError(400, "nope");
+      else if (verb === "http") throw new YerdError(400, "nope");
     }
     seen.name = s.get("name") ?? null;
     return seen;

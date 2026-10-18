@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  ActionForm, HttpError, Region, action, bind, createGuard, currentContext, get, guards, is, length, param, post, query, redirect, res, route, yerd,
+  ActionForm, YerdError, Region, action, bind, createGuard, currentContext, get, guards, is, length, param, post, query, redirect, res, route, yerd,
   type RunningServer,
 } from "@toyz/yerd";
 import { safeNext } from "@toyz/yerd/auth";
@@ -70,7 +70,7 @@ class Edge {
   }
 
   @action fail() {
-    throw new HttpError(422, "Nope, not that");
+    throw new YerdError(422, "Nope, not that");
   }
 
   @action crash() {
@@ -218,14 +218,14 @@ describe("which token runs", () => {
     seen.length = 0;
     const r = await post_("/edge", fields({ _yx: signAction(SECRET, { c: "Edge", p: {}, e: now() + 60, ...{ a: "add" }, ...change }) }));
     expect(r.status).toBe(400);
-    expect(await r.text()).toBe("Unknown action");
+    expect((await r.json()).error).toBe("Unknown action");
     expect(seen).toEqual([]);
   });
 
   it("a token posted to another route's path is unknown there", async () => {
     const r = await post_("/edge/other", fields({ _yx: token("add") }));
     expect(r.status).toBe(400);
-    expect(await r.text()).toBe("Unknown action");
+    expect((await r.json()).error).toBe("Unknown action");
   });
 
   it("without _yx, a form post goes to the route's @post handler", async () => {
@@ -238,7 +238,7 @@ describe("which token runs", () => {
   it("an empty _yx is a malformed token, not a plain post", async () => {
     const r = await post_("/edge", fields({ _yx: "" }));
     expect(r.status).toBe(400);
-    expect(await r.text()).toBe("Malformed action token");
+    expect((await r.json()).error).toBe("Malformed action token");
   });
 
   it("a JSON body naming _yx isn't an action", async () => {

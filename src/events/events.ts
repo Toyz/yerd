@@ -54,7 +54,7 @@ import { assertPublicInstance } from "../decorators/util.js";
 import { parseDuration } from "../util/duration.js";
 import { Scope, runWithServices, token, type Container } from "../di/container.js";
 import { Logger } from "../log/logger.js";
-import { HttpError } from "../respond/response.js";
+import { errorForStatus, YerdError } from "../respond/errors.js";
 import { maybeContext, outsideRequest, type YerdContext } from "../server/context.js";
 import { isDevelopment } from "../server/http.js";
 
@@ -228,13 +228,15 @@ export function on<E extends object>(type: EventClass<E>, options: OnOptions = {
 /**
  * Answer calls of this class (see Call) on a singleton service. One handler
  * per call class in an app (two is a boot error). The return value is the
- * caller's result; an HttpError thrown here reaches the caller as an HttpError.
+ * caller's result; a YerdError thrown here reaches the caller as yerd's
+ * class for its status (a NotFound, a Conflict...), message, code, details
+ * and headers intact.
  *
  * ```ts
  * @service
  * export class Shipping {
  *   @handles(QuoteShipping) quote(q: QuoteShipping): number {
- *     if (q.country === "AQ") throw new HttpError(422, "We don't ship to Antarctica");
+ *     if (q.country === "AQ") throw new YerdError(422, "We don't ship to Antarctica", { code: "no_shipping" });
  *     return 499 + Math.ceil(q.grams / 500) * 150;
  *   }
  * }
@@ -380,7 +382,7 @@ interface ReplyMessage {
   id: string;
   ok: boolean;
   result?: unknown;
-  error?: { message: string; status?: number; expose?: boolean };
+  error?: { message: string; status?: number; expose?: boolean; code?: string; details?: Record<string, unknown>; headers?: Record<string, string> };
 }
 
 /** Options for events.call(). */
@@ -526,8 +528,9 @@ export class Events {
 
   /**
    * Ask the one handler of this call class and wait for its answer. Its
-   * HttpErrors come back as HttpErrors (status and message), other failures as
-   * Errors with its message. Not deferred like emit(): you're waiting on it.
+   * YerdErrors come back as yerd's class for their status (a subclass of
+   * yours as its parent: an OutOfStock as a Conflict) with message, code,
+   * details and headers, other failures as Errors with its message. Not deferred like emit(): you're waiting on it.
    *
    * ```ts
    * @post async quote() {
@@ -747,10 +750,14 @@ export class Events {
       reply = { id: message.id, ok: true, result: result === undefined ? undefined : toWire({ value: result }) };
     } catch (error) {
       reply =
-        error instanceof HttpError
-          ? { id: message.id, ok: false, error: { message: error.message, status: error.status, expose: error.expose } }
+        error instanceof YerdError
+          ? {
+              id: message.id,
+              ok: false,
+              error: { message: error.message, status: error.status, expose: error.expose, code: error.code, details: error.details, headers: error.headers },
+            }
           : { id: message.id, ok: false, error: { message: (error as Error)?.message ?? String(error) } };
-      if (!(error instanceof HttpError)) log.error(`@handles ${message.name} failed`, { error });
+      if (!(error instanceof YerdError)) log.error(`@handles ${message.name} failed`, { error });
     }
     await this.#transport.publish(message.reply, reply);
   }
@@ -769,6 +776,10 @@ export class Events {
       return;
     }
     const failure = reply.error ?? { message: "the call failed" };
-    waiting.reject(failure.status !== undefined ? new HttpError(failure.status, failure.message, { expose: failure.expose }) : new Error(failure.message));
+    waiting.reject(
+      failure.status !== undefined
+        ? errorForStatus(failure.status, failure.message, { code: failure.code, expose: failure.expose, details: failure.details, headers: failure.headers })
+        : new Error(failure.message),
+    );
   }
 }

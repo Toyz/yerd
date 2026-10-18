@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  ConsoleLogger, HttpError, ILogger, LogFilter, Logger, get, inject, instrument, log, logger, route, service, yerd,
+  ConsoleLogger, YerdError, ILogger, LogFilter, Logger, get, inject, instrument, log, logger, route, service, yerd,
   type LogRecord, type RunningServer,
 } from "@toyz/yerd";
 import { parameterNames } from "../../src/log/instrument.js";
@@ -49,7 +49,7 @@ class Boom {
 @route("/teapot")
 class Teapot {
   @get brew(): never {
-    throw new HttpError(418, "short and stout");
+    throw new YerdError(418, "short and stout");
   }
 }
 

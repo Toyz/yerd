@@ -1,7 +1,7 @@
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  HttpError, args, between, body, email, field, file, files, get, header, is, length, lower, matches, oneOf, param, params, post,
+  YerdError, args, between, body, email, field, file, files, get, header, is, length, lower, matches, oneOf, param, params, post,
   query, request, route, signal, toBool, toInt, toNumber, trim, uuid, yerd,
   type RunningServer,
 } from "@toyz/yerd";
@@ -158,13 +158,13 @@ class ArgsRoute {
 class Crash {
   @query("v", {
     transform: (): string => {
-      throw new Error("not an HttpError");
+      throw new Error("not a YerdError");
     },
   })
   accessor v: string | undefined;
   @query("w", {
     transform: (): string => {
-      throw new HttpError(422, "custom status");
+      throw new YerdError(422, "custom status");
     },
   })
   accessor w: string | undefined;
@@ -209,7 +209,9 @@ function browserForm(parts: { name: string; value?: string; filename?: string; t
 
 const q = (pick: string, v?: string) => read(`/q?pick=${pick}${v === undefined ? "" : `&v=${v}`}`);
 const ok = (value: unknown) => ({ status: 200, body: { value } });
-const bad = (message: string) => ({ status: 400, body: message });
+// A ValidationFailed's body: its one issue sits at the field it's about.
+const bad = (message: string, path = "v") => ({ status: 400, body: { error: message, code: "validation_failed", issues: [{ path, message }] } });
+const malformed = (message: string) => ({ status: 400, body: { error: message, code: "bad_request" } });
 
 describe("@query with transforms", () => {
   it.each<[string, string | undefined, unknown]>([
@@ -307,7 +309,7 @@ describe("@query with transforms", () => {
   });
 
   it("the required pick itself missing is a 400", async () => {
-    expect(await read("/q")).toEqual(bad("Missing required query parameter: pick"));
+    expect(await read("/q")).toEqual(bad("Missing required query parameter: pick", "pick"));
   });
 });
 
@@ -328,12 +330,12 @@ describe("@param and @params", () => {
   it.each([
     ["/n/1", { status: 200, body: { id: 1 } }],
     ["/n/1000", { status: 200, body: { id: 1000 } }],
-    ["/n/0", bad("Must be from 1 to 1000 (got 0)")],
-    ["/n/1001", bad("Must be from 1 to 1000 (got 1001)")],
-    ["/n/abc", bad('Expected an integer, got "abc"')],
-    ["/n/1.0", bad('Expected an integer, got "1.0"')],
+    ["/n/0", bad("Must be from 1 to 1000 (got 0)", "id")],
+    ["/n/1001", bad("Must be from 1 to 1000 (got 1001)", "id")],
+    ["/n/abc", bad('Expected an integer, got "abc"', "id")],
+    ["/n/1.0", bad('Expected an integer, got "1.0"', "id")],
     ["/n/%201", { status: 200, body: { id: 1 } }],
-    ["/n/99999999999999999999", bad("Integer out of range: 99999999999999999999")],
+    ["/n/99999999999999999999", bad("Integer out of range: 99999999999999999999", "id")],
   ])("%s", async (path, expected) => {
     expect(await read(path)).toEqual(expected);
   });
@@ -348,12 +350,12 @@ describe("@header", () => {
 
   it("transforms and validates", async () => {
     expect(await h({ "x-count": "12", "x-mode": " B " })).toEqual({ status: 200, body: { custom: null, count: 12, token: "t", mode: "b" } });
-    expect(await h({ "x-count": "twelve" })).toEqual(bad('Expected an integer, got "twelve"'));
-    expect(await h({ "x-mode": "c" })).toEqual(bad('Expected one of a, b, got "c"'));
+    expect(await h({ "x-count": "twelve" })).toEqual(bad('Expected an integer, got "twelve"', "x-count"));
+    expect(await h({ "x-mode": "c" })).toEqual(bad('Expected one of a, b, got "c"', "x-mode"));
   });
 
   it("a required header that's missing is a 400 naming it as declared", async () => {
-    expect(await read("/h")).toEqual(bad("Missing required header: x-token"));
+    expect(await read("/h")).toEqual(bad("Missing required header: x-token", "x-token"));
   });
 
   it("an empty header value is present, not missing", async () => {
@@ -391,6 +393,7 @@ describe("@body(Dto)", () => {
     expect(r.headers.get("content-type")).toBe("application/json; charset=utf-8");
     expect(await r.json()).toEqual({
       error: "Validation failed",
+      code: "validation_failed",
       issues: [
         { path: "email", message: "That is not an email" },
         { path: "age", message: "Must be from 13 to 120 (got 7)" },
@@ -408,15 +411,15 @@ describe("@body(Dto)", () => {
     ["application/octet-stream", "\u0000\u0001"],
     ["application/x-ndjson", '{"email":"a@b.co","age":30}'],
   ])("a %s body of %j is a (root) issue, not a crash", async (type, data) => {
-    expect(await post("/dto", type, data)).toEqual({ status: 400, body: { error: "Validation failed", issues: [{ path: "(root)", message: "Expected an object" }] } });
+    expect(await post("/dto", type, data)).toEqual({ status: 400, body: { error: "Validation failed", code: "validation_failed", issues: [{ path: "(root)", message: "Expected an object" }] } });
   });
 
   it("no body at all is a 400", async () => {
-    expect(await read("/dto", { method: "POST" })).toEqual(bad("Missing required request body: body"));
+    expect(await read("/dto", { method: "POST" })).toEqual(bad("Missing required request body: body", "(root)"));
   });
 
   it("malformed JSON is a 400 before validation", async () => {
-    expect(await post("/dto", "application/json", "{")).toEqual(bad("Request body is not valid JSON"));
+    expect(await post("/dto", "application/json", "{")).toEqual(malformed("Request body is not valid JSON"));
   });
 
   it("validates a URL-encoded form with string coercion and repeated keys", async () => {
@@ -433,7 +436,7 @@ describe("@body(Dto)", () => {
   it("a repeated form field where a scalar is expected is an issue", async () => {
     expect(await post("/dto", "application/x-www-form-urlencoded", "email=a%40b.co&age=30&age=31")).toEqual({
       status: 400,
-      body: { error: "Validation failed", issues: [{ path: "age", message: "Expected an integer" }] },
+      body: { error: "Validation failed", code: "validation_failed", issues: [{ path: "age", message: "Expected an integer" }] },
     });
   });
 
@@ -445,7 +448,7 @@ describe("@body(Dto)", () => {
   it("an empty JSON object reports each required field", async () => {
     expect(await json({})).toEqual({
       status: 400,
-      body: { error: "Validation failed", issues: [{ path: "email", message: "Required" }, { path: "age", message: "Required" }] },
+      body: { error: "Validation failed", code: "validation_failed", issues: [{ path: "email", message: "Required" }, { path: "age", message: "Required" }] },
     });
   });
 });
@@ -484,6 +487,7 @@ describe("@body(Dto) with uploads", () => {
       status: 400,
       body: {
         error: "Validation failed",
+        code: "validation_failed",
         issues: [
           { path: "avatar", message: "a.png is larger than 10 bytes" },
           { path: "attachments", message: "Expected at most 2 files" },
@@ -535,7 +539,7 @@ describe("@body() without a DTO", () => {
   });
 
   it("required: true turns no body into a 400 and runs the transform otherwise", async () => {
-    expect(await post("/raw-required", {})).toEqual(bad("Missing required request body: body"));
+    expect(await post("/raw-required", {})).toEqual(bad("Missing required request body: body", "(root)"));
     expect(await post("/raw-required", { headers: { "content-type": "text/plain" }, body: "shout" })).toEqual(ok("SHOUT"));
   });
 });
@@ -546,18 +550,18 @@ describe("@field", () => {
   it.each<[string, string, unknown]>([
     ["application/x-www-form-urlencoded", "email=%20A%40B.co%20", { status: 200, body: { email: "a@b.co" } }],
     ["application/x-www-form-urlencoded", "email=a%40b.co&email=c%40d.co", { status: 200, body: { email: "a@b.co" } }],
-    ["application/x-www-form-urlencoded", "email=nope", bad("That is not an email")],
-    ["application/x-www-form-urlencoded", "other=1", bad("Missing required form field: email")],
+    ["application/x-www-form-urlencoded", "email=nope", bad("That is not an email", "email")],
+    ["application/x-www-form-urlencoded", "other=1", bad("Missing required form field: email", "email")],
     ["application/json", '{"email":"A@B.co"}', { status: 200, body: { email: "a@b.co" } }],
     ["application/json", '{"email":["a@b.co","c@d.co"]}', { status: 200, body: { email: "a@b.co" } }],
-    ["application/json", '{"email":{"nested":"a@b.co"}}', bad("Missing required form field: email")],
-    ["application/json", '{"email":null}', bad("Missing required form field: email")],
-    ["application/json", '{"email":["a@b.co",1]}', bad("Missing required form field: email")],
-    ["application/json", '["a@b.co"]', bad("Missing required form field: email")],
-    ["application/json", '"a@b.co"', bad("Missing required form field: email")],
-    ["text/plain", "email=a@b.co", bad("Missing required form field: email")],
-    ["application/octet-stream", "email=a@b.co", bad("Missing required form field: email")],
-    ["application/x-ndjson", '{"email":"a@b.co"}', bad("Missing required form field: email")],
+    ["application/json", '{"email":{"nested":"a@b.co"}}', bad("Missing required form field: email", "email")],
+    ["application/json", '{"email":null}', bad("Missing required form field: email", "email")],
+    ["application/json", '{"email":["a@b.co",1]}', bad("Missing required form field: email", "email")],
+    ["application/json", '["a@b.co"]', bad("Missing required form field: email", "email")],
+    ["application/json", '"a@b.co"', bad("Missing required form field: email", "email")],
+    ["text/plain", "email=a@b.co", bad("Missing required form field: email", "email")],
+    ["application/octet-stream", "email=a@b.co", bad("Missing required form field: email", "email")],
+    ["application/x-ndjson", '{"email":"a@b.co"}', bad("Missing required form field: email", "email")],
   ])("%s %s", async (type, data, expected) => {
     expect(await post("/field", type, data)).toEqual(expected);
   });
@@ -565,7 +569,7 @@ describe("@field", () => {
   // Regression: an empty JSON array passed the "array of strings" check, so
   // its missing first item went into the pipeline as undefined (a 500 from trim).
   it("an empty JSON array counts as missing", async () => {
-    expect(await post("/field", "application/json", '{"email":[]}')).toEqual(bad("Missing required form field: email"));
+    expect(await post("/field", "application/json", '{"email":[]}')).toEqual(bad("Missing required form field: email", "email"));
     expect(await post("/optional-field", "application/json", '{"source":[]}')).toEqual({ status: 200, body: { source: null } });
   });
 
@@ -580,7 +584,7 @@ describe("@field", () => {
     expect(await read("/field", { method: "POST", body: fd })).toEqual({ status: 200, body: { email: "a@b.co" } });
     const onlyFile = new FormData();
     onlyFile.append("email", new File(["a@b.co"], "e.txt"));
-    expect(await read("/field", { method: "POST", body: onlyFile })).toEqual(bad("Missing required form field: email"));
+    expect(await read("/field", { method: "POST", body: onlyFile })).toEqual(bad("Missing required form field: email", "email"));
   });
 
   it("a GET with no body leaves an optional field undefined, and a required one is a 400", async () => {
@@ -609,11 +613,11 @@ describe("@file and @files", () => {
     const fd = new FormData();
     fd.append("avatar", png("a.png"));
     fd.append("avatar", png("big.png", 9));
-    expect(await upload(fd)).toEqual({ status: 413, body: "avatar: big.png is larger than 8 bytes" });
+    expect(await upload(fd)).toEqual({ status: 413, body: { error: "avatar: big.png is larger than 8 bytes", code: "payload_too_large" } });
   });
 
   it.each<[string, () => FormData, unknown]>([
-    ["no avatar", () => new FormData(), bad("Missing file: avatar")],
+    ["no avatar", () => new FormData(), bad("Missing file: avatar", "avatar")],
     [
       "a text field named avatar",
       () => {
@@ -621,7 +625,7 @@ describe("@file and @files", () => {
         fd.append("avatar", "a.png");
         return fd;
       },
-      bad("Missing file: avatar"),
+      bad("Missing file: avatar", "avatar"),
     ],
     [
       "a file one byte too big",
@@ -630,7 +634,7 @@ describe("@file and @files", () => {
         fd.append("avatar", png("a.png", 9));
         return fd;
       },
-      { status: 413, body: "avatar: a.png is larger than 8 bytes" },
+      { status: 413, body: { error: "avatar: a.png is larger than 8 bytes", code: "payload_too_large" } },
     ],
     [
       "a gif",
@@ -639,7 +643,7 @@ describe("@file and @files", () => {
         fd.append("avatar", png("a.gif", 4, "image/gif"));
         return fd;
       },
-      { status: 415, body: "avatar: a.gif has type image/gif, which isn't accepted (image/png, image/jpeg)" },
+      { status: 415, body: { error: "avatar: a.gif has type image/gif, which isn't accepted (image/png, image/jpeg)", code: "unsupported_media_type" } },
     ],
     [
       "an untyped file",
@@ -648,7 +652,7 @@ describe("@file and @files", () => {
         fd.append("avatar", new File(["x"], "x"));
         return fd;
       },
-      { status: 415, body: "avatar: x has type application/octet-stream, which isn't accepted (image/png, image/jpeg)" },
+      { status: 415, body: { error: "avatar: x has type application/octet-stream, which isn't accepted (image/png, image/jpeg)", code: "unsupported_media_type" } },
     ],
     [
       "an extra that isn't an image",
@@ -658,14 +662,14 @@ describe("@file and @files", () => {
         fd.append("extras", png("x.txt", 1, "text/plain"));
         return fd;
       },
-      { status: 415, body: "extras: x.txt has type text/plain, which isn't accepted (image/*)" },
+      { status: 415, body: { error: "extras: x.txt has type text/plain, which isn't accepted (image/*)", code: "unsupported_media_type" } },
     ],
   ])("%s", async (_label, make, expected) => {
     expect(await upload(make())).toEqual(expected);
   });
 
   it("an empty file input (filename=\"\", no bytes) is no file", async () => {
-    expect(await read("/upload", browserForm([{ name: "avatar", filename: "", type: "image/png" }]))).toEqual(bad("Missing file: avatar"));
+    expect(await read("/upload", browserForm([{ name: "avatar", filename: "", type: "image/png" }]))).toEqual(bad("Missing file: avatar", "avatar"));
   });
 
   it("a file with no filename but real bytes still counts", async () => {
@@ -674,7 +678,7 @@ describe("@file and @files", () => {
   });
 
   it("a non-multipart body has no files", async () => {
-    expect(await read("/upload", { method: "POST", headers: { "content-type": "application/json" }, body: '{"avatar":"a.png"}' })).toEqual(bad("Missing file: avatar"));
+    expect(await read("/upload", { method: "POST", headers: { "content-type": "application/json" }, body: '{"avatar":"a.png"}' })).toEqual(bad("Missing file: avatar", "avatar"));
   });
 });
 
@@ -685,11 +689,11 @@ describe("@args, @signal and @request", () => {
   });
 
   it("a failing argument rejects the request with its own error", async () => {
-    expect(await read("/args/x", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).toEqual(bad('Expected an integer, got "x"'));
-    expect(await read("/args/1?dry=maybe", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).toEqual(bad('Expected a boolean, got "maybe"'));
+    expect(await read("/args/x", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).toEqual(bad('Expected an integer, got "x"', "id"));
+    expect(await read("/args/1?dry=maybe", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).toEqual(bad('Expected a boolean, got "maybe"', "dry"));
     expect(await read("/args/1", { method: "POST", headers: { "content-type": "application/json" }, body: '{"email":"a@b.co"}' })).toEqual({
       status: 400,
-      body: { error: "Validation failed", issues: [{ path: "age", message: "Required" }] },
+      body: { error: "Validation failed", code: "validation_failed", issues: [{ path: "age", message: "Required" }] },
     });
   });
 });
@@ -699,7 +703,7 @@ describe("transforms that throw something other than a 400", () => {
     expect(await read("/crash?v=1")).toEqual({ status: 500, body: "Internal Server Error" });
   });
 
-  it("an HttpError keeps its own status", async () => {
+  it("a YerdError keeps its own status", async () => {
     expect(await read("/crash?w=1")).toEqual({ status: 422, body: "custom status" });
   });
 

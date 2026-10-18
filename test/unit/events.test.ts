@@ -1,7 +1,7 @@
 import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  BootError, Call, Events, EventTransport, HttpError, ILogger, MemoryTransport, get, inject, named, on, handles, post, resolve, route,
+  BootError, Call, Conflict, Events, EventTransport, YerdError, ILogger, MemoryTransport, get, inject, named, on, handles, post, resolve, route,
   scoped, service, yerd, type RunningServer, type YerdApp,
 } from "@toyz/yerd";
 import { maybeContext, runWithContext, type YerdContext } from "../../src/server/context.js";
@@ -22,6 +22,12 @@ class Stamped {
   constructor(readonly at: Date) {}
   static fromJSON(data: { at: string }): Stamped {
     return new Stamped(new Date(data.at));
+  }
+}
+
+class TooLight extends Conflict {
+  constructor() {
+    super("Too light to ship", { code: "too_light", details: { min: 2 }, headers: { "retry-after": "5" } });
   }
 }
 
@@ -61,7 +67,8 @@ class Receipts {
   }
 
   @handles(Quote) quote(q: Quote): number {
-    if (q.grams < 0) throw new HttpError(422, "Negative weight");
+    if (q.grams < 0) throw new YerdError(422, "Negative weight");
+    if (q.grams === 1) throw new TooLight();
     if (q.grams === 0) throw new Error("boom");
     return q.grams * 2;
   }
@@ -141,15 +148,23 @@ describe("events", () => {
     expect(seen).not.toContain("ran inside the emitting request");
   });
 
-  it("calls: the handler's answer, its HttpErrors as HttpErrors, other failures as Errors", async () => {
+  it("calls: the handler's answer, its YerdErrors as YerdErrors, other failures as Errors", async () => {
     server = await app().listen(0, "127.0.0.1");
     const events = await inApp(() => resolve(Events));
     const answer: number = await events.call(new Quote(600));
     expect(answer).toBe(1200);
     const http = await events.call(new Quote(-1)).catch((e: unknown) => e);
-    expect(http).toBeInstanceOf(HttpError);
-    expect((http as HttpError).status).toBe(422);
+    expect(http).toBeInstanceOf(YerdError);
+    expect((http as YerdError).status).toBe(422);
     await expect(events.call(new Quote(0))).rejects.toThrow("boom");
+  });
+
+  it("calls: a YerdError subclass arrives as yerd's class for its status, code, details and headers intact", async () => {
+    server = await app().listen(0, "127.0.0.1");
+    const events = await inApp(() => resolve(Events));
+    const error = await events.call(new Quote(1)).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Conflict);
+    expect(error).toMatchObject({ status: 409, message: "Too light to ship", code: "too_light", details: { min: 2 }, headers: { "retry-after": "5" } });
   });
 
   it("calls nobody answers fail at once in memory, and time out on a transport that can't tell", async () => {

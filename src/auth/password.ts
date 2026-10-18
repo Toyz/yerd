@@ -61,7 +61,7 @@ let dummy: Promise<string> | undefined;
  * ```ts
  * const user = this.users.byName(form.string("name"));
  * if (!(await verifyPassword(form.string("password"), user?.passwordHash)) || !user) {
- *   throw new HttpError(401, "Wrong name or password");
+ *   throw new Unauthorized("Wrong name or password");
  * }
  * ```
  */

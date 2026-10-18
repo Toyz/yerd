@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  BootError, HttpError, accepts, createGuard, get, group, layout, noLayout, param, res, route, setMeta, yerd,
+  BootError, YerdError, accepts, createGuard, get, group, layout, noLayout, param, res, route, setMeta, yerd,
   type ErrorPageProps, type LayoutProps, type RunningServer,
 } from "@toyz/yerd";
 
@@ -49,7 +49,7 @@ class Fragment {
 @route("/explode")
 class Explode {
   @get boom(): never {
-    throw new HttpError(418, "short and stout");
+    throw new YerdError(418, "short and stout");
   }
 }
 
@@ -120,8 +120,8 @@ describe("layouts", () => {
     expect(shown).toHaveLength(1);
     expect(shown[0]).toBeInstanceOf(DatabaseDown);
     await page("/explode");
-    expect(shown[1]).toBeInstanceOf(HttpError);
-    expect((shown[1] as HttpError).status).toBe(418);
+    expect(shown[1]).toBeInstanceOf(YerdError);
+    expect((shown[1] as YerdError).status).toBe(418);
   });
 
   it("keeps plain errors for API clients", async () => {

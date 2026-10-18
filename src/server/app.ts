@@ -16,7 +16,7 @@ import {
 } from "../di/decorators.js";
 import { jsx, type Component } from "../jsx/jsx-runtime.js";
 import { coerce, type Outgoing } from "../respond/coerce.js";
-import { HttpError } from "../respond/response.js";
+import { BadRequest, Forbidden, jsonBody, MethodNotAllowed, NotAcceptable, NotFound, YerdError } from "../respond/errors.js";
 import { LONG_LIVED, sse } from "../respond/stream.js";
 import { Channels } from "../live/channels.js";
 import { CLOCK_PATH, CUES_PATH, Cues, DEFAULT_ROOM, isPublicRoom, validRoom, type CuesOptions } from "../live/cues.js";
@@ -195,7 +195,7 @@ type Invoked = { blocked: Outgoing; result?: undefined } | { blocked?: undefined
 /**
  * Middleware wraps guards and the handler (or action) for every routed
  * request. Call `next()` to run them and get the response, which you may
- * change before returning it, or throw (an HttpError, say) to answer
+ * change before returning it, or throw (a YerdError, say) to answer
  * without running them. Install it with app.use().
  *
  * ```ts
@@ -245,7 +245,7 @@ interface RouteNode {
   /** The @action methods of the pattern's classes, by class name, then action name: what a token names. */
   actions: ReadonlyMap<string, ReadonlyMap<string, ActionCall>>;
   /** The Allow header for a 405. */
-  allow: string;
+  allow: string[];
 }
 
 /** What routing picked for a request (see resolveRequest). */
@@ -271,21 +271,21 @@ function pickHandler(group: RouteGroup, accept: string | undefined): Handler | u
 /**
  * Pick what serves a matched request: the verb's group (HEAD falls back to
  * GET, then ALL) and the handler Accept picks, or the 406 / 405 to answer
- * with, and the headers that go with it.
+ * with (carrying its Vary or Allow header).
  */
 function resolveRequest(
   handlers: ReadonlyMap<Verb, RouteGroup>,
   method: Verb,
   headers: IncomingHttpHeaders,
-): Routed | { error: HttpError; headers: Record<string, string> } {
+): Routed | { error: YerdError } {
   const group = handlers.get(method) ?? (method === "HEAD" ? handlers.get("GET") : undefined) ?? handlers.get("ALL");
   const node = (group ?? handlers.values().next().value!).node;
   // `@get(when)` variants are tested once the request context exists; the rest is picked now.
   const handler = group && pickHandler(group, headers.accept);
   const variants = group?.variants.length ?? 0;
-  if (group && !handler && variants === 0) return { error: new HttpError(406, "Not Acceptable"), headers: { vary: "accept" } };
+  if (group && !handler && variants === 0) return { error: new NotAcceptable(undefined, { headers: { vary: "accept" } }) };
   const mayBeAction = method === "POST" && node.actions.size > 0 && isFormBody(headers["content-type"]);
-  if (!handler && !mayBeAction && variants === 0) return { error: new HttpError(405, "Method Not Allowed"), headers: { allow: node.allow } };
+  if (!handler && !mayBeAction && variants === 0) return { error: new MethodNotAllowed(undefined, { allow: node.allow }) };
   return { group, handler, node, mayBeAction };
 }
 
@@ -310,7 +310,7 @@ function routeNode(byVerb: ReadonlyMap<Verb, readonly Handler[]>, pendingRuns: A
   }
   const allow = [...byVerb.keys()].filter((v) => v !== "ALL");
   if (allow.includes("GET") && !allow.includes("HEAD")) allow.push("HEAD");
-  return { first: candidates[0]!, actions, allow: allow.join(", ") };
+  return { first: candidates[0]!, actions, allow };
 }
 
 function routeGroup(handlers: readonly Handler[], node: RouteNode): RouteGroup {
@@ -354,20 +354,19 @@ const NO_ROUTE: RouteInfo = { pattern: "", paramNames: [], className: "" };
 export interface ErrorPageProps {
   /** The HTTP status being sent, e.g. 404 or 500. */
   status: number;
-  /** A message safe to show: the HttpError's message when it's exposed, else the status text. */
+  /** A message safe to show: the YerdError's message when it's exposed, else the status text. */
   message: string;
   /**
-   * What was thrown: an HttpError (a 404 for an unknown path is one), or
-   * whatever a handler threw. For logging, or for showing details in
-   * development; `message` is what's safe to show everyone, since a crash's
-   * own message and stack can leak internals.
+   * What was thrown: a YerdError (an unknown path is a NotFound), or
+   * whatever a handler threw. For `instanceof` checks, logging, or showing
+   * details in development; `message` is what's safe to show everyone.
    *
    * ```tsx
    * function ErrorPage({ status, message, error }: ErrorPageProps) {
    *   return (
    *     <main>
    *       <h1>{status}</h1>
-   *       <p>{message}</p>
+   *       <p>{error instanceof Unauthorized ? <a href="/login">Sign in</a> : message}</p>
    *       {process.env.NODE_ENV !== "production" && error instanceof Error ? <pre>{error.stack}</pre> : null}
    *     </main>
    *   );
@@ -639,7 +638,7 @@ export class YerdApp {
    *
    * ```ts
    * const readOnlyMode = createGuard("readOnlyMode", (ctx) =>
-   *   ctx.method === "GET" || ctx.method === "HEAD" || new HttpError(503, "Read-only for a moment"),
+   *   ctx.method === "GET" || ctx.method === "HEAD" || new ServiceUnavailable("Read-only for a moment", { retryAfter: 60 }),
    * );
    *
    * yerd().guard(readOnlyMode);
@@ -825,7 +824,7 @@ export class YerdApp {
   }
 
   /**
-   * Render errors (404s, thrown HttpErrors, crashes) as an HTML page inside the
+   * Render errors (404s, thrown YerdErrors, crashes) as an HTML page inside the
    * root layouts, for requests that accept HTML. API clients still get text or
    * JSON. Internal error messages are never shown.
    *
@@ -854,7 +853,7 @@ export class YerdApp {
     const accept = req.headers.accept ?? "";
     if (!this.#errorPage || !accept.includes("text/html") || req.headers["yx"] !== undefined) return plain;
     const message =
-      error instanceof HttpError && error.expose ? error.message : statusText(plain.status);
+      error instanceof YerdError && error.expose ? error.message : statusText(plain.status);
     try {
       const page = await coerce(jsx(this.#errorPage, { status: plain.status, message, error } satisfies ErrorPageProps), {
         layouts: this.#layouts,
@@ -1449,7 +1448,7 @@ export class YerdApp {
         const parsed = new URL(rawTarget);
         target = { path: parsed.pathname, search: parsed.search };
       } catch {
-        return send(res, errorResponse(400), method === "HEAD", undefined);
+        return send(res, errorResponse(new BadRequest()), method === "HEAD", undefined);
       }
     }
     const path = target.path;
@@ -1494,16 +1493,16 @@ export class YerdApp {
         }
       }
       if (next) return next();
-      return this.#sendError(new HttpError(404, "Not Found"), req, res, target, method);
+      return this.#sendError(new NotFound(), req, res, target, method);
     }
 
     if (this.#options.csrf !== false && UNSAFE_METHODS.has(method)) {
       const refused = crossSiteReason(req, this.#trustedOrigins, this.#options.trustProxy ?? false);
-      if (refused) return this.#sendError(new HttpError(403, refused), req, res, target, method, { refused: true });
+      if (refused) return this.#sendError(new Forbidden(refused), req, res, target, method, { refused: true });
     }
 
     const routed = resolveRequest(match.handlers, method, req.headers);
-    if (routed.error) return this.#sendError(routed.error, req, res, target, method, { headers: routed.headers });
+    if (routed.error) return this.#sendError(routed.error, req, res, target, method);
 
     const base = routed.handler ?? routed.group?.variants[0] ?? routed.node.first;
     const prerendering = this.#prerenderToken !== undefined && req.headers["x-yerd-prerender"] === this.#prerenderToken;
@@ -1527,7 +1526,7 @@ export class YerdApp {
   async #answer(context: RequestContext, routed: Routed, base: Handler): Promise<void> {
     let out: Outgoing;
     let failed = false;
-    // A crash (not an HttpError) skips the session commit, so a half-done
+    // A crash (not a YerdError) skips the session commit, so a half-done
     // login or update doesn't stick.
     let crashed = false;
     try {
@@ -1586,7 +1585,7 @@ export class YerdApp {
         }
       }
     }
-    if (!chosen) throw new HttpError(variants.length > 0 ? 404 : 405, variants.length > 0 ? "Not Found" : "Method Not Allowed");
+    if (!chosen) throw variants.length > 0 ? new NotFound() : new MethodNotAllowed(undefined, { allow: routed.node.allow });
     const serving = chosen;
     const invoked = await this.#invoke(context, serving, serving, () => (serving.args ? Promise.all(serving.args.map((r) => r.resolve(context))) : []));
     if (invoked.blocked) return invoked.blocked;
@@ -1617,7 +1616,7 @@ export class YerdApp {
   async #serveCues(res: ServerResponse, search: string): Promise<void> {
     const asked = new URLSearchParams(search).getAll("room");
     const rooms = asked.length ? [...new Set(asked)] : [DEFAULT_ROOM];
-    if (rooms.length > 32 || !rooms.every(validRoom)) return send(res, errorResponse(400), false, undefined);
+    if (rooms.length > 32 || !rooms.every(validRoom)) return send(res, errorResponse(new BadRequest()), false, undefined);
     const closed = rooms.filter((room) => !isPublicRoom(this.#options.cues?.public, room));
     if (closed.length) {
       for (const room of closed) {
@@ -1625,7 +1624,7 @@ export class YerdApp {
         this.#warnedRooms.add(room);
         cueLog.warn(`cue room ${JSON.stringify(room)} isn't public, so /_yerd/cues refused it: list it in yerd({ cues: { public } }), or serve it from your own @sse route (cues.listen) and point the elements at it with cueFrom`);
       }
-      return send(res, errorResponse(403), false, undefined);
+      return send(res, errorResponse(new Forbidden()), false, undefined);
     }
     const abort = abortOnClose(res);
     const stream = { abort: (reason: unknown) => abort.abort(reason) };
@@ -1642,16 +1641,15 @@ export class YerdApp {
    * Answer a request that never reached a handler (404, 405, 406, a refused
    * cross-site post) with the error page, inside a request context and DI
    * scope so layouts can resolve services and read the session like any
-   * page. `headers` go on the answer (Allow, Vary); a `refused` request's
-   * session is left exactly as it came.
+   * page. A `refused` request's session is left exactly as it came.
    */
   async #sendError(
-    error: HttpError,
+    error: YerdError,
     req: IncomingMessage,
     res: ServerResponse,
     target: { path: string; search: string },
     method: string,
-    options: { headers?: Record<string, string>; refused?: boolean } = {},
+    options: { refused?: boolean } = {},
   ): Promise<void> {
     const scope = new Scope();
     const context = new RequestContext({ req, res, target, method, params: {}, route: NO_ROUTE, meta: {}, scope, env: this.#env! });
@@ -1668,10 +1666,6 @@ export class YerdApp {
           }
         }
         let { out } = await this.#failure(error, undefined, context);
-        for (const name in options.headers) {
-          if (name === "vary") out.headers.vary = mergeVary(out.headers.vary, options.headers.vary!);
-          else out.headers[name] = options.headers[name]!;
-        }
         out = await this.#finalize(context, out, { failed: true, commit: !options.refused });
         await send(res, out, method === "HEAD", isStreamBody(out.body) ? context.signal : undefined);
       });
@@ -1682,13 +1676,14 @@ export class YerdApp {
 
   /**
    * The answer for an error: the route's @catches, then app.onError, then
-   * the error page. `crashed` when nothing handled a crash (an error that
-   * isn't an HttpError), so the session isn't saved.
+   * the error page, with the error's headers on whichever answers. `crashed`
+   * when nothing handled a crash (an error that isn't a YerdError), so the
+   * session isn't saved.
    */
   async #failure(error: unknown, handler: Handler | undefined, context: RequestContext): Promise<{ out: Outgoing; crashed: boolean }> {
     const recovered = context.prerendering ? undefined : await this.#recover(error, handler, context);
-    if (recovered) return { out: recovered, crashed: false };
-    return { out: await this.#errorOut(error, context), crashed: !(error instanceof HttpError) };
+    if (recovered) return { out: withErrorHeaders(recovered, error), crashed: false };
+    return { out: withErrorHeaders(await this.#errorOut(error, context), error), crashed: !(error instanceof YerdError) };
   }
 
   /**
@@ -1783,10 +1778,10 @@ export class YerdApp {
   }
 
   async #recovered(error: unknown, result: unknown, layouts: Component<LayoutProps>[], context: RequestContext, by: string, level: "debug" | "warn"): Promise<Outgoing> {
-    if (!(error instanceof HttpError)) requestLog.log(level, error instanceof Error ? error.message : "request failed", { handledBy: by }, error);
+    if (!(error instanceof YerdError)) requestLog.log(level, error instanceof Error ? error.message : "request failed", { handledBy: by }, error);
     // A returned res(..., { status }) or number says the status; otherwise it's the error's.
     const out = await coerce(result, { layouts, meta: context.meta, dynamic: dynamicOf(context), accept: context.req.headers.accept });
-    if (!out.explicitStatus) out.status = error instanceof HttpError ? error.status : 500;
+    if (!out.explicitStatus) out.status = error instanceof YerdError ? error.status : 500;
     return this.#prime(out);
   }
 
@@ -1802,8 +1797,8 @@ export class YerdApp {
     for (const run of guards) {
       const result = await run(context);
       if (result === true || result === undefined) continue;
-      if (result === false) throw new HttpError(403, "Forbidden");
-      // Returning an error (e.g. `ok || new HttpError(403)`) is the same as throwing it.
+      if (result === false) throw new Forbidden();
+      // Returning an error (e.g. `ok || new Forbidden()`) is the same as throwing it.
       if (result instanceof Error) throw result;
       if (typeof result === "string") return coerce(redirect(result), { layouts: [] });
       return coerce(result, { layouts, meta: context.meta, accept: context.req.headers.accept });
@@ -1834,12 +1829,12 @@ export class YerdApp {
       payload = verifyAction(this.#secrets, token);
       checkActionToken(payload, context.csrfNonce(), this.#sessions !== undefined && context.route.session !== false);
       found = node.actions.get(payload.c)?.get(payload.a);
-      if (!found) throw new HttpError(400, "Unknown action");
+      if (!found) throw new BadRequest("Unknown action");
     } catch (error) {
       // The page is older than the server (a restart with a new secret, a
       // deploy, an expired or other-session token): tell the runtime, which
       // refreshes the page so the next try works.
-      if (error instanceof HttpError && context.headers["yx"] !== undefined) {
+      if (error instanceof YerdError && context.headers["yx"] !== undefined) {
         return { status: error.status, headers: { "yx-stale": "1", "content-type": "text/plain; charset=utf-8" }, body: error.message };
       }
       throw error;
@@ -1969,24 +1964,41 @@ function checkInjections(name: string, lifetime: Lifetime, metadata: DecoratorMe
   }
 }
 
+/**
+ * The plain answer for an error: an exposed YerdError's JSON body (its
+ * headers may set the content type) or message, else the status text. A
+ * YerdError's headers go out either way.
+ */
 function errorResponse(error: unknown): Outgoing {
   // A thrown number is a status only when Node can send it as a final response;
   // `throw 1000` or `throw 100` is a crash like any other throw.
   const code = typeof error === "number" && Number.isInteger(error) && error >= 200 && error <= 599 ? error : undefined;
-  const status = code ?? (error instanceof HttpError ? error.status : 500);
-  if (code === undefined && !(error instanceof HttpError && error.expose)) {
+  const status = code ?? (error instanceof YerdError ? error.status : 500);
+  if (code === undefined && !(error instanceof YerdError && error.expose)) {
     if (status >= 500) requestLog.error(error instanceof Error ? error.message : "request failed", { error });
   }
-  const message =
-    error instanceof HttpError && error.expose ? error.message : statusText(status);
-  if (error instanceof HttpError && error.expose && error.details) {
-    return {
-      status,
-      headers: { "content-type": "application/json; charset=utf-8" },
-      body: JSON.stringify({ error: message, ...error.details }),
-    };
+  if (error instanceof YerdError && error.expose) {
+    const json = jsonBody(error);
+    if (json !== undefined) return { status, headers: { "content-type": "application/json; charset=utf-8", ...error.headers }, body: json };
+    return { status, headers: { ...error.headers, "content-type": "text/plain; charset=utf-8" }, body: error.message };
   }
-  return { status, headers: { "content-type": "text/plain; charset=utf-8" }, body: message };
+  const headers = error instanceof YerdError ? { ...error.headers, "content-type": "text/plain; charset=utf-8" } : { "content-type": "text/plain; charset=utf-8" };
+  return { status, headers, body: statusText(status) };
+}
+
+/**
+ * A YerdError's headers on the answer to it (the error page, a @catches or
+ * onError response): Vary merged, the rest where the answer didn't set its
+ * own. Never Content-Type, which belongs to that answer's body.
+ */
+function withErrorHeaders(out: Outgoing, error: unknown): Outgoing {
+  if (!(error instanceof YerdError)) return out;
+  for (const name in error.headers) {
+    if (name === "content-type") continue;
+    if (name === "vary") out.headers.vary = mergeVary(out.headers.vary, error.headers.vary!);
+    else out.headers[name] ??= error.headers[name]!;
+  }
+  return out;
 }
 
 // The runtime's core (plus custom attributes' client halves) and its chunks,
@@ -2006,7 +2018,7 @@ function runtimeResponse(req: IncomingMessage): Outgoing {
  */
 function chunkResponse(req: IncomingMessage, name: string, search: string): Outgoing {
   const source = chunkSource(name);
-  if (source === undefined) return errorResponse(404);
+  if (source === undefined) return errorResponse(new NotFound());
   const asked = new URLSearchParams(search).get("v");
   if (asked === null) return scriptResponse(req, name, source);
   if (asked !== chunkVersion(name)) {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HttpError, event, ndjson, sse } from "@toyz/yerd";
+import { YerdError, event, ndjson, sse } from "@toyz/yerd";
 
 function body(response: unknown): AsyncGenerator<string> {
   return (response as { body: AsyncGenerator<string> }).body;
@@ -70,7 +70,7 @@ describe("heartbeats", () => {
   it("pass a failing source's error on", async () => {
     async function* broken() {
       yield 1;
-      throw new HttpError(409, "boom");
+      throw new YerdError(409, "boom");
     }
     const out: string[] = [];
     for await (const chunk of body(sse(broken(), { heartbeat: 1000 }))) out.push(chunk);

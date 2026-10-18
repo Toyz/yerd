@@ -20,7 +20,7 @@ import { dirname, join } from "node:path";
 import { createKey } from "../decorators/keys.js";
 import { assertPublicInstance } from "../decorators/util.js";
 import { resolveRoute, routeRegistry, type RouteDef } from "../decorators/route.js";
-import { HttpError } from "../respond/response.js";
+import { BadRequest, Forbidden, ValidationFailed } from "../respond/errors.js";
 import { Logger } from "../log/logger.js";
 import { currentContext, type YerdContext } from "../server/context.js";
 import { sentFiles, withFiles, type FormFields, type FormFiles } from "../server/body.js";
@@ -145,7 +145,7 @@ export class ActionForm {
    */
   string(name: string): string {
     const value = this.get(name);
-    if (value === undefined) throw new HttpError(400, `Missing form field: ${name}`);
+    if (value === undefined) throw new ValidationFailed(`Missing form field: ${name}`, { issues: [{ path: name, message: `Missing form field: ${name}` }] });
     return value;
   }
 
@@ -563,7 +563,7 @@ export function fillHoles(args: unknown, holes: HoleSource[] | undefined, fields
       const source = holes[index];
       const raw = fields[`_yxh${index}`];
       const text = Array.isArray(raw) ? raw[0] : raw;
-      if (!source || text === undefined) throw new HttpError(400, "This action reads the page when it fires, which needs JavaScript");
+      if (!source || text === undefined) throw new BadRequest("This action reads the page when it fires, which needs JavaScript");
       // The path after the element: [field], or ["dataset", name] (always a string).
       const path = source.slice(source[0] === "ref" ? 2 : 1);
       if (path.length === 1 && BOOLEAN_FIELDS.has(path[0]!)) return text === "true";
@@ -744,10 +744,10 @@ export function csrfTag(nonce: string): string {
  */
 export function checkActionToken(payload: TokenPayload, sessionNonce: string | undefined, sessionsOn: boolean): void {
   if (payload.e === undefined) return;
-  if (payload.e < Date.now() / 1000) throw new HttpError(403, "This form has expired; reload the page and try again");
+  if (payload.e < Date.now() / 1000) throw new Forbidden("This form has expired; reload the page and try again");
   if (!sessionsOn) return;
   const matches = payload.s === undefined ? sessionNonce === undefined : sessionNonce !== undefined && payload.s === csrfTag(sessionNonce);
-  if (!matches) throw new HttpError(403, "This form was made for a different session; reload the page and try again");
+  if (!matches) throw new Forbidden("This form was made for a different session; reload the page and try again");
 }
 
 function mac(secret: string, data: string): string {
@@ -761,18 +761,18 @@ export function signAction(secret: string, payload: TokenPayload): string {
 
 export function verifyAction(secrets: readonly string[], token: string): TokenPayload {
   const dot = token.indexOf(".");
-  if (dot <= 0) throw new HttpError(400, "Malformed action token");
+  if (dot <= 0) throw new BadRequest("Malformed action token");
   const data = token.slice(0, dot);
   const given = Buffer.from(token.slice(dot + 1));
   const valid = secrets.some((secret) => {
     const expected = Buffer.from(mac(secret, data));
     return given.length === expected.length && timingSafeEqual(given, expected);
   });
-  if (!valid) throw new HttpError(400, "Invalid action signature");
+  if (!valid) throw new BadRequest("Invalid action signature");
   try {
     return JSON.parse(Buffer.from(data, "base64url").toString("utf8")) as TokenPayload;
   } catch {
-    throw new HttpError(400, "Malformed action token");
+    throw new BadRequest("Malformed action token");
   }
 }
 

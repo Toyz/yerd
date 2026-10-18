@@ -18,7 +18,7 @@ import type { Outgoing } from "../respond/coerce.js";
 import { assertStatus, checkHeader } from "../respond/response.js";
 import type { ResponseDefaults } from "../decorators/response.js";
 import { REQUEST_SPAN, newSpanId, type Span } from "../log/span.js";
-import { HttpError } from "../respond/response.js";
+import { BadRequest } from "../respond/errors.js";
 import { abortOnClose, forwarded, mergeVary, requestIdFrom, requestIsHttps } from "./http.js";
 
 export interface RequestEnv {
@@ -120,7 +120,7 @@ export class RequestContext implements YerdContext {
         url = new URL(`${https ? "https" : "http"}://${host}`);
       } catch {
         // The client's own fault ("Host: a b"): a 400, not a crash logged as a server error.
-        throw new HttpError(400, "Malformed Host header");
+        throw new BadRequest("Malformed Host header");
       }
       url.pathname = this.path;
       url.search = this.#search;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HttpError, between, dto, is, length, lower, matches, parse, trim, type Issue } from "@toyz/yerd";
+import { YerdError, between, dto, is, length, lower, matches, parse, trim, type Issue } from "@toyz/yerd";
 
 /** The issues parse() reports, or [] when it succeeds. */
 function issuesOf<T>(cls: new () => T, raw: unknown): Issue[] {
@@ -7,7 +7,7 @@ function issuesOf<T>(cls: new () => T, raw: unknown): Issue[] {
     parse(cls, raw);
     return [];
   } catch (error) {
-    if (!(error instanceof HttpError)) throw error;
+    if (!(error instanceof YerdError)) throw error;
     expect(error.status).toBe(400);
     expect(error.message).toBe("Validation failed");
     return (error.details as { issues: Issue[] }).issues;
@@ -19,7 +19,7 @@ function one<T>(cls: new () => { v?: T }, value: unknown): { ok: T } | { error: 
   try {
     return { ok: parse(cls, { v: value }).v as T };
   } catch (error) {
-    if (!(error instanceof HttpError)) throw error;
+    if (!(error instanceof YerdError)) throw error;
     return { error: (error.details as { issues: Issue[] }).issues[0]!.message };
   }
 }
@@ -638,11 +638,11 @@ describe("transform pipelines", () => {
     expect(later).toBe(0);
   });
 
-  it("an HttpError thrown in a step is still collected as an issue (400), not its own status", () => {
+  it("a YerdError thrown in a step is still collected as an issue (400), not its own status", () => {
     class Steps {
       @is.string({
         transform: () => {
-          throw new HttpError(418, "teapot");
+          throw new YerdError(418, "teapot");
         },
       })
       v!: string;
@@ -746,13 +746,13 @@ describe("is.file / is.files", () => {
 });
 
 describe("the 400 shape", () => {
-  it("is an exposed HttpError with details.issues only", () => {
+  it("is an exposed YerdError with details.issues only", () => {
     try {
       parse(Int, { v: "x" });
       expect.unreachable();
     } catch (error) {
-      expect(error).toBeInstanceOf(HttpError);
-      const e = error as HttpError;
+      expect(error).toBeInstanceOf(YerdError);
+      const e = error as YerdError;
       expect(e.status).toBe(400);
       expect(e.expose).toBe(true);
       expect(e.details).toEqual({ issues: [{ path: "v", message: "Expected an integer" }] });

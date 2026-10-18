@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  HttpError, catches, get, post, res, route, setHeader, signal, status, yerd,
+  YerdError, catches, get, post, res, route, setHeader, signal, status, yerd,
   type LayoutProps, type RunningServer, type YerdContext,
 } from "@toyz/yerd";
 import { currentContext } from "../../src/server/context.js";
@@ -76,7 +76,7 @@ class Recover {
 @route("/nobody")
 class Nobody {
   @get boom(): never {
-    throw new HttpError(409, "conflict");
+    throw new YerdError(409, "conflict");
   }
 }
 
@@ -84,7 +84,7 @@ class Nobody {
 class CookieThen401 {
   @get show(): never {
     currentContext().setCookie("attempt", "1");
-    throw new HttpError(401, "sign in");
+    throw new YerdError(401, "sign in");
   }
 }
 
@@ -92,7 +92,7 @@ let server: RunningServer;
 beforeAll(async () => {
   server = await yerd({ routes: [Things, Explicit, Lost, Recover, Nobody, CookieThen401], services: [], handleSignals: false })
     .layout(Root)
-    .onError((error) => (error instanceof HttpError && error.status === 409 ? { error: "app-level", status: 409 } : undefined))
+    .onError((error) => (error instanceof YerdError && error.status === 409 ? { error: "app-level", status: 409 } : undefined))
     .listen(0, "127.0.0.1");
 });
 afterAll(() => server.close());

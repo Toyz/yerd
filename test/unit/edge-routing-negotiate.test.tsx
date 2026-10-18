@@ -244,8 +244,8 @@ describe("@accepts over HTTP", () => {
     ["application/xml", 200, "<ok/>"],
     ["application/json;q=0, */*", 200, "<ok/>"],
     ["text/html", 406, "<p>406 Not Acceptable</p>"],
-    ["*/*;q=0", 406, "Not Acceptable"],
-    ["image/*", 406, "Not Acceptable"],
+    ["*/*;q=0", 406, '{"error":"Not Acceptable","code":"not_acceptable"}'],
+    ["image/*", 406, '{"error":"Not Acceptable","code":"not_acceptable"}'],
   ])("GET /api-only Accept %j -> %i", async (accept, status, body) => {
     const r = await go("/api-only", accept);
     expect(r.status).toBe(status);

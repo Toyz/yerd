@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import { HttpError } from "../respond/response.js";
+import { BadRequest, PayloadTooLarge, YerdError } from "../respond/errors.js";
 import { isSentFile } from "../decorators/parse.js";
 
 /**
@@ -65,7 +65,7 @@ function parseLine(line: string, lineNumber: number): unknown {
   try {
     return JSON.parse(line);
   } catch {
-    throw new HttpError(400, `Line ${lineNumber} is not valid JSON`);
+    throw new BadRequest(`Line ${lineNumber} is not valid JSON`);
   }
 }
 
@@ -73,7 +73,7 @@ function parseLine(line: string, lineNumber: number): unknown {
  * Stream a newline-delimited JSON request body, one parsed value per line,
  * as it arrives. Blank lines are skipped. No whole-body limit; each line is
  * capped at `maxLine` bytes (413 beyond that), and a line that isn't JSON is
- * a 400 naming it (both thrown as HttpError). Inside a yerd route use
+ * a 400 naming it (both thrown as YerdError). Inside a yerd route use
  * ctx.lines() or `@args(ndjsonBody(Dto))`; this is for a plain node:http
  * handler.
  *
@@ -100,11 +100,11 @@ export async function* readNdjson(req: IncomingMessage, maxLine = DEFAULT_BODY_L
       carry = carry.slice(newline + 1);
       lineNumber++;
       if (line.length * 3 > maxLine && Buffer.byteLength(line) > maxLine) {
-        throw new HttpError(413, `Line ${lineNumber} is longer than ${maxLine} bytes`);
+        throw new PayloadTooLarge(`Line ${lineNumber} is longer than ${maxLine} bytes`);
       }
       if (line.trim() !== "") yield parseLine(line, lineNumber);
     }
-    if (Buffer.byteLength(carry) > maxLine) throw new HttpError(413, `Line ${lineNumber + 1} is longer than ${maxLine} bytes`);
+    if (Buffer.byteLength(carry) > maxLine) throw new PayloadTooLarge(`Line ${lineNumber + 1} is longer than ${maxLine} bytes`);
   }
   carry += decoder.decode();
   if (carry.trim() !== "") yield parseLine(carry, lineNumber + 1);
@@ -124,7 +124,7 @@ function hasBody(req: IncomingMessage): boolean {
 async function readAll(req: IncomingMessage, limit: number): Promise<Buffer<ArrayBuffer>> {
   const declared = Number(req.headers["content-length"]);
   if (Number.isFinite(declared) && declared > limit) {
-    throw new HttpError(413, `Request body is larger than ${limit} bytes`);
+    throw new PayloadTooLarge(`Request body is larger than ${limit} bytes`);
   }
   const chunks: Buffer[] = [];
   let size = 0;
@@ -132,13 +132,13 @@ async function readAll(req: IncomingMessage, limit: number): Promise<Buffer<Arra
     for await (const chunk of req) {
       const buffer = chunk as Buffer;
       size += buffer.byteLength;
-      if (size > limit) throw new HttpError(413, `Request body is larger than ${limit} bytes`);
+      if (size > limit) throw new PayloadTooLarge(`Request body is larger than ${limit} bytes`);
       chunks.push(buffer);
     }
   } catch (error) {
-    if (error instanceof HttpError) throw error;
+    if (error instanceof YerdError) throw error;
     // The client hung up mid-upload: theirs to retry, not a crash to log as one.
-    throw new HttpError(400, "The request body was cut off", { cause: error });
+    throw new BadRequest("The request body was cut off", { cause: error });
   }
   return Buffer.concat(chunks, size);
 }
@@ -154,7 +154,7 @@ async function parseMultipart(raw: Buffer<ArrayBuffer>, contentType: string): Pr
     // The Blob takes its own copy; don't make another on the way in.
     data = await new Response(new Blob([raw]), { headers: { "content-type": contentType } }).formData();
   } catch {
-    throw new HttpError(400, "Request body is not valid multipart/form-data");
+    throw new BadRequest("Request body is not valid multipart/form-data");
   }
   const fields: FormFields = Object.create(null);
   const files: FormFiles = Object.create(null);
@@ -209,7 +209,7 @@ export function formFields(params: URLSearchParams): FormFields {
  * Read and parse a request body by content type: JSON, NDJSON, URL-encoded or
  * multipart form, any text/* as a string, anything else as bytes. Bodies over
  * `limit` bytes (default 1 MiB) are a 413; malformed JSON is a 400 (both
- * thrown as HttpError). Inside a yerd route use ctx.body() or @body; this is
+ * thrown as YerdError). Inside a yerd route use ctx.body() or @body; this is
  * for a plain node:http handler.
  *
  * ```ts
@@ -231,7 +231,7 @@ export async function readBody(req: IncomingMessage, limit = DEFAULT_BODY_LIMIT)
       // RFC 8259 lets a parser ignore a leading byte order mark; some clients send one.
       return { kind: "json", value: JSON.parse(raw.toString("utf8").replace(/^\uFEFF/, "")) };
     } catch {
-      throw new HttpError(400, "Request body is not valid JSON");
+      throw new BadRequest("Request body is not valid JSON");
     }
   }
   if (NDJSON_TYPES.has(type)) {

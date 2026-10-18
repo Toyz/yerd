@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  BootError, HttpError, accepts, all, catches, createGuard, currentContext, del, get, head, isBot, options, post, put, res, route, varies, yerd,
+  BootError, YerdError, accepts, all, catches, createGuard, currentContext, del, get, head, isBot, options, post, put, res, route, varies, yerd,
   type ErrorPageProps, type LayoutProps, type RunningServer,
 } from "@toyz/yerd";
 import { raw, serve } from "./edge-routing-helpers.js";
@@ -56,7 +56,7 @@ class Opts {
 class Throws {
   @get sync(): string { throw new Error("boom internals"); }
   @post async rejects(): Promise<string> { throw new Error("async internals"); }
-  @put http(): string { throw new HttpError(409, "Conflict here"); }
+  @put http(): string { throw new YerdError(409, "Conflict here"); }
 }
 
 let server: RunningServer;
@@ -115,8 +115,8 @@ describe("405 and Allow", () => {
     const r = await call(path, { method });
     expect(r.status).toBe(405);
     expect(r.headers.get("allow")).toBe(allow);
-    expect(r.headers.get("content-type")).toBe("text/plain; charset=utf-8");
-    expect(await r.text()).toBe("Method Not Allowed");
+    expect(r.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(await r.json()).toEqual({ error: "Method Not Allowed", code: "method_not_allowed" });
   });
 
   it("an unknown method is a 405 too", async () => {
@@ -153,7 +153,7 @@ describe("405 and Allow", () => {
   });
 
   it("keeps Allow when app.onError answers the 405", async () => {
-    const own = await serve([OnlyGet], (app) => app.onError((e) => (e instanceof HttpError && e.status === 405 ? { nope: true } : undefined)));
+    const own = await serve([OnlyGet], (app) => app.onError((e) => (e instanceof YerdError && e.status === 405 ? { nope: true } : undefined)));
     try {
       const r = await fetch(own.url + "/only-get", { method: "DELETE" });
       expect(r.status).toBe(405);
