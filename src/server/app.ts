@@ -379,6 +379,12 @@ export class YerdApp {
         if (!paths) throw new Error(`@prerender ${def.className}: ${pattern} has params, so it needs { paths: [...] }`);
 
         for (const path of paths) {
+          // fetch() resolves dot segments (literal or %2e) and the file is written
+          // at join(outDir, path), so "/blog/../../x" would render one page and
+          // write it outside the build. Paths often come from content (slugs).
+          if (!path.startsWith("/") || /[?#]/.test(path) || path.split("/").some((s) => /^(\.|%2e){1,2}$/i.test(s))) {
+            throw new Error(`@prerender ${def.className}: ${JSON.stringify(path)} isn't a plain path (it must start with "/", with no . or .. segments, query or fragment)`);
+          }
           const match = this.#router!.match(path);
           if (!match || ![...match.handlers.values()].flat().some((h) => h.def === def)) {
             throw new Error(`@prerender ${def.className}: ${path} doesn't match ${pattern}`);
