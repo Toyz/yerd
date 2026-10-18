@@ -636,22 +636,62 @@ export function yerdRuntime(
 
   /**
    * The page's action tokens were signed before the visitor's session began
-   * (or before it was rotated by signing in), so they don't match it any
-   * more: fetch the page again and morph it in, quietly. Morphing keeps
-   * focus, scroll and what's typed; no history entry, no autofocus, no
-   * notice. A navigation that starts meanwhile wins.
+   * (or before signing in rotated it), so they don't match it any more. Fetch
+   * the page again and take just its tokens: each token here is swapped for
+   * the fresh one with the same action and arguments (its signed payload,
+   * minus expiry and binding). Nothing else on the page changes, so what the
+   * action just showed (a toast, an open panel) stays. A token with no fresh
+   * counterpart keeps its old value and takes the stale path if used. Forms
+   * that came back in the action's own response were signed after the
+   * session started and are already bound.
    */
   async function rebind(): Promise<void> {
     const seq = nav;
+    let got: Fetched;
     try {
-      const got = await fetchText(location.href, { "yx-boost": "1", accept: "text/html" });
-      if (seq !== nav || !got.type.includes("text/html")) return;
-      showPage(got.text);
-      document.dispatchEvent(new CustomEvent("yx:applied", { detail: { regions: -1 } }));
+      got = await fetchText(location.href, { "yx-boost": "1", accept: "text/html" });
     } catch {
-      // Offline or the page failed: its next submit takes the stale path, as before.
+      return;
+    }
+    if (seq !== nav || !got.ok || !got.type.includes("text/html")) return;
+    const fresh = new Map<string, string[]>();
+    const doc = new DOMParser().parseFromString(got.text, "text/html");
+    for (const holder of Array.from(doc.querySelectorAll(TOKEN_HOLDERS))) {
+      const token = heldToken(holder);
+      if (!token) continue;
+      const key = tokenKey(token);
+      const list = fresh.get(key);
+      if (list) list.push(token);
+      else fresh.set(key, [token]);
+    }
+    for (const holder of Array.from(document.querySelectorAll(TOKEN_HOLDERS))) {
+      const token = heldToken(holder);
+      if (!token) continue;
+      const next = fresh.get(tokenKey(token))?.shift();
+      if (!next || next === token) continue;
+      if (holder.hasAttribute("data-yx-token")) holder.setAttribute("data-yx-token", next);
+      else {
+        holder.setAttribute("value", next);
+        (holder as HTMLInputElement).value = next;
+      }
     }
   }
+  /** Elements carrying an action token: an element action, a form's hidden _yx field, a formaction={action} button. */
+  const TOKEN_HOLDERS = '[data-yx-token], [name="_yx"]';
+  function heldToken(holder: Element): string {
+    return holder.getAttribute("data-yx-token") ?? (holder as HTMLInputElement).value ?? holder.getAttribute("value") ?? "";
+  }
+  /** What a token is for: its route class, action, arguments and holes, without its expiry or session binding. */
+  function tokenKey(token: string): string {
+    try {
+      const data = token.slice(0, token.indexOf("."));
+      const payload = JSON.parse(atob(data.replace(/-/g, "+").replace(/_/g, "/"))) as { c?: unknown; a?: unknown; p?: unknown; h?: unknown };
+      return JSON.stringify([payload.c, payload.a, payload.p, payload.h ?? null]);
+    } catch {
+      return token;
+    }
+  }
+
 
   async function submit(form: HTMLFormElement, submitter: HTMLElement | null): Promise<void> {
     const question = form.getAttribute("data-yx-confirm");
