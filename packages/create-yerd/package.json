@@ -1,6 +1,6 @@
 {
   "name": "create-yerd",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Scaffold a yerd app: npm create yerd@latest",
   "keywords": [
     "yerd",
