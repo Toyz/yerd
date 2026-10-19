@@ -2,7 +2,7 @@ import { createKey, localKey } from "../decorators/keys.js";
 import { classValue, methodFlag, methodList, type DecoratorTarget } from "../decorators/kit.js";
 import { isDecoratorContext } from "../decorators/util.js";
 import {
-  OWNER, classRegistration, currentServices, keyName,
+  OWNER, classRegistration, currentServices, keyName, requestServices,
   type Container, type Lifetime, type Registration, type ServiceKey,
 } from "./container.js";
 import { parseDuration } from "../util/duration.js";
@@ -219,7 +219,10 @@ function resolveAt<T>(owner: object, key: ServiceKey<T>, site: InjectSite, field
   if (!container) throw new Error(`Can't inject ${keyName(key)}: no yerd app is running`);
   const registration = container.registration(key);
   if (!registration) throw new Error(`No service registered for ${keyName(key)}`);
-  const scope = context?.scope;
+  // A singleton's constructor runs in a scope-less context; during a request,
+  // .scoped (and transient tracking) still belong to that request.
+  const request = context?.scope ? undefined : requestServices();
+  const scope = context?.scope ?? (request?.container === container ? request.scope : undefined);
   if (site === "scoped") {
     if (!scope) {
       throw new Error(

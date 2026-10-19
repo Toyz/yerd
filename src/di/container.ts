@@ -164,7 +164,15 @@ export function runWithServices<T>(container: Container, scope: Scope | undefine
 export function currentServices(): ServiceContext | undefined {
   // Inside a request, the request context carries its DI scope (one async
   // context for both); runWithServices() covers hooks, scripts and tests.
-  return storage.getStore() ?? (maybeContext() as { services?: ServiceContext } | undefined)?.services;
+  return storage.getStore() ?? requestServices();
+}
+
+/**
+ * The request's DI context, even where currentServices() is masked by a
+ * narrower one (a singleton's constructor runs without a scope).
+ */
+export function requestServices(): ServiceContext | undefined {
+  return (maybeContext() as { services?: ServiceContext } | undefined)?.services;
 }
 
 /**

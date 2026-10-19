@@ -90,6 +90,30 @@ describe("@inject.scoped", () => {
     expect(responses).toEqual([1, 2, 3].map((id) => ({ same: true, lines: [`order ${id}`, `paid ${id}`] })));
   });
 
+  it("resolves in a singleton's constructor when the singleton is first made during a request", async () => {
+    @scoped
+    @service
+    class AuditLog {}
+    @service
+    class Orders {
+      @inject.scoped(AuditLog) accessor audit!: AuditLog;
+      readonly first: AuditLog;
+      constructor() {
+        this.first = this.audit;
+      }
+    }
+    @route("/orders")
+    class Place {
+      @inject(Orders) accessor orders!: Orders;
+      @inject(AuditLog) accessor audit!: AuditLog;
+      @get show() {
+        return { same: this.orders.first === this.audit };
+      }
+    }
+    const app = yerd({ routes: [Place], services: [AuditLog, Orders], handleSignals: false });
+    expect(await json(app, "/orders")).toEqual({ same: true });
+  });
+
   it("throws outside a request, naming the class and field; app.scope() has a scope", async () => {
     @scoped
     @service
