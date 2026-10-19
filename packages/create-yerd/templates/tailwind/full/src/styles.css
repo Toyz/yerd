@@ -1,0 +1,49 @@
+/*
+ * Linked with <Stylesheet href="src/styles.css" />. Tailwind builds it; `vite build` hashes it.
+ * The pages keep short class names, made of utilities here; utilities work in the TSX too.
+ */
+@import "tailwindcss";
+
+@layer base {
+  body { @apply bg-stone-50 text-stone-900 antialiased dark:bg-stone-950 dark:text-stone-100; }
+  h1 { @apply mb-4 text-3xl font-bold tracking-tight; }
+  a { @apply text-sky-800 underline-offset-2 hover:underline dark:text-sky-300; }
+  input { @apply rounded-lg border border-stone-300 bg-white px-3 py-1.5 dark:border-stone-700 dark:bg-stone-900; }
+  button { @apply cursor-pointer rounded-lg bg-sky-800 px-3.5 py-1.5 font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-sky-300 dark:text-sky-950 dark:hover:bg-sky-200; }
+}
+
+@layer components {
+  .button { @apply inline-block rounded-lg bg-sky-800 px-3.5 py-1.5 font-medium text-white no-underline hover:bg-sky-700 hover:no-underline dark:bg-sky-300 dark:text-sky-950 dark:hover:bg-sky-200; }
+  button.link { @apply bg-transparent p-0 font-normal text-sky-800 underline hover:bg-transparent dark:bg-transparent dark:text-sky-300 dark:hover:bg-transparent; }
+
+  .top { @apply mx-auto flex max-w-3xl items-center gap-4 px-4 py-5; }
+  .brand { @apply mr-auto text-xl font-bold text-stone-900 no-underline hover:no-underline dark:text-stone-100; }
+  .cart-badge { @apply no-underline hover:no-underline; }
+  .badge { @apply inline-block min-w-[1.6em] rounded-full bg-sky-800 px-1.5 text-center text-white dark:bg-sky-300 dark:text-sky-950; }
+  .account { @apply flex items-center gap-2; }
+  main { @apply mx-auto max-w-3xl px-4 pb-12; }
+  .narrow { @apply max-w-md; }
+
+  .search { @apply mb-4 flex gap-2; }
+  .search input { @apply flex-1; }
+  .products { @apply grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-3; }
+  .card { @apply grid content-start gap-1 rounded-xl border border-stone-200 bg-white p-3.5 dark:border-stone-800 dark:bg-stone-900; }
+  .price { @apply tabular-nums; }
+  .sold-out, .empty, .hint, .stock { @apply text-stone-500 dark:text-stone-400; }
+  .hint { @apply mt-4; }
+
+  .product { @apply grid justify-items-start gap-2; }
+  .product h1 { @apply m-0; }
+
+  .lines { @apply grid gap-2; }
+  .lines li { @apply flex flex-wrap items-center gap-3 border-b border-stone-200 py-2.5 dark:border-stone-800; }
+  .lines li > a { @apply flex-1; }
+  .total { @apply my-3 font-bold; }
+  .summary { @apply list-disc pl-5; }
+
+  .field { @apply mb-3 grid gap-1; }
+  .field-error, .form-error { @apply text-sm text-red-700 empty:hidden dark:text-red-400; }
+  [aria-invalid="true"] { @apply border-red-700 dark:border-red-400; }
+
+  .error-page .status { @apply m-0 text-5xl font-bold text-stone-500; }
+}

@@ -1,0 +1,32 @@
+/* Linked with <Stylesheet href="src/styles.css" />; hashed by `vite build`. */
+:root {
+  --bg: #fafaf9;
+  --text: #1c1917;
+  --muted: #78716c;
+  --accent: #c2410c;
+  --accent-ink: #ffffff;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1917;
+    --text: #f5f5f4;
+    --muted: #a8a29e;
+    --accent: #fb923c;
+    --accent-ink: #1c1917;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.6 ui-sans-serif, system-ui, sans-serif; }
+main { max-width: 640px; margin: 0 auto; padding: 64px 20px; }
+h1 { font-size: 2.4rem; line-height: 1.1; margin: 0 0 16px; }
+a { color: var(--accent); }
+code { font-size: 0.9em; }
+button {
+  font: inherit; padding: 8px 18px; border: 0; border-radius: 8px;
+  background: var(--accent); color: var(--accent-ink); cursor: pointer;
+}
+#clicks { font-variant-numeric: tabular-nums; color: var(--muted); }
+.error .status { font-size: 3rem; font-weight: 700; margin: 0; color: var(--muted); }

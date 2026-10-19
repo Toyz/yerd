@@ -1,0 +1,9 @@
+# Copy to .env for `{{run_start}}`; in production, set these in the environment.
+
+# Signs action tokens and seals session cookies: 32 bytes or more, the same on
+# every instance. Without it, a random one, so sessions and forms break on restart.
+#   node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
+YERD_SECRET=
+
+# Log filter, e.g. info or info,yerd=debug
+# YERD_LOG=info
