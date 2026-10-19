@@ -31,7 +31,7 @@ test.beforeEach(async ({ page }, info) => {
   if (!info.title.startsWith("auth:")) await signUp(page);
 });
 
-test("adds, toggles and filters without reloading the page", async ({ page }) => {
+test("adds, toggles and filters without reloading the page", { tag: "@journey" }, async ({ page }) => {
   await page.goto("/todos");
   await expect(page).toHaveTitle("Todos · yerd todos");
   await markPage(page);
@@ -60,7 +60,7 @@ test("adds, toggles and filters without reloading the page", async ({ page }) =>
   await stillSamePage(page);
 });
 
-test("renames inline and deletes", async ({ page }) => {
+test("renames inline and deletes", { tag: "@journey" }, async ({ page }) => {
   await page.goto("/todos");
   await addTodo(page, "Typo tittle");
   await markPage(page);
@@ -78,7 +78,7 @@ test("renames inline and deletes", async ({ page }) => {
   await stillSamePage(page);
 });
 
-test("shows server validation errors next to the form", async ({ page }) => {
+test("shows server validation errors next to the form", { tag: "@journey" }, async ({ page }) => {
   await page.goto("/todos");
   await page.getByLabel("What needs doing?").fill("    ");
   await page.getByLabel("What needs doing?").press("Enter");
@@ -104,7 +104,7 @@ test("completes all, then clears completed after confirming", async ({ page }) =
   await expect(page.locator(".todo")).toHaveCount(0);
 });
 
-test("keeps the same user's other tabs in sync over SSE", async ({ page, context }) => {
+test("keeps the same user's other tabs in sync over SSE", { tag: "@journey" }, async ({ page, context }) => {
   await page.goto("/todos");
   const other = await context.newPage();
   await other.goto("/todos");
@@ -167,7 +167,7 @@ test("fits a phone screen without sideways scrolling", async ({ page }) => {
   expect(overflow).toBeLessThanOrEqual(0);
 });
 
-test("auth: signed-out visitors are sent to login and come back to where they were going", async ({ page }) => {
+test("auth: signed-out visitors are sent to login and come back to where they were going", { tag: "@journey" }, async ({ page }) => {
   const name = await signUp(page);
   await page.getByRole("button", { name: "Log out" }).click();
   await expect(page).toHaveURL(/\/login$/);

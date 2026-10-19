@@ -23,7 +23,7 @@ async function signIn(page: Page) {
   await page.getByRole("button", { name: "Sign in" }).click();
 }
 
-test("searches and filters the catalog", async ({ page }) => {
+test("searches and filters the catalog", { tag: "@journey" }, async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveTitle("Shop · Paperyard");
   await expect(page.locator(".card")).toHaveCount(8);
@@ -49,7 +49,7 @@ test("an unknown product is a 404 page inside the layout", async ({ page }) => {
   await expect(page.locator("#cart-badge")).toBeVisible();
 });
 
-test("adds to the cart, changes the quantity and removes it, without reloading", async ({ page }) => {
+test("adds to the cart, changes the quantity and removes it, without reloading", { tag: "@journey" }, async ({ page }) => {
   await page.goto("/products/2");
   await markPage(page);
   await page.getByRole("button", { name: "Add to cart" }).click();
@@ -97,7 +97,7 @@ test("product pages list what this browser looked at before", async ({ page }) =
   await expect(page.locator(".recent a")).toHaveText(["Brass ruler"]);
 });
 
-test("checks out behind a sign-in that keeps the cart, with errors under their fields", async ({ page }) => {
+test("checks out behind a sign-in that keeps the cart, with errors under their fields", { tag: "@journey" }, async ({ page }) => {
   await page.goto("/products/6");
   await page.getByRole("button", { name: "Add to cart" }).click();
   await expect(page.locator("#cart-badge .badge")).toHaveText("1");
@@ -147,7 +147,7 @@ test("checkout errors work without JavaScript too", async ({ browser }) => {
   await context.close();
 });
 
-test("stock updates live on every open product page", async ({ page, browser }) => {
+test("stock updates live on every open product page", { tag: "@journey" }, async ({ page, browser }) => {
   // A second visitor watches the brass ruler.
   const watcher = await (await browser.newContext()).newPage();
   await watcher.goto("/products/5");

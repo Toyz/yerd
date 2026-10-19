@@ -70,6 +70,7 @@
     "todo": "vite --config examples/todo/vite.config.ts",
     "todo:raw": "tsc -p tsconfig.examples.json && node dist/examples/todo/src/server.js",
     "e2e": "playwright test",
+    "e2e:all": "playwright test --config playwright.all.config.ts",
     "screenshots": "node test/e2e/screenshots.mjs",
     "tailwind": "vite --config examples/tailwind/vite.config.ts",
     "kitchen": "vite --config examples/kitchen-sink/vite.config.ts",

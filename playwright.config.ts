@@ -1,13 +1,15 @@
-import { defineConfig, type PlaywrightTestConfig } from "@playwright/test";
+import { defineConfig, devices, type PlaywrightTestConfig } from "@playwright/test";
 import { PORTS, url } from "./test/e2e/ports.js";
 
 const CI = !!process.env.CI;
 
-// The system Chrome: no browser download needed (the GitHub runners ship it).
+// Chromium is the system Chrome (no browser download needed locally; the
+// GitHub runners ship it). Firefox and WebKit are Playwright's own builds:
+// `npx playwright install firefox webkit`.
 const chrome = { channel: "chrome" };
 
 /**
- * The projects, all in Chrome: `npm run e2e`. Each example's suite
+ * The default projects, all in Chrome: `npm run e2e`. Each example's suite
  * against its Vite dev server and its production build, the runtime fixture,
  * the no-JavaScript passes and the accessibility checks.
  */
@@ -25,6 +27,35 @@ const chromium: NonNullable<PlaywrightTestConfig["projects"]> = [
   { name: "runtime", testMatch: /runtime\/.*\.spec\.ts$/, use: { ...chrome, baseURL: url(PORTS.fixture, "") } },
   { name: "nojs", testMatch: "nojs.spec.ts", use: { ...chrome, javaScriptEnabled: false } },
   { name: "a11y", testMatch: "a11y.spec.ts", use: { ...chrome } },
+];
+
+/** Firefox and WebKit for one example's critical journeys (tests tagged @journey). */
+const journeys = (browser: "firefox" | "webkit", device: string) =>
+  (
+    [
+      ["todo", PORTS.todoProd],
+      ["shop", PORTS.shopProd],
+      ["kitchen", PORTS.kitchenProd],
+    ] as const
+  ).map(([example, port]) => ({
+    name: `${browser}-${example}`,
+    testMatch: `${example}.spec.ts`,
+    grep: /@journey/,
+    use: { ...devices[device], baseURL: url(port, "") },
+  }));
+
+/**
+ * The rest of the matrix, on top of the default projects: `npm run e2e:all`
+ * (and CI, sharded). The runtime fixture and the examples' critical journeys
+ * in Firefox and WebKit, and phones (Chrome on a Pixel 7, WebKit as an iPhone 14).
+ */
+export const crossBrowser: NonNullable<PlaywrightTestConfig["projects"]> = [
+  { name: "runtime-firefox", testMatch: /runtime\/.*\.spec\.ts$/, use: { ...devices["Desktop Firefox"], baseURL: url(PORTS.fixture, "") } },
+  { name: "runtime-webkit", testMatch: /runtime\/.*\.spec\.ts$/, use: { ...devices["Desktop Safari"], baseURL: url(PORTS.fixture, "") } },
+  ...journeys("firefox", "Desktop Firefox"),
+  ...journeys("webkit", "Desktop Safari"),
+  { name: "mobile-pixel7", testMatch: "mobile.spec.ts", use: { ...devices["Pixel 7"], channel: "chrome" } },
+  { name: "mobile-iphone14", testMatch: "mobile.spec.ts", use: { ...devices["iPhone 14"] } },
 ];
 
 /** Each example in dev (Vite) and as a production build, plus the runtime fixture. */

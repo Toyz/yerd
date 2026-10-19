@@ -30,7 +30,7 @@ const svgFiles = (page: Page, names: string[]) =>
     return transfer;
   }, names);
 
-test("typeahead and the category select narrow the shelf in place", async ({ page }) => {
+test("typeahead and the category select narrow the shelf in place", { tag: "@journey" }, async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveTitle("Shop · Yerd Bazaar");
   await expect(page.locator(".product")).toHaveCount(12);
@@ -50,17 +50,20 @@ test("typeahead and the category select narrow the shelf in place", async ({ pag
   await stillSamePage(page);
 });
 
-test("infinite scroll appends the next page when the sentinel shows up", async ({ page }) => {
+test("infinite scroll appends the next page when the sentinel shows up", { tag: "@journey" }, async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".product")).toHaveCount(12);
   await page.locator("#more").scrollIntoViewIfNeeded();
   await expect(page.locator(".product")).toHaveCount(24);
   await page.locator("#more").scrollIntoViewIfNeeded();
   await expect(page.locator(".product")).toHaveCount(36);
-  await expect(page.locator(".product-name").nth(12)).toHaveText("Classic Pink Flamingo");
+  // The second page starts where the catalog's second page does. Asked of the API rather than
+  // written down: other tests (and other projects) add products to the front of this shared server's catalog.
+  const second = (await (await page.request.get("/api/products?page=2&limit=12")).json()) as { products: Array<{ name: string }> };
+  await expect(page.locator(".product-name").nth(12)).toHaveText(second.products[0]!.name);
 });
 
-test("adds to the cart and changes the quantity", async ({ page }) => {
+test("adds to the cart and changes the quantity", { tag: "@journey" }, async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#cart-badge .badge")).toHaveText("0");
   const first = page.locator(".product").first();
@@ -99,7 +102,7 @@ async function placeOrder(page: Page) {
   return page.url();
 }
 
-test("checks out behind a login and lands on the order, with a flash notice", async ({ page }) => {
+test("checks out behind a login and lands on the order, with a flash notice", { tag: "@journey" }, async ({ page }) => {
   await placeOrder(page);
   await expect(page.locator(".receipt h1")).toHaveText(/Order Y-\d+/);
   await expect(page.locator(".notice")).toContainText("placed");
@@ -315,7 +318,7 @@ test("the back office: guests go to login, customers get a 403, staff get in", a
   await expect(page.locator("#pulse .stat-value")).toBeVisible();
 });
 
-test("kanban: drag a card to another column, then into the bin", async ({ page }) => {
+test("kanban: drag a card to another column, then into the bin", { tag: "@journey" }, async ({ page, browserName }) => {
   await ada(page, "/admin/board");
   const title = `Polish the googly eyes ${Date.now().toString(36)}`;
   await page.getByPlaceholder("What needs doing around the shop?").fill(title);
@@ -328,9 +331,24 @@ test("kanban: drag a card to another column, then into the bin", async ({ page }
   await expect(page.locator('.column[data-status="done"] .card', { hasText: title })).toBeVisible();
   await expect(page.locator('.column[data-status="todo"] .card', { hasText: title })).toHaveCount(0);
 
-  page.once("dialog", (dialog) => dialog.accept());
+  if (browserName === "firefox") {
+    // Playwright's Firefox can't finish a drag while the drop opens a dialog (the mouse-up
+    // never returns), so answer the bin's data-yx-confirm in the page and check its question.
+    await page.evaluate(() => {
+      window.confirm = (question?: string) => {
+        document.body.dataset.asked = question ?? "";
+        return true;
+      };
+    });
+  } else {
+    page.once("dialog", (dialog) => {
+      expect(dialog.message()).toBe("Throw this card away?");
+      void dialog.accept();
+    });
+  }
   await page.locator(".card", { hasText: title }).dragTo(page.locator(".bin"));
   await expect(page.locator(".card", { hasText: title })).toHaveCount(0);
+  if (browserName === "firefox") await expect(page.locator("body")).toHaveAttribute("data-asked", "Throw this card away?");
 });
 
 test("file drops: a photo zone uploads at once, a dropTo zone stages for the form", async ({ page }) => {
