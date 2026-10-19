@@ -16,6 +16,10 @@
  * @every method, say) isn't tracked at all: the caller owns its disposal.
  * Factory registrations are tracked like classes; `value()` registrations
  * are never disposed by yerd.
+ *
+ * An injection site can ask for another lifetime than the registration's
+ * (@inject.scoped, .transient, .instance): the registration's create() is
+ * then called with that lifetime, and the instance tracked for it.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -99,7 +103,17 @@ export interface Registration {
   lifetime: Lifetime;
   /** The class, when the registration is a class (used for metadata checks). */
   impl?: Function;
-  create(container: Container): unknown;
+  /**
+   * Set by `value()`: one existing object, so an injection site can't ask
+   * for its own copy (@inject.scoped, .transient, .instance refuse it at boot).
+   */
+  value?: true;
+  /**
+   * Make an instance. `lifetime` is passed when an injection site re-scopes
+   * the registration (@inject.scoped and friends): a create that tracks its
+   * instance for disposal should track it for that lifetime instead of its own.
+   */
+  create(container: Container, lifetime?: Lifetime): unknown;
 }
 
 /**
@@ -108,7 +122,7 @@ export interface Registration {
  * @service classes and the class forms of app.services() both become.
  */
 export function classRegistration(key: ServiceKey, cls: new () => unknown, lifetime: Lifetime): Registration {
-  return { key, lifetime, impl: cls, create: (container) => container.construct(cls, currentServices()?.scope, lifetime) };
+  return { key, lifetime, impl: cls, create: (container, as) => container.construct(cls, currentServices()?.scope, as ?? lifetime) };
 }
 
 /** The container an instance was created by, so its @inject fields resolve there. */
@@ -213,12 +227,19 @@ export class Scope {
   // Made on first use: most requests resolve nothing scoped, and a Map is the
   // largest thing a request's scope would otherwise allocate.
   #instances: Map<ServiceKey, unknown> | undefined = undefined;
+  /** Per-request instances of keys registered with another lifetime, for @inject.scoped. */
+  #rescoped: Map<ServiceKey, unknown> | undefined = undefined;
   /** Disposable instances owned by this scope, in creation order. */
   readonly created: unknown[] = [];
 
   /** Scoped instances by key, created on first resolution. */
   get instances(): Map<ServiceKey, unknown> {
     return (this.#instances ??= new Map());
+  }
+
+  /** @internal This scope's own instances of keys registered as singleton or transient, made for @inject.scoped. */
+  rescoped(): Map<ServiceKey, unknown> {
+    return (this.#rescoped ??= new Map());
   }
 
   /**
@@ -229,7 +250,11 @@ export class Scope {
    * ```
    */
   get isEmpty(): boolean {
-    return (this.#instances === undefined || this.#instances.size === 0) && this.created.length === 0;
+    return (
+      (this.#instances === undefined || this.#instances.size === 0) &&
+      (this.#rescoped === undefined || this.#rescoped.size === 0) &&
+      this.created.length === 0
+    );
   }
 
   /**
@@ -245,6 +270,7 @@ export class Scope {
    */
   async dispose(): Promise<void> {
     this.#instances?.clear();
+    this.#rescoped?.clear();
     await disposeAll(this.created);
   }
 }
@@ -413,6 +439,43 @@ export class Container {
   }
 
   /**
+   * @internal Resolve a registration with the lifetime an injection site
+   * asks for instead of its own (@inject.scoped, .transient, .instance).
+   * "scoped": one per `scope`, shared by every scoped read of the key in it;
+   * a key registered scoped is just its usual scoped instance. "transient": a
+   * new instance, disposed with `holder` (when given and tracked) or `scope`,
+   * otherwise the caller's. A value() registration can't be re-scoped.
+   */
+  resolveAs(registration: Registration, lifetime: "scoped" | "transient", scope: Scope | undefined, holder?: object): unknown {
+    const key = registration.key;
+    if (registration.value) {
+      throw new Error(`${keyName(key)} is registered with value(): one existing object, which can't be made per ${lifetime === "scoped" ? "request" : "read or holder"}`);
+    }
+    if (lifetime === "scoped") {
+      if (!scope) throw new Error(`${keyName(key)} was asked for per request, outside a request`);
+      if (registration.lifetime === "scoped") return this.resolveRegistration(registration, scope);
+      const rescoped = scope.rescoped();
+      if (rescoped.has(key)) return rescoped.get(key);
+      const instance = this.#createAs(registration, "scoped", { container: this, scope });
+      rescoped.set(key, instance);
+      return instance;
+    }
+    const tracker = holder && TRACKER.has(holder) ? TRACKER.from(holder)! : scope ? scope.created : null;
+    return this.#createAs(registration, "transient", { container: this, scope, tracker });
+  }
+
+  /**
+   * #create() for a lifetime other than the registration's own. The result
+   * is adopted for that lifetime too, in case create() didn't track it
+   * (a hand-written register() whose create ignores the lifetime it's given).
+   */
+  #createAs(registration: Registration, lifetime: Lifetime, services: ServiceContext): unknown {
+    return this.#creating(registration.key, () =>
+      storage.run(services, () => this.adopt(registration.create(this, lifetime), services.scope, lifetime)),
+    );
+  }
+
+  /**
    * Run a registration's create() with `services` as the current services.
    * A method of its own: closures inline in resolveRegistration() would have
    * V8 allocate their context on every resolution, cached ones included.
@@ -522,7 +585,7 @@ export class ServiceCollection {
   value<T>(key: ServiceKey<T>, value: T): this {
     // Marked as tracked by nobody, so a factory returning it doesn't adopt it either.
     if (typeof value === "object" && value !== null && !isTracked(value)) markTracked(value, null);
-    this.add({ key, lifetime: "singleton", create: () => value });
+    this.add({ key, lifetime: "singleton", value: true, create: () => value });
     return this;
   }
 
@@ -538,7 +601,7 @@ export class ServiceCollection {
       this.add(classRegistration(key, target as new () => T, lifetime));
     } else {
       const factory = target as (container: Container) => T;
-      this.add({ key, lifetime, create: (container) => container.adopt(factory(container), currentServices()?.scope, lifetime) });
+      this.add({ key, lifetime, create: (container, as) => container.adopt(factory(container), currentServices()?.scope, as ?? lifetime) });
     }
     return this;
   }
