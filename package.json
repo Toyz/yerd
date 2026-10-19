@@ -79,7 +79,8 @@
     "shop:build": "vite build --config examples/shop/vite.config.ts",
     "shop:start": "node examples/shop/dist/server/server.js",
     "bench": "tsc -p tsconfig.bench.json && node bench/run.mjs",
-    "prepublishOnly": "npm run build && npm run check && npm test"
+    "prepublishOnly": "npm run build && npm run check && npm test",
+    "version": "node packages/create-yerd/scripts/sync-version.js && git add packages/create-yerd/package.json"
   },
   "peerDependencies": {
     "vite": "^8.0.0",

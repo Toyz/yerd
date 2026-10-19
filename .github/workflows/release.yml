@@ -3,8 +3,10 @@ name: release
 # Publishes to npm when a version tag is pushed (`npm version patch && git push --follow-tags`).
 # Uses npm trusted publishing: GitHub's OIDC token proves which repo and
 # workflow is publishing, so no npm token is stored anywhere, and npm attaches
-# a provenance attestation to the package. Configure once on npmjs.com:
+# a provenance attestation to the package. Configure once on npmjs.com, for
+# both @toyz/yerd and create-yerd:
 # package settings -> Trusted publisher -> GitHub Actions -> Toyz / yerd / release.yml.
+# create-yerd (packages/create-yerd) shares yerd's version and goes out after it.
 
 on:
   push:
@@ -56,3 +58,48 @@ jobs:
       # Verbose: on failure the OIDC exchange says why (npm otherwise just reports E404).
       - if: steps.published.outputs.skip != 'true'
         run: npm publish --access public --loglevel verbose
+
+  # The scaffolder, at the same version, once yerd is out: `npm create yerd@latest`
+  # then writes a range npm can already serve.
+  create-yerd:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm install -g npm@latest
+      - name: Tag matches create-yerd's version
+        run: |
+          version="v$(node -p "require('./packages/create-yerd/package.json').version")"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match packages/create-yerd/package.json version $version" >&2
+            exit 1
+          fi
+      - name: Already published?
+        id: published
+        run: |
+          version="$(node -p "require('./packages/create-yerd/package.json').version")"
+          if npm view "create-yerd@$version" version >/dev/null 2>&1; then
+            echo "create-yerd@$version is already on npm; nothing to publish"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.published.outputs.skip != 'true'
+        run: npm ci
+      # The integration test generates every template against this build.
+      - if: steps.published.outputs.skip != 'true'
+        run: npm run build
+      - if: steps.published.outputs.skip != 'true'
+        run: npm run check
+        working-directory: packages/create-yerd
+      - if: steps.published.outputs.skip != 'true'
+        run: npm test
+        working-directory: packages/create-yerd
+        env:
+          CREATE_YERD_INTEGRATION: "1"
+      - if: steps.published.outputs.skip != 'true'
+        run: npm publish --access public --loglevel verbose
+        working-directory: packages/create-yerd

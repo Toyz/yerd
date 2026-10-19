@@ -1,0 +1,35 @@
+name: create-yerd
+
+# The scaffolder (packages/create-yerd): its unit tests, then every template
+# generated against this commit's yerd, installed, type-checked, tested, built
+# and served. The templates' dev dependencies match the root's, so the npm
+# cache keyed on the root lockfile covers most of the installs.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  scaffold:
+    name: create-yerd (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [24, 26]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      # The generated apps install a tarball packed from this build.
+      - run: npm run build
+      - run: npm run check
+        working-directory: packages/create-yerd
+      - run: npm test
+        working-directory: packages/create-yerd
+        env:
+          CREATE_YERD_INTEGRATION: "1"
