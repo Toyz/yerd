@@ -17,6 +17,10 @@ const chromium: NonNullable<PlaywrightTestConfig["projects"]> = [
   { name: "kitchen-prod", testMatch: "kitchen.spec.ts", use: { ...chrome, baseURL: url(PORTS.kitchenProd, "") } },
   { name: "shop-dev", testMatch: "shop.spec.ts", use: { ...chrome, baseURL: url(PORTS.shopDev, "") } },
   { name: "shop-prod", testMatch: "shop.spec.ts", use: { ...chrome, baseURL: url(PORTS.shopProd, "") } },
+  { name: "hello-dev", testMatch: "hello.spec.ts", use: { ...chrome, baseURL: url(PORTS.helloDev, "") } },
+  { name: "hello-prod", testMatch: "hello.spec.ts", use: { ...chrome, baseURL: url(PORTS.helloProd, "") } },
+  { name: "tailwind-dev", testMatch: "tailwind.spec.ts", use: { ...chrome, baseURL: url(PORTS.tailwindDev, "") } },
+  { name: "tailwind-prod", testMatch: "tailwind.spec.ts", use: { ...chrome, baseURL: url(PORTS.tailwindProd, "") } },
   { name: "runtime", testMatch: /runtime\/.*\.spec\.ts$/, use: { ...chrome, baseURL: url(PORTS.fixture, "") } },
 ];
 
@@ -27,10 +31,13 @@ const servers: NonNullable<PlaywrightTestConfig["webServer"]> = [
       ["todo", PORTS.todoDev, PORTS.todoProd, "/about", { TODO_FILE: ":memory:" }],
       ["kitchen-sink", PORTS.kitchenDev, PORTS.kitchenProd, "/about", {}],
       ["shop", PORTS.shopDev, PORTS.shopProd, "/", {}],
+      ["hello", PORTS.helloDev, PORTS.helloProd, "/", {}],
+      ["tailwind", PORTS.tailwindDev, PORTS.tailwindProd, "/", {}],
     ] as const
   ).flatMap(([example, dev, prod, ready, env]) => [
     {
-      command: `npx vite --config examples/${example}/vite.config.ts`,
+      // --port: hello's config pins 3000; the others read PORT.
+      command: `npx vite --config examples/${example}/vite.config.ts --port ${dev}`,
       env: { ...env, PORT: String(dev) },
       url: url(dev, ready),
       reuseExistingServer: false,
