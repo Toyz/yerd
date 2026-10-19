@@ -188,8 +188,8 @@ form[aria-busy="true"] { opacity: 0.7; }
 
 /* ── cart ── */
 .cart-lines { list-style: none; padding: 0; margin: 0; }
-.cart-line { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
-.cart-name { flex: 1; font-weight: 600; }
+.cart-line { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.cart-name { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
 .qty { width: 72px; }
 .cart-line form { margin: 0; }
 .cart-total { display: flex; justify-content: flex-end; align-items: baseline; gap: 12px; margin: 12px 0 0; font-weight: 700; }

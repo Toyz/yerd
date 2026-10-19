@@ -208,8 +208,8 @@ html[aria-busy="true"] { cursor: progress; }
 @keyframes shimmer { from { background-position: 100% 50%; } to { background-position: 0 50%; } }
 
 /* ── marketing layout ── */
-.marketing { min-height: 100dvh; display: grid; grid-template-rows: auto 1fr auto; }
-.marketing header, .marketing footer { max-width: 960px; width: 100%; margin: 0 auto; padding: 20px 16px; display: flex; align-items: center; justify-content: space-between; }
+.marketing { min-height: 100dvh; display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); }
+.marketing header, .marketing footer { max-width: 960px; width: 100%; margin: 0 auto; padding: 20px 16px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
 .hero { max-width: 960px; margin: 0 auto; padding: 40px 16px; display: grid; gap: 28px; align-content: center; }
 .hero h1 { font-size: clamp(36px, 8vw, 72px); line-height: 1; letter-spacing: -0.04em; margin: 0; }
 .hero h1 em { font-style: normal; color: var(--accent); }
