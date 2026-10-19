@@ -2,9 +2,52 @@
 
 The shop starts here: install yerd and serve its first page.
 
+## Create an app
+
+yerd needs Node 24 or newer. The scaffolder writes a working app, with Vite, TypeScript and tests set up:
+
+```sh
+npm create yerd@latest my-app
+```
+
+```text
+create-yerd v0.2.2
+
++ Template: Full app
++ Add Tailwind CSS? no
++ Package manager: npm
++ Initialize a git repository? yes
++ Install dependencies? yes
+
+Scaffolding my-app (full) in /home/you/my-app
+Installing dependencies with npm...
+...
+Initialized a git repository.
+
+Next steps:
+
+  cd my-app
+  npm run dev           # http://localhost:5173
+
+  npm test              # unit tests
+  npm run build         # production build
+  npm start             # serve it, on PORT or http://localhost:3000
+```
+
+| Template | What you get |
+| --- | --- |
+| `full` | a small shop like the one these guides build: catalog, cart, sign-in, a validated form, a JSON API, unit and Playwright tests |
+| `minimal` | one page, a layout and an action |
+| `api` | JSON routes with validation and errors, no pages |
+
+- Flags answer the questions: `npm create yerd@latest my-app -- --template full --tailwind --yes`. `pnpm create yerd`, `yarn create yerd` and `bun create yerd` work too.
+- `--tailwind` adds Tailwind CSS v4 to `full` or `minimal`. Every flag is in the [create-yerd README](https://github.com/Toyz/yerd/tree/main/packages/create-yerd#options).
+
+The rest of this guide sets the same things up by hand, which is also how you add yerd to a project you already have.
+
 ## Install
 
-yerd needs Node 24 or newer. Vite and esbuild are only for the Vite plugin, the easiest way to run and build an app.
+Vite and esbuild are only for the Vite plugin, the easiest way to run and build an app.
 
 ```sh
 npm install @toyz/yerd

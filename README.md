@@ -49,13 +49,26 @@ iterable for a stream, JSX for a page, `res()` / `redirect()` for full control.
 
 ## Install
 
+Start a new app (Node 24+):
+
+```sh
+npm create yerd@latest my-app
+```
+
+It asks for a template (`full`: a small shop with sign-in, a cart, forms,
+an API and tests; `minimal`: one page; `api`: JSON only), Tailwind, the
+package manager, git and installing; flags skip the questions. See
+[create-yerd](https://github.com/Toyz/yerd/tree/main/packages/create-yerd#readme).
+
+Or add it to a project by hand:
+
 ```sh
 npm install @toyz/yerd
 npm install -D typescript vite esbuild   # vite + esbuild only for @toyz/yerd/vite
 ```
 
 `tsconfig.json`: `"jsx": "react-jsx"`, `"jsxImportSource": "@toyz/yerd"`,
-`"target": "ES2022"` or later. Node 24+.
+`"target": "ES2022"` or later.
 
 With Vite:
 
