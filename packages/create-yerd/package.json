@@ -1,0 +1,44 @@
+{
+  "name": "create-yerd",
+  "version": "0.2.2",
+  "description": "Scaffold a yerd app: npm create yerd@latest",
+  "keywords": [
+    "yerd",
+    "create",
+    "scaffold",
+    "template",
+    "typescript",
+    "tsx",
+    "ssr"
+  ],
+  "type": "module",
+  "license": "MIT",
+  "author": "toyz",
+  "homepage": "https://github.com/Toyz/yerd/tree/main/packages/create-yerd#readme",
+  "bugs": {
+    "url": "https://github.com/Toyz/yerd/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Toyz/yerd.git",
+    "directory": "packages/create-yerd"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "create-yerd": "bin/create-yerd.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "templates",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "tsc -p .",
+    "test": "node --test test/*.test.js",
+    "test:integration": "CREATE_YERD_INTEGRATION=1 node --test test/integration.test.js"
+  }
+}
