@@ -8,7 +8,8 @@ const chrome = { channel: "chrome" };
 
 /**
  * The projects, all in Chrome: `npm run e2e`. Each example's suite
- * against its Vite dev server and its production build, and the runtime fixture.
+ * against its Vite dev server and its production build, the runtime fixture,
+ * the no-JavaScript passes and the accessibility checks.
  */
 const chromium: NonNullable<PlaywrightTestConfig["projects"]> = [
   { name: "dev", testMatch: "todo.spec.ts", use: { ...chrome, baseURL: url(PORTS.todoDev, "") } },
@@ -22,6 +23,8 @@ const chromium: NonNullable<PlaywrightTestConfig["projects"]> = [
   { name: "tailwind-dev", testMatch: "tailwind.spec.ts", use: { ...chrome, baseURL: url(PORTS.tailwindDev, "") } },
   { name: "tailwind-prod", testMatch: "tailwind.spec.ts", use: { ...chrome, baseURL: url(PORTS.tailwindProd, "") } },
   { name: "runtime", testMatch: /runtime\/.*\.spec\.ts$/, use: { ...chrome, baseURL: url(PORTS.fixture, "") } },
+  { name: "nojs", testMatch: "nojs.spec.ts", use: { ...chrome, javaScriptEnabled: false } },
+  { name: "a11y", testMatch: "a11y.spec.ts", use: { ...chrome } },
 ];
 
 /** Each example in dev (Vite) and as a production build, plus the runtime fixture. */
