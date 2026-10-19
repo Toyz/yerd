@@ -2,6 +2,7 @@ import { errorForStatus, PayloadTooLarge, UnsupportedMediaType, ValidationFailed
 import { createAccessor, type AccessorDecorator, type AccessorOptions, type Resolves } from "./kit.js";
 import type { YerdContext } from "../server/context.js";
 import { withFiles, type FormFields, type ParsedBody } from "../server/body.js";
+import { RequestContext } from "../server/request-context.js";
 import { dto, type DtoClass } from "./dto.js";
 import { fileProblem, isSentFile, parseBool, parseInteger, parseNumber, Rejection, runPipe, steps, type Validator } from "./parse.js";
 import { shapeSession, type Session, type SessionApi, type SessionShape } from "../session/session.js";
@@ -255,6 +256,12 @@ function settle(kind: string, name: string, raw: string | undefined, pipeline: P
   return raw === undefined ? missing(kind, name, pipeline) : resolveField(kind, name, raw, pipeline);
 }
 
+// Its own function: an arrow function inline in the accessor below would have
+// V8 allocate a context for it on every read, async or not.
+function settleAfter(raw: Promise<string | undefined>, kind: string, name: string, pipeline: Pipeline): Promise<unknown> {
+  return raw.then((value) => settle(kind, name, value, pipeline));
+}
+
 /**
  * The accessor behind @param, @query, @header, @cookie and @field: read one
  * named string from the request (undefined when it wasn't sent), then run the
@@ -267,7 +274,7 @@ function stringField(
 ): (name: string, options: object | undefined) => any {
   const accessor = createAccessor<unknown, [name: string, pipeline: Pipeline]>((ctx, name, pipeline) => {
     const raw = read(ctx, name);
-    return raw instanceof Promise ? raw.then((value) => settle(kind, name, value, pipeline)) : settle(kind, name, raw, pipeline);
+    return raw instanceof Promise ? settleAfter(raw, kind, name, pipeline) : settle(kind, name, raw, pipeline);
   }, options);
   return (name, options) => accessor(name, pipelineOf(options as AnyOptions | undefined));
 }
@@ -310,7 +317,11 @@ export function param<const O extends FieldOptions<O> = {}>(
  */
 export const params = createAccessor((ctx): Record<string, string> => ({ ...ctx.params }), { name: "params" });
 
-const queryField = stringField("query parameter", (ctx, name) => ctx.query.get(name) ?? undefined, { name: "query" });
+const queryField = stringField(
+  "query parameter",
+  (ctx, name) => (ctx instanceof RequestContext ? ctx.queryValue(name) : (ctx.query.get(name) ?? undefined)),
+  { name: "query" },
+);
 
 /**
  * First value of a query string parameter. Missing means the field's

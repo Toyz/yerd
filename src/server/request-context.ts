@@ -21,6 +21,9 @@ import { REQUEST_SPAN, newSpanId, type Span } from "../log/span.js";
 import { BadRequest } from "../respond/errors.js";
 import { abortOnClose, forwarded, mergeVary, requestIdFrom, requestIsHttps } from "./http.js";
 
+/** A query string URLSearchParams would read as written: no percent-escapes, no `+`, no lone surrogates. */
+const PLAIN_QUERY = /^[^%+\ud800-\udfff]*$/;
+
 export interface RequestEnv {
   secrets: readonly string[];
   bodyLimit: number;
@@ -135,6 +138,29 @@ export class RequestContext implements YerdContext {
     return (this.#query ??= new URLSearchParams(this.#search));
   }
 
+  /**
+   * `query.get(name) ?? undefined`, for @query. A query string without
+   * percent-escapes or `+` decodes to itself, so it's read in place, without
+   * building the URLSearchParams (and its list of every pair) per request.
+   */
+  queryValue(name: string): string | undefined {
+    this.#noRequestData("the query string");
+    const search = this.#search;
+    if (this.#query || !PLAIN_QUERY.test(search)) return this.query.get(name) ?? undefined;
+    // As URLSearchParams reads it: one leading "?" dropped, pairs split on
+    // "&" (empty ones skipped), a name up to the first "=", no "=" an empty value.
+    let at = search.charCodeAt(0) === 63 ? 1 : 0;
+    while (at < search.length) {
+      let end = search.indexOf("&", at);
+      if (end === -1) end = search.length;
+      const eq = search.indexOf("=", at);
+      const nameEnd = eq === -1 || eq > end ? end : eq;
+      if (end > at && nameEnd - at === name.length && search.startsWith(name, at)) return nameEnd === end ? "" : search.slice(eq + 1, end);
+      at = end + 1;
+    }
+    return undefined;
+  }
+
   get headers(): IncomingHttpHeaders {
     this.#noRequestData("headers");
     return this.req.headers;
@@ -208,6 +234,12 @@ export class RequestContext implements YerdContext {
       this.#session = loaded;
       return undefined;
     }
+    return this.#keepSession(loaded);
+  }
+
+  // Its own method: the arrow functions inline in readsUpFront(), which runs
+  // for every routed request, would have V8 allocate a context on each call.
+  #keepSession(loaded: Promise<LoadedSession>): Promise<void> {
     return loaded.then(
       (session) => {
         this.#session = session;

@@ -171,10 +171,17 @@ function disposerOf(value: unknown): (() => unknown) | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const v = value as Record<symbol, unknown>;
   const asyncDispose = v[Symbol.asyncDispose];
-  if (typeof asyncDispose === "function") return () => asyncDispose.call(value);
+  if (typeof asyncDispose === "function") return boundTo(asyncDispose, value);
   const dispose = v[Symbol.dispose];
-  if (typeof dispose === "function") return () => dispose.call(value);
+  if (typeof dispose === "function") return boundTo(dispose, value);
   return undefined;
+}
+
+// A function of its own: closures inline in disposerOf() would have V8
+// allocate their context on every call, and adopt() calls it for every
+// instance it tracks (a route per request), disposable or not.
+function boundTo(fn: Function, value: object): () => unknown {
+  return () => fn.call(value);
 }
 
 async function disposeAll(created: unknown[]): Promise<void> {
@@ -203,10 +210,16 @@ async function disposeAll(created: unknown[]): Promise<void> {
  * ```
  */
 export class Scope {
-  /** Scoped instances by key, created on first resolution. */
-  readonly instances = new Map<ServiceKey, unknown>();
+  // Made on first use: most requests resolve nothing scoped, and a Map is the
+  // largest thing a request's scope would otherwise allocate.
+  #instances: Map<ServiceKey, unknown> | undefined = undefined;
   /** Disposable instances owned by this scope, in creation order. */
   readonly created: unknown[] = [];
+
+  /** Scoped instances by key, created on first resolution. */
+  get instances(): Map<ServiceKey, unknown> {
+    return (this.#instances ??= new Map());
+  }
 
   /**
    * Nothing was resolved in this scope (the common case): disposing would be a no-op.
@@ -216,7 +229,7 @@ export class Scope {
    * ```
    */
   get isEmpty(): boolean {
-    return this.instances.size === 0 && this.created.length === 0;
+    return (this.#instances === undefined || this.#instances.size === 0) && this.created.length === 0;
   }
 
   /**
@@ -231,7 +244,7 @@ export class Scope {
    * ```
    */
   async dispose(): Promise<void> {
-    this.instances.clear();
+    this.#instances?.clear();
     await disposeAll(this.created);
   }
 }
@@ -377,7 +390,7 @@ export class Container {
     const key = registration.key;
     if (registration.lifetime === "singleton") {
       if (this.#singletons.has(key)) return this.#singletons.get(key);
-      const instance = this.#creating(key, () => runWithServices(this, undefined, () => registration.create(this)));
+      const instance = this.#create(registration, { container: this, scope: undefined });
       this.#singletons.set(key, instance);
       return instance;
     }
@@ -390,13 +403,22 @@ export class Container {
         );
       }
       if (scope.instances.has(key)) return scope.instances.get(key);
-      const instance = this.#creating(key, () => runWithServices(this, scope, () => registration.create(this)));
+      const instance = this.#create(registration, { container: this, scope });
       scope.instances.set(key, instance);
       return instance;
     }
 
     const tracker = holder && TRACKER.has(holder) ? TRACKER.from(holder)! : scope ? scope.created : null;
-    return this.#creating(key, () => storage.run({ container: this, scope, tracker }, () => registration.create(this)));
+    return this.#create(registration, { container: this, scope, tracker });
+  }
+
+  /**
+   * Run a registration's create() with `services` as the current services.
+   * A method of its own: closures inline in resolveRegistration() would have
+   * V8 allocate their context on every resolution, cached ones included.
+   */
+  #create(registration: Registration, services: ServiceContext): unknown {
+    return this.#creating(registration.key, () => storage.run(services, () => registration.create(this)));
   }
 
   /**

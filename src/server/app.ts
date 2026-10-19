@@ -1497,12 +1497,30 @@ export class YerdApp {
     // async frame of its own in front of it. handle must only ever reject, never throw.
     if (this.#running && !requestSpansOn(this.#log!)) {
       try {
-        return this.#serve(req, res, next);
+        return this.#serve(req, res, next, false)!;
       } catch (error) {
         return Promise.reject(error);
       }
     }
     return this.#handleSpanned(req, res, next);
+  };
+
+  /**
+   * The request listener of listen()'s server: handle(), with failures that
+   * escape the pipeline answered here (logged, a bare 500, or the connection
+   * cut once headers are out) instead of rejected. A routed request's #answer
+   * answers its own (see #serve), so nothing waits on it: a .catch() per
+   * request would cost a promise reaction and a turn of the microtask queue.
+   */
+  #listener = (req: IncomingMessage, res: ServerResponse): void => {
+    let pending: Promise<void> | undefined;
+    try {
+      pending = this.#running && !requestSpansOn(this.#log!) ? this.#serve(req, res, undefined, true) : this.#handleSpanned(req, res, undefined);
+    } catch (error) {
+      unhandledFailure(error, res);
+      return;
+    }
+    pending?.catch((error: unknown) => unhandledFailure(error, res));
   };
 
   /** handle() before the app has started, or with request logging on: the request's root span around #serve. */
@@ -1519,11 +1537,11 @@ export class YerdApp {
     // The request's root span: request id, trace context, and on the way
     // out the access log line. Nothing is created when request logging is off.
     const span = startRequestSpan(this.#log!, req, req.method ?? "GET", splitTarget(req.url ?? "/").path);
-    if (!span) return this.#serve(req, res, next);
+    if (!span) return this.#serve(req, res, next, false);
     (req as unknown as Record<symbol, unknown>)[REQUEST_SPAN] = span;
     res.setHeader("x-request-id", span.id);
     try {
-      await this.#serve(req, res, next);
+      await this.#serve(req, res, next, false);
     } finally {
       endRequestSpan(this.#log!, span, res.statusCode);
     }
@@ -1535,8 +1553,11 @@ export class YerdApp {
    * request and a suspended frame waiting on #answer's). Everything else
    * (yerd's own endpoints, absolute-form targets, the sitemap, prerendered and
    * static files, unmatched paths) goes through #serveOther.
+   *
+   * `answers` (the #listener's requests): a routed request's failures are
+   * answered by #answer itself, and there's no promise to hand back for it.
    */
-  #serve(req: IncomingMessage, res: ServerResponse, next: Next | undefined): Promise<void> {
+  #serve(req: IncomingMessage, res: ServerResponse, next: Next | undefined, answers: boolean): Promise<void> | undefined {
     const rawTarget = req.url ?? "/";
     if (!rawTarget.startsWith("/")) return this.#serveOther(req, res, next);
     const method = (req.method ?? "GET").toUpperCase() as Verb;
@@ -1547,7 +1568,7 @@ export class YerdApp {
     }
     const match = this.#router!.match(path);
     if (!match) return this.#serveOther(req, res, next);
-    return this.#route(req, res, method, target, match);
+    return this.#route(req, res, method, target, match, answers);
   }
 
   /** Built-in endpoints, prerendered files and static mounts, then routing. */
@@ -1618,11 +1639,15 @@ export class YerdApp {
       if (next) return next();
       return this.#sendError(new NotFound(), req, res, target, method);
     }
-    return this.#route(req, res, method, target, match);
+    return this.#route(req, res, method, target, match, false);
   }
 
-  /** A matched request: refused if cross-site, else resolved to a handler and answered in its own context. */
-  #route(req: IncomingMessage, res: ServerResponse, method: Verb, target: { path: string; search: string }, match: Match<RouteGroup>): Promise<void> {
+  /**
+   * A matched request: refused if cross-site, else resolved to a handler and
+   * answered in its own context. Undefined when `answers` (see #serve) and
+   * #answer took the request.
+   */
+  #route(req: IncomingMessage, res: ServerResponse, method: Verb, target: { path: string; search: string }, match: Match<RouteGroup>, answers: boolean): Promise<void> | undefined {
     if (this.#options.csrf !== false && UNSAFE_METHODS.has(method)) {
       const refused = crossSiteReason(req, this.#trustedOrigins, this.#options.trustProxy ?? false);
       if (refused) return this.#sendError(new Forbidden(refused), req, res, target, method, { refused: true });
@@ -1635,7 +1660,8 @@ export class YerdApp {
     const prerendering = this.#prerenderToken !== undefined && req.headers["x-yerd-prerender"] === this.#prerenderToken;
     const context = new RequestContext({ req, res, target, method, params: match.params, route: base.route, meta: { ...base.meta }, prerendering, scope: new Scope(), env: this.#env! });
     // One async context for the whole request and its DI scope (currentServices() reads context.services).
-    return runWithContext(context, () => this.#answer(context, routed, base));
+    const answering = runWithContext(context, () => this.#answer(context, routed, base, answers));
+    return answers ? undefined : answering;
   }
 
   /**
@@ -1646,57 +1672,65 @@ export class YerdApp {
    * awaits only those: a request whose guards, handler and response are all
    * synchronous goes through without suspending at all. (Awaiting a plain
    * value still suspends the frame and takes a turn of the microtask queue.)
+   * With `answers`, a failure nothing else handled is answered here rather
+   * than rejected (see #listener).
    */
-  async #answer(context: RequestContext, routed: Routed, base: Handler): Promise<void> {
+  async #answer(context: RequestContext, routed: Routed, base: Handler, answers: boolean): Promise<void> {
     try {
-      let out: Outgoing;
-      let failed = false;
-      // A crash (not a YerdError) skips the session commit, so a half-done
-      // login or update doesn't stick.
-      let crashed = false;
       try {
-        // The session opens on first use, synchronously. A store that may answer
-        // asynchronously can't be read then, so its read starts here, the moment
-        // the route is known (a `session: false` route never starts it), and
-        // middleware waits for it. Nothing to wait for otherwise.
-        const reading = context.readsUpFront();
-        if (reading) await reading;
-        const ran = this.#middleware.length > 0 ? this.#runMiddleware(context, routed) : this.#run(context, routed);
-        out = ran instanceof Promise ? await ran : ran;
-        // Whichever handler answered, the response depended on what the variants' tests read.
-        if (routed.group?.vary) out.headers.vary = mergeVary(out.headers.vary, routed.group.vary);
-        // Render up to the first chunk now, so an error at the top of the page
-        // (a layout, an early component) still becomes the error page.
-        const primed = this.#prime(out);
-        out = primed instanceof Promise ? await primed : primed;
-        // The handler succeeded: what it emitted goes out now (see Events).
-        this.#events!.release(context);
-      } catch (error) {
-        this.#events!.discard(context);
-        if (context.prerendering) this.#prerenderErrors.set(context.path, error instanceof Error ? error.message : String(error));
-        failed = true;
-        ({ out, crashed } = await this.#failure(error, base, context));
-      }
-      const finalized = this.#finalize(context, out, failed, !crashed);
-      out = finalized instanceof Promise ? await finalized : finalized;
-      const longLived = out.headers[LONG_LIVED] !== undefined;
-      if (longLived) this.#streams.add(context);
-      try {
-        // Only streams need the abort signal (client gone, shutdown); plain bodies skip creating one.
-        const sending = send(context.res, out, context.method === "HEAD", isStreamBody(out.body) ? context.signal : undefined);
-        if (sending) await sending;
-      } finally {
-        if (longLived) this.#streams.delete(context);
-      }
-    } finally {
-      const scope = context.services.scope;
-      if (!scope.isEmpty) {
+        let out: Outgoing;
+        let failed = false;
+        // A crash (not a YerdError) skips the session commit, so a half-done
+        // login or update doesn't stick.
+        let crashed = false;
         try {
-          await scope.dispose();
+          // The session opens on first use, synchronously. A store that may answer
+          // asynchronously can't be read then, so its read starts here, the moment
+          // the route is known (a `session: false` route never starts it), and
+          // middleware waits for it. Nothing to wait for otherwise.
+          const reading = context.readsUpFront();
+          if (reading) await reading;
+          const ran = this.#middleware.length > 0 ? this.#runMiddleware(context, routed) : this.#run(context, routed);
+          out = ran instanceof Promise ? await ran : ran;
+          // Whichever handler answered, the response depended on what the variants' tests read.
+          if (routed.group?.vary) out.headers.vary = mergeVary(out.headers.vary, routed.group.vary);
+          // Render up to the first chunk now, so an error at the top of the page
+          // (a layout, an early component) still becomes the error page.
+          const primed = this.#prime(out);
+          out = primed instanceof Promise ? await primed : primed;
+          // The handler succeeded: what it emitted goes out now (see Events).
+          this.#events!.release(context);
         } catch (error) {
-          requestLog.error("failed to dispose request services", { error });
+          this.#events!.discard(context);
+          if (context.prerendering) this.#prerenderErrors.set(context.path, error instanceof Error ? error.message : String(error));
+          failed = true;
+          ({ out, crashed } = await this.#failure(error, base, context));
+        }
+        const finalized = this.#finalize(context, out, failed, !crashed);
+        out = finalized instanceof Promise ? await finalized : finalized;
+        const longLived = out.headers[LONG_LIVED] !== undefined;
+        if (longLived) this.#streams.add(context);
+        try {
+          // Only streams need the abort signal (client gone, shutdown); plain bodies skip creating one.
+          const sending = send(context.res, out, context.method === "HEAD", isStreamBody(out.body) ? context.signal : undefined);
+          if (sending) await sending;
+        } finally {
+          if (longLived) this.#streams.delete(context);
+        }
+      } finally {
+        const scope = context.services.scope;
+        if (!scope.isEmpty) {
+          try {
+            await scope.dispose();
+          } catch (error) {
+            requestLog.error("failed to dispose request services", { error });
+          }
         }
       }
+    } catch (error) {
+      // Only the #listener's requests are answered here (see #serve); handle() rejects.
+      if (!answers) throw error;
+      unhandledFailure(error, context.res);
     }
   }
 
@@ -1741,13 +1775,21 @@ export class YerdApp {
     return this.#respond(context, chosen, group);
   }
 
+  // The functions from here to #call run for every routed request. Where one
+  // has to continue after a promise, the continuation is a method or function
+  // of its own rather than an arrow function inline: V8 allocates the context
+  // for a closure's captured variables on every call of the function it sits
+  // in, even the calls that never create it.
+
   /** Invoke the handler that serves the request and coerce its result. */
   #respond(context: RequestContext, serving: Handler, group: RouteGroup | undefined): Outgoing | Promise<Outgoing> {
-    // A closure only for a handler with @args.
-    const args = serving.args ? () => Promise.all(serving.args!.map((r) => r.resolve(context))) : undefined;
-    const invoked = this.#invoke(context, serving, serving, args);
-    if (invoked instanceof Promise) return invoked.then((result: unknown) => this.#coerceResult(context, serving, group, result));
+    const invoked = this.#invoke(context, serving, serving, serving.args ? resolverArgs(serving.args, context) : undefined);
+    if (invoked instanceof Promise) return this.#coerceAfter(invoked, context, serving, group);
     return this.#coerceResult(context, serving, group, invoked);
+  }
+
+  #coerceAfter(invoked: Promise<unknown>, context: RequestContext, serving: Handler, group: RouteGroup | undefined): Promise<Outgoing> {
+    return invoked.then((result: unknown) => this.#coerceResult(context, serving, group, result));
   }
 
   #coerceResult(context: RequestContext, serving: Handler, group: RouteGroup | undefined, invoked: unknown): Outgoing | Promise<Outgoing> {
@@ -1770,12 +1812,15 @@ export class YerdApp {
     context.route = call.route;
     if (call.runs.length > 0) {
       const blocked = this.#runGuards(call.runs, owner.layouts, context, 0);
-      if (blocked instanceof Promise) {
-        return blocked.then((out: Outgoing | undefined) => (out ? new Blocked(out) : this.#call(context, owner, call, args)));
-      }
+      if (blocked instanceof Promise) return this.#callAfter(blocked, context, owner, call, args);
       if (blocked) return new Blocked(blocked);
     }
     return this.#call(context, owner, call, args);
+  }
+
+  /** #invoke once guards that had to wait are done. */
+  #callAfter(guards: Promise<Outgoing | undefined>, context: RequestContext, owner: Handler, call: Call, args: (() => unknown[] | Promise<unknown[]>) | undefined): Promise<unknown> {
+    return guards.then((out) => (out ? new Blocked(out) : this.#call(context, owner, call, args)));
   }
 
   /** The method itself, for #invoke, once the guards let the request through. */
@@ -1785,7 +1830,7 @@ export class YerdApp {
     const fn = instance[call.method] as ((...args: unknown[]) => unknown) | undefined;
     if (typeof fn !== "function") throw new Error(`${owner.def.className}.${String(call.method)} is not a method`);
     const values = args?.();
-    if (values instanceof Promise) return values.then((resolved: unknown[]) => settled(fn.apply(instance, resolved)));
+    if (values instanceof Promise) return applyAfter(values, fn, instance);
     return settled(fn.apply(instance, values ?? (NO_ARGS as unknown[])));
   }
 
@@ -2084,13 +2129,7 @@ export class YerdApp {
    */
   async listen(port = 3000, host?: string, options: { handleSignals?: boolean } = {}): Promise<RunningServer> {
     await this.start();
-    const server = createServer((req, res) => {
-      this.handle(req, res).catch((error) => {
-        requestLog.error("unhandled error", { error });
-        if (!res.headersSent) res.writeHead(500).end();
-        else res.destroy();
-      });
-    });
+    const server = createServer(this.#listener);
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(port, host, () => resolve());
@@ -2360,6 +2399,13 @@ async function sendFile(res: ServerResponse, file: Outgoing, headOnly: boolean):
   return send(res, file, headOnly, undefined);
 }
 
+/** A failure that escaped the request pipeline: logged, then a bare 500, or the connection cut once headers are out. */
+function unhandledFailure(error: unknown, res: ServerResponse): void {
+  requestLog.error("unhandled error", { error });
+  if (!res.headersSent) res.writeHead(500).end();
+  else res.destroy();
+}
+
 /** A guard's answer in place of the handler's result (see #invoke): a class, so no result can pass for one. */
 class Blocked {
   constructor(readonly out: Outgoing) {}
@@ -2367,6 +2413,16 @@ class Blocked {
 
 /** The arguments of a handler without @args. */
 const NO_ARGS: readonly unknown[] = Object.freeze([]);
+
+/** A handler's @args, resolved for this request (see #respond). */
+function resolverArgs(resolvers: readonly Resolver[], context: RequestContext): () => Promise<unknown[]> {
+  return () => Promise.all(resolvers.map((r) => r.resolve(context)));
+}
+
+/** The method called once its arguments have resolved (see #call). */
+function applyAfter(values: Promise<unknown[]>, fn: (...args: unknown[]) => unknown, instance: object): Promise<unknown> {
+  return values.then((resolved) => settled(fn.apply(instance, resolved)));
+}
 
 /** Whether `value` is something `await` would wait on. */
 function isThenable(value: unknown): value is PromiseLike<unknown> {

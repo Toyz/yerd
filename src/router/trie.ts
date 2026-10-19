@@ -95,16 +95,25 @@ export class Router<T> {
   }
 
   match(path: string): Match<T> | null {
+    // One trailing slash is ignored, as segmentsOf() does for patterns.
+    const end = path.length > 1 && path.endsWith("/") ? path.length - 1 : path.length;
     // A static route wins over a param at the same place in the tree too, so the shortcut agrees with the walk.
-    const exact = this.#exact.get(path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path);
+    const exact = this.#exact.get(end === path.length ? path : path.slice(0, end));
     if (exact) return exact;
     const params: Record<string, string> = {};
-    const found = this.#walk(this.#root, segmentsOf(path), 0, params);
+    // "/" has no segments; otherwise they start after the leading slash.
+    const found = this.#walk(this.#root, path, end === 1 && path.charCodeAt(0) === 47 ? NO_MORE : 1, end, params);
     return found ? { handlers: found.handlers, params, pattern: found.pattern! } : null;
   }
 
-  #walk(node: Node<T>, segments: string[], i: number, params: Record<string, string>): Node<T> | null {
-    if (i === segments.length) {
+  /**
+   * Match the segments of `path` from index `start` (NO_MORE: none left) up
+   * to `end`. Walks the string by index rather than splitting it, so a
+   * request allocates only the segment strings the lookups need, not an
+   * array of all of them.
+   */
+  #walk(node: Node<T>, path: string, start: number, end: number, params: Record<string, string>): Node<T> | null {
+    if (start === NO_MORE) {
       if (node.handlers.size > 0) return node;
       // A splat can match zero remaining segments: /files/* matches /files.
       if (node.splat && node.splat.node.handlers.size > 0) {
@@ -113,16 +122,20 @@ export class Router<T> {
       }
       return null;
     }
-    const segment = segments[i]!;
+    let stop = path.indexOf("/", start);
+    if (stop === -1 || stop > end) stop = end;
+    const segment = path.slice(start, stop);
+    // After the last segment there are none left; "/a//" still ends in an empty one.
+    const next = stop < end ? stop + 1 : NO_MORE;
 
     const staticNext = node.statics.get(segment);
     if (staticNext) {
-      const found = this.#walk(staticNext, segments, i + 1, params);
+      const found = this.#walk(staticNext, path, next, end, params);
       if (found) return found;
     }
 
     if (node.param && segment !== "") {
-      const found = this.#walk(node.param.node, segments, i + 1, params);
+      const found = this.#walk(node.param.node, path, next, end, params);
       if (found) {
         params[node.param.name] = safeDecode(segment);
         return found;
@@ -130,10 +143,13 @@ export class Router<T> {
     }
 
     if (node.splat && node.splat.node.handlers.size > 0) {
-      params[node.splat.name] = segments.slice(i).map(safeDecode).join("/");
+      params[node.splat.name] = path.slice(start, end).split("/").map(safeDecode).join("/");
       return node.splat.node;
     }
 
     return null;
   }
 }
+
+/** #walk's start index when no segments are left. */
+const NO_MORE = -1;

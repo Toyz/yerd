@@ -124,6 +124,18 @@ function explicit(value: YerdResponse, inner: Outgoing): Outgoing {
   return out;
 }
 
+// The continuations are functions of their own: an arrow function inline in
+// coerce() would have V8 allocate a context for what it captures on every
+// call of coerce(), not just the calls that wait.
+
+function coerceAfter(value: Promise<unknown>, options: CoerceOptions): Promise<Outgoing> {
+  return value.then((resolved) => coerce(resolved, options));
+}
+
+function explicitAfter(value: YerdResponse, inner: Promise<Outgoing>): Promise<Outgoing> {
+  return inner.then((done) => explicit(value, done));
+}
+
 /**
  * Coerce a handler's result. A promise only when it has to wait (a promise
  * value, a negotiate() variant, an explicit response around one of those):
@@ -131,14 +143,14 @@ function explicit(value: YerdResponse, inner: Outgoing): Outgoing {
  * microtask queue.
  */
 export function coerce(value: unknown, options: CoerceOptions): Outgoing | Promise<Outgoing> {
-  if (value instanceof Promise) return value.then((resolved: unknown) => coerce(resolved, options));
+  if (value instanceof Promise) return coerceAfter(value, options);
 
   if (isNegotiated(value)) return coerceNegotiated(value, options);
 
   if (value instanceof YerdResponse) {
     if (value.body === null || value.body === undefined) return explicit(value, { status: value.status, headers: {}, body: null });
     const inner = coerce(value.body, value.layout ? { ...options, layouts: applyLayouts(options.layouts, value.layout) } : options);
-    return inner instanceof Promise ? inner.then((done) => explicit(value, done)) : explicit(value, inner);
+    return inner instanceof Promise ? explicitAfter(value, inner) : explicit(value, inner);
   }
 
   if (isBare(value)) {
