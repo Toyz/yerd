@@ -9,7 +9,9 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 
 describe("the published package", () => {
   it("ships the CLI and every template file, and nothing else", () => {
-    const [report] = JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: root, encoding: "utf8", shell: process.platform === "win32" }));
+    const output = JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: root, encoding: "utf8", shell: process.platform === "win32" }));
+    // npm 11 prints an array of reports, npm 12 an object keyed by package name.
+    const report = Array.isArray(output) ? output[0] : output["create-yerd"];
     const shipped = new Set(report.files.map((f) => f.path));
 
     /** @returns {string[]} */
