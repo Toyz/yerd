@@ -48,7 +48,7 @@ export { sse, ndjson, event, type SseEvent, type SseEventInit, type SseOptions, 
 export { Container, Scope, ServiceCollection, token, resolve, type Token, type ServiceKey, type Lifetime } from "./di/container.js";
 export {
   service, singleton, scoped, transient, inject, maybe, onBoot, onShutdown, every, hosted, parseDuration, resetServiceRegistry,
-  type ServiceOptions, type HostedService, type EveryOptions,
+  type ServiceOptions, type HostedService, type EveryOptions, type Inject,
 } from "./di/decorators.js";
 export { sitemap, type SitemapOptions, type SitemapEntry, type SitemapItem, type SitemapFields, type Changefreq, type RobotsOptions } from "./seo/sitemap.js";
 export { renderToString, renderToStream, type RenderOptions } from "./render/render.js";

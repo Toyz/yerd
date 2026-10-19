@@ -13,10 +13,15 @@ export { parseDuration };
 /** A class's lifetime from @singleton / @scoped / @transient. */
 const LIFETIME = classValue<Lifetime>("lifetime");
 
+/** The lifetime an injection site asks for, instead of the registration's: @inject.scoped, .transient, .instance. */
+export type InjectSite = "scoped" | "transient" | "instance";
+
 export interface InjectEntry {
   field: string;
   key: ServiceKey;
   optional: boolean;
+  /** Set by @inject.scoped / .transient / .instance. */
+  site?: InjectSite;
 }
 export const INJECTS = createKey<InjectEntry[]>("injects");
 
@@ -202,50 +207,175 @@ function resolveFor<T>(owner: object, key: ServiceKey<T>, optional: boolean, per
   return container.resolveRegistration(registration, context?.scope) as T;
 }
 
-function injectDecorator<T>(key: ServiceKey<T>, optional: boolean) {
+/**
+ * A read of an @inject.scoped / .transient / .instance field: the
+ * registration is looked up on every read (so app.services() overrides
+ * apply), then made with the site's lifetime instead of its own.
+ */
+function resolveAt<T>(owner: object, key: ServiceKey<T>, site: InjectSite, field: string, perOwner: ReturnType<typeof localKey<T>>): T {
+  if (site === "instance" && perOwner.hasOwn(owner)) return perOwner.from(owner) as T;
+  const context = currentServices();
+  const container: Container | undefined = OWNER.from(owner) ?? context?.container;
+  if (!container) throw new Error(`Can't inject ${keyName(key)}: no yerd app is running`);
+  const registration = container.registration(key);
+  if (!registration) throw new Error(`No service registered for ${keyName(key)}`);
+  const scope = context?.scope;
+  if (site === "scoped") {
+    if (!scope) {
+      throw new Error(
+        `${owner.constructor.name}.${field}: @inject.scoped(${keyName(key)}) is one per request and was read outside one ` +
+          `(an @every job, @onBoot, a hosted service). Read it while handling a request, or make a scope with app.scope(async () => ...).`,
+      );
+    }
+    return container.resolveAs(registration, "scoped", scope) as T;
+  }
+  if (site === "transient") return container.resolveAs(registration, "transient", scope) as T;
+  // One per holder, kept on it and disposed with it, like a transient registration's.
+  const value = container.resolveAs(registration, "transient", scope, owner) as T;
+  perOwner.set(owner, value);
+  return value;
+}
+
+function injectDecorator<T>(key: ServiceKey<T>, optional: boolean, site?: InjectSite) {
   return function <This extends object, V>(
     _target: ClassAccessorDecoratorTarget<This, V>,
     context: ClassAccessorDecoratorContext<This, V>,
   ): ClassAccessorDecoratorResult<This, V> {
     const field = String(context.name);
-    INJECTS.ownArray<InjectEntry>(context.metadata).push({ field, key, optional });
+    INJECTS.ownArray<InjectEntry>(context.metadata).push(site ? { field, key, optional, site } : { field, key, optional });
     const perOwner = localKey<T>(`inject:${field}`);
+    const set = (): void => {
+      throw new TypeError(`${field} is injected and can't be assigned`);
+    };
+    if (site) {
+      return {
+        get(this: This): V {
+          return resolveAt(this, key, site, field, perOwner) as unknown as V;
+        },
+        set,
+      };
+    }
     return {
       get(this: This): V {
         return resolveFor(this, key, optional, perOwner) as V;
       },
-      set(): void {
-        throw new TypeError(`${field} is injected and can't be assigned`);
-      },
+      set,
     };
   };
+}
+
+/** What @inject(key) and its lifetime forms return: an accessor decorator whose field must hold `T`. */
+type InjectDecorator<T> = <This extends object>(
+  target: ClassAccessorDecoratorTarget<This, T>,
+  context: ClassAccessorDecoratorContext<This, T>,
+) => ClassAccessorDecoratorResult<This, T>;
+
+/**
+ * The type of [inject](api:yerd.inject): call it for the registration's own
+ * lifetime, or use a member to choose the lifetime at the injection site.
+ * Only class and factory registrations can be re-scoped; a `value()`
+ * registration used with a member is a boot error.
+ *
+ * ```ts
+ * @service
+ * export class Orders {
+ *   @inject(Catalog) accessor catalog!: Catalog;              // as registered
+ *   @inject.scoped(AuditLog) accessor audit!: AuditLog;       // the current request's
+ *   @inject.transient(Hasher) accessor hasher!: Hasher;       // a new one per read
+ *   @inject.instance(OrderState) accessor state!: OrderState; // this Orders' own
+ * }
+ * ```
+ */
+export interface Inject {
+  <T>(key: ServiceKey<T>): InjectDecorator<T>;
+  /**
+   * One instance per request, shared by every `@inject.scoped` of the key in
+   * that request. A key registered scoped gives its usual scoped instance; a
+   * singleton or transient one gets an instance of its own per request,
+   * separate from the registered singleton. Resolved on every read, never
+   * kept, so a singleton may hold it: each read sees the current request.
+   * Reading it outside a request (an @every job, @onBoot) throws;
+   * `app.scope()` and event handlers have a scope and work.
+   *
+   * ```ts
+   * @scoped
+   * @service
+   * export class AuditLog {
+   *   readonly lines: string[] = [];
+   * }
+   *
+   * @service
+   * export class Orders {
+   *   // plain @inject(AuditLog) here would refuse to boot: a singleton can't hold a scoped service
+   *   @inject.scoped(AuditLog) accessor audit!: AuditLog;
+   *   place(id: number) { this.audit.lines.push(`order ${id} placed`); }
+   * }
+   * ```
+   */
+  scoped<T>(key: ServiceKey<T>): InjectDecorator<T>;
+  /**
+   * A new instance on every read of the field. Disposable ones made during a
+   * request are disposed at its end; outside a request nobody tracks them, so
+   * dispose them yourself. Keep the instance in a local when you need it twice.
+   *
+   * ```ts
+   * @service
+   * export class Users {
+   *   @inject.transient(Hasher) accessor hasher!: Hasher;
+   *
+   *   async register(name: string, password: string) {
+   *     const hasher = this.hasher; // one read, one Hasher
+   *     return { name, hash: await hasher.hash(password) };
+   *   }
+   * }
+   * ```
+   */
+  transient<T>(key: ServiceKey<T>): InjectDecorator<T>;
+  /**
+   * One instance per holder: made on the first read, kept on the instance
+   * that has the field, and disposed with it (a singleton's at shutdown, a
+   * route's at the end of its request). What plain @inject does for a key
+   * registered transient, for any class or factory registration.
+   *
+   * ```ts
+   * @scoped
+   * @service
+   * export class Checkout {
+   *   @inject.instance(OrderState) accessor state!: OrderState; // not shared with any other holder
+   * }
+   * ```
+   */
+  instance<T>(key: ServiceKey<T>): InjectDecorator<T>;
 }
 
 /**
  * Inject a service into an `accessor` field (a plain field is a type error).
  * Lazy: resolved on first read, cached per the service's lifetime. Works on
  * routes, services, guards' services and class components. A missing
- * registration is a boot error.
+ * registration is a boot error. `inject.scoped`, `inject.transient` and
+ * `inject.instance` choose the lifetime at the injection site instead (see
+ * [Inject](api:yerd.Inject)).
  *
  * ```ts
  * @service
  * export class Checkout {
  *   @inject(Orders) accessor orders!: Orders;
  *   @inject(Mailer) accessor mailer!: Mailer; // a token works the same
+ *   @inject.scoped(AuditLog) accessor audit!: AuditLog; // the current request's, on every read
  *
  *   async place(email: string) {
  *     const order = this.orders.place();
+ *     this.audit.lines.push(`order ${order.id} placed`);
  *     await this.mailer.send(email, `Order ${order.id} placed`);
  *   }
  * }
  * ```
  */
-export function inject<T>(key: ServiceKey<T>) {
-  return injectDecorator(key, false) as <This extends object>(
-    target: ClassAccessorDecoratorTarget<This, T>,
-    context: ClassAccessorDecoratorContext<This, T>,
-  ) => ClassAccessorDecoratorResult<This, T>;
-}
+export const inject: Inject = Object.assign(<T>(key: ServiceKey<T>) => injectDecorator(key, false) as InjectDecorator<T>, {
+  scoped: <T>(key: ServiceKey<T>) => injectDecorator(key, false, "scoped") as InjectDecorator<T>,
+  transient: <T>(key: ServiceKey<T>) => injectDecorator(key, false, "transient") as InjectDecorator<T>,
+  instance: <T>(key: ServiceKey<T>) => injectDecorator(key, false, "instance") as InjectDecorator<T>,
+});
 
 /**
  * Like @inject, but `undefined` when nothing is registered, instead of a boot
@@ -266,6 +396,33 @@ export function maybe<T>(key: ServiceKey<T>) {
     target: ClassAccessorDecoratorTarget<This, T | undefined>,
     context: ClassAccessorDecoratorContext<This, T | undefined>,
   ) => ClassAccessorDecoratorResult<This, T | undefined>;
+}
+
+/**
+ * Boot checks for a class's @inject fields: a key nothing provides (unless
+ * @maybe), a singleton holding a scoped service through plain @inject, and a
+ * value() registration asked for with another lifetime.
+ */
+export function checkInjections(name: string, lifetime: Lifetime, metadata: DecoratorMetadataObject, container: Container, problems: string[]): void {
+  for (const entry of INJECTS.from(metadata) ?? []) {
+    const target = container.registration(entry.key);
+    if (!target) {
+      if (!entry.optional) problems.push(`${name}.${entry.field}: nothing is registered for ${keyName(entry.key)} (@service it, or app.services(...))`);
+      continue;
+    }
+    if (entry.site) {
+      if (target.value) {
+        problems.push(
+          `${name}.${entry.field}: @inject.${entry.site}(${keyName(entry.key)}) can't re-scope a value() registration, which is one existing object; ` +
+            `register a class or a factory, or use plain @inject`,
+        );
+      }
+      continue;
+    }
+    if (lifetime === "singleton" && target.lifetime === "scoped") {
+      problems.push(`${name} (singleton) -> ${keyName(entry.key)} (scoped): a singleton can't hold a per-request service`);
+    }
+  }
 }
 
 // ── Lifecycle ──

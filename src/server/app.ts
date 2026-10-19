@@ -9,9 +9,9 @@ import { dirname, extname, join } from "node:path";
 import { ACCESSORS, ARGS, type Resolver } from "../decorators/kit.js";
 import { ACCEPTS, METHOD_LAYOUTS, noLayout, prerender, applyLayouts, joinLayouts, resetRouteRegistry, type When, verbsOf, resolveRoute, routeRegistry, type LayoutProps, type PageMeta, type ResolvedRoute, type RouteDef, type Verb } from "../decorators/route.js";
 import { choose, expandType } from "../respond/negotiate.js";
-import { Container, Scope, ServiceCollection, currentServices, keyName, runWithServices, type Lifetime, type Registration } from "../di/container.js";
+import { Container, Scope, ServiceCollection, classRegistration, currentServices, keyName, runWithServices, type Lifetime, type Registration } from "../di/container.js";
 import {
-  INJECTS, everyOf, hasLifecycleHooks, onBoot, onShutdown, lifetimeOf, registrationFor, resetServiceRegistry, serviceRegistry,
+  checkInjections, everyOf, hasLifecycleHooks, onBoot, onShutdown, lifetimeOf, registrationFor, resetServiceRegistry, serviceRegistry,
   type HostedService,
 } from "../di/decorators.js";
 import { jsx, type Component } from "../jsx/jsx-runtime.js";
@@ -1022,18 +1022,8 @@ export class YerdApp {
     const container = new Container();
     const allowedServices = this.#options.services ? new Set(this.#options.services) : undefined;
     // Built-ins first, so @service classes and app.services() can override them.
-    container.register({
-      key: Channels,
-      lifetime: "singleton",
-      impl: Channels,
-      create: (c) => c.construct(Channels, undefined, "singleton"),
-    });
-    container.register({
-      key: Cues,
-      lifetime: "singleton",
-      impl: Cues,
-      create: (c) => c.construct(Cues, undefined, "singleton"),
-    });
+    container.register(classRegistration(Channels, Channels, "singleton"));
+    container.register(classRegistration(Cues, Cues, "singleton"));
     container.register({
       key: Events,
       lifetime: "singleton",
@@ -2196,19 +2186,6 @@ function metadataChain(cls: Function): object[] {
   const chain: object[] = [];
   for (let md: object | null = metadataOf(cls); md && md !== Object.prototype; md = Object.getPrototypeOf(md)) chain.push(md);
   return chain;
-}
-
-function checkInjections(name: string, lifetime: Lifetime, metadata: DecoratorMetadataObject, container: Container, problems: string[]): void {
-  for (const entry of INJECTS.from(metadata) ?? []) {
-    const target = container.registration(entry.key);
-    if (!target) {
-      if (!entry.optional) problems.push(`${name}.${entry.field}: nothing is registered for ${keyName(entry.key)} (@service it, or app.services(...))`);
-      continue;
-    }
-    if (lifetime === "singleton" && target.lifetime === "scoped") {
-      problems.push(`${name} (singleton) -> ${keyName(entry.key)} (scoped): a singleton can't hold a per-request service`);
-    }
-  }
 }
 
 /**
