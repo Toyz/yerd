@@ -12,3 +12,6 @@ site/public/data/*
 !site/public/data/benchmarks.sample.json
 .claude/worktrees/
 bench/compare/node_modules/
+
+# The e2e runtime fixture build.
+test/e2e/fixture/dist/

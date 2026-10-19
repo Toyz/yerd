@@ -1,0 +1,78 @@
+/* Plain, readable, and high enough contrast for the accessibility checks. */
+:root {
+  color-scheme: light;
+  --ink: #1b1b1b;
+  --muted: #4a4a4a;
+  --line: #c9c9c9;
+  --accent: #0b57d0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font: 16px/1.5 system-ui, sans-serif;
+  color: var(--ink);
+  background: #fff;
+}
+
+nav.site {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+nav.site a,
+main a {
+  color: var(--accent);
+}
+
+main {
+  max-width: 48rem;
+  padding: 16px;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  min-height: 2.75rem;
+}
+
+/* Room below the fold, for the visible triggers and scroll restoration. */
+.spacer {
+  height: 2400px;
+}
+
+.zone,
+.dropzone {
+  min-height: 6rem;
+  margin: 8px 0;
+  padding: 8px;
+  border: 2px dashed var(--line);
+}
+
+.zone[data-yx-over],
+.dropzone[data-yx-over] {
+  border-color: var(--accent);
+}
+
+[draggable="true"] {
+  cursor: grab;
+  padding: 4px 8px;
+  margin: 4px 0;
+  background: #eef3fd;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.error {
+  color: #a50e0e;
+}
