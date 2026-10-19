@@ -111,6 +111,69 @@ BootError: yerd refused to start:
 
 - Boot lists every problem at once, including an `@inject` nothing provides; [BootError](api:yerd.BootError) has them as `error.problems`.
 - Two services may inject each other (fields resolve lazily). A constructor or factory that resolves its own key while being created throws `Circular dependency: A -> B -> A`.
+- When a singleton should see the current request's instance, say so with [`@inject.scoped`](#choosing-the-lifetime-where-you-inject).
+
+## Choosing the lifetime where you inject
+
+Say the shop's `Orders` keeps an audit trail per request. It's a singleton, so plain `@inject(AuditLog)` is refused; `@inject.scoped` reads the current request's log on every read instead of holding one:
+
+```ts
+@scoped
+@service
+export class AuditLog {
+  readonly lines: string[] = [];
+}
+
+@service
+export class Orders {
+  @inject.scoped(AuditLog) accessor audit!: AuditLog;
+
+  place(id: number) {
+    this.audit.lines.push(`order ${id} placed`);
+  }
+}
+
+@route("/api/orders")
+export class OrdersApi {
+  @inject(Orders) accessor orders!: Orders;
+  @inject(AuditLog) accessor audit!: AuditLog;
+
+  @post place() {
+    this.orders.place(1001);
+    this.orders.place(1002);
+    return this.audit.lines;
+  }
+}
+```
+
+The route and `Orders` share one log per request, and the next request starts a fresh one:
+
+```answer
+POST /api/orders
+200 OK
+content-type: application/json; charset=utf-8
+
+["order 1001 placed","order 1002 placed"]
+---
+POST /api/orders
+200 OK
+content-type: application/json; charset=utf-8
+
+["order 1001 placed","order 1002 placed"]
+```
+
+| Form | One instance per |
+| --- | --- |
+| `@inject(Key)` | as registered (the default) |
+| [`@inject.scoped(Key)`](api:yerd.Inject) | request, shared by everything in it |
+| [`@inject.transient(Key)`](api:yerd.Inject) | read of the field |
+| [`@inject.instance(Key)`](api:yerd.Inject) | holder (the instance with the field), kept for its life |
+
+- Only class and factory registrations can be re-scoped. A `s.value()` registration has one object, so using it with a form is a boot error naming the class and field.
+- `.scoped` of a singleton is a per-request instance of its own, not the singleton; of a scoped service, the usual one. Read outside a request (an `@every` job, `@onBoot`) it throws; `app.scope()` and event handlers have a scope.
+- `.transient` instances made in a request are disposed at its end; outside one they're yours to dispose. Read it into a local when you need the same one twice.
+- `.instance` is disposed with its holder: a route's at the end of the request, a singleton's at shutdown.
+- `app.services()` overrides still apply: a form changes the lifetime, not the implementation. `@maybe` has no forms.
 
 ## Tokens for interfaces and config
 
