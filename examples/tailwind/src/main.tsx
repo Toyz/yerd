@@ -95,7 +95,7 @@ function Card({ label, children }: { label: string; children: Child }) {
 function PlusButton({ onClick }: { onClick?: () => unknown }) {
   return (
     <button
-      class="rounded-xl bg-orange-600 px-4 py-2 font-semibold text-white shadow transition hover:bg-orange-500 active:translate-y-px"
+      class="rounded-xl bg-orange-700 px-4 py-2 font-semibold text-white shadow transition hover:bg-orange-800 active:translate-y-px"
       onClick={onClick}
     >
       +1
@@ -108,7 +108,7 @@ function Section({ title, note, children }: { title: string; note: string; child
     <section class="flex w-full flex-col gap-4">
       <div class="text-left">
         <h2 class="text-xl font-bold">{title}</h2>
-        <p class="text-sm text-stone-500 dark:text-stone-400">{note}</p>
+        <p class="text-sm text-stone-600 dark:text-stone-400">{note}</p>
       </div>
       <div class="grid w-full grid-cols-2 gap-4 sm:grid-cols-4">{children}</div>
     </section>

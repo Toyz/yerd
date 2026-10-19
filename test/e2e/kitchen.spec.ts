@@ -545,7 +545,7 @@ test("scoped css: the rules arrive with the page and style the element", async (
     const s = getComputedStyle(el);
     return { bg: s.backgroundColor, radius: s.borderTopLeftRadius, animation: s.animationName };
   });
-  expect(style.bg).toBe("rgb(214, 69, 43)");
+  expect(style.bg).toBe("rgb(179, 58, 34)");
   expect(style.radius).toBe("999px");
   expect(style.animation).toMatch(/^yx-k-/);
   // The global variable from css.global is defined.

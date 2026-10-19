@@ -179,7 +179,7 @@ const livePill = css`
   gap: 6px;
   padding: 2px 10px;
   border-radius: 999px;
-  background: rgb(214, 69, 43);
+  background: rgb(179, 58, 34);
   color: white;
   font-size: 0.8rem;
   font-weight: 600;
