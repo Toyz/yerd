@@ -26,7 +26,7 @@ import { compilePath } from "../log/paths.js";
 import { cssBundleClasses, cssBundleHash, cssBundleText, resetCss, resetCssBundle, useCssBundle } from "../render/css.js";
 import { EventTransport, Events, eventName, handlesOf, hasEventHandlers, onsOf } from "../events/events.js";
 import { ActionForm, actionNames, checkActionToken, fillHoles, resolveSecrets, safeBack, verifyAction } from "../actions/action.js";
-import { CLASS_GUARDS, METHOD_GUARDS, guardRegistry, isGuardRef, resetGuardRegistry, type GuardSpec } from "../decorators/guards.js";
+import { CLASS_GUARDS, METHOD_GUARDS, METHOD_SKIPS, guardLabel, guardRegistry, isGuardRef, resetGuardRegistry, type GuardSpec } from "../decorators/guards.js";
 import { SessionManager, checkSessionOptions, type LoadedSession } from "../session/manager.js";
 import type { SessionOptions } from "../session/session.js";
 import { RUNTIME_CHUNK_PREFIX, RUNTIME_PATH } from "../actions/components.js";
@@ -332,6 +332,20 @@ function resolveRequest(
   return { group, handler, node, mayBeAction };
 }
 
+/**
+ * `guards` without the ones `skips` names (@skipGuards), matched as written.
+ * With `problems`, a skip that names no guard here is reported under `where`.
+ */
+function skipped(guards: readonly GuardSpec[], skips: readonly GuardSpec[], where?: string, problems?: string[]): GuardSpec[] {
+  if (skips.length === 0) return [...guards];
+  if (problems) {
+    for (const skip of skips) {
+      if (!guards.includes(skip)) problems.push(`${where}: @skipGuards(${guardLabel(skip)}) skips a guard that isn't applied here`);
+    }
+  }
+  return guards.filter((guard) => !skips.includes(guard));
+}
+
 /** A pattern's node: its actions, each behind its class's guards and its own, and its Allow header. */
 function routeNode(byVerb: ReadonlyMap<Verb, readonly Handler[]>, pendingRuns: Array<[GuardRun[], readonly GuardSpec[]]>): RouteNode {
   const candidates = [...new Set([...byVerb.values()].flat())];
@@ -348,7 +362,8 @@ function routeNode(byVerb: ReadonlyMap<Verb, readonly Handler[]>, pendingRuns: A
         owner, method: name, route: { ...owner.info, method: name }, runs: [], declared: responseDefaults(owner.def.metadata, name),
         bodyLimit: METHOD_BODY_LIMIT.get(owner.def.metadata, name) ?? owner.classBodyLimit,
       };
-      pendingRuns.push([call.runs, [...owner.classGuards, ...METHOD_GUARDS.get(owner.def.metadata, name)]]);
+      // Boot already reported a skip that names nothing.
+      pendingRuns.push([call.runs, [...skipped(owner.classGuards, METHOD_SKIPS.get(owner.def.metadata, name)), ...METHOD_GUARDS.get(owner.def.metadata, name)]]);
       byName.set(name, call);
     }
   }
@@ -1178,9 +1193,11 @@ export class YerdApp {
 
       const layouts = resolved.isolated ? resolved.layouts : joinLayouts(this.#layouts, resolved.layouts);
       const methodLayouts = METHOD_LAYOUTS.entries(def.metadata);
-      const classGuards = [...this.#appGuards, ...resolved.guards, ...CLASS_GUARDS.get(def.metadata)];
+      const inherited = [...this.#appGuards, ...resolved.guards, ...CLASS_GUARDS.get(def.metadata)];
+      const classGuards = skipped(inherited, resolved.skips, def.className, problems);
       // Actions run behind the class's guards plus their own method guards.
       for (const name of actionNames(def.metadata)) {
+        skipped(classGuards, METHOD_SKIPS.get(def.metadata, name), `${def.className}.${name}`, problems);
         for (const spec of [...classGuards, ...METHOD_GUARDS.get(def.metadata, name)]) {
           if (typeof spec === "string") referencedGuards.push([`${def.className}.${name}`, spec]);
         }
@@ -1212,7 +1229,7 @@ export class YerdApp {
           meta: resolved.meta,
           args: argsByMethod?.get(method),
           accepts,
-          guards: [...classGuards, ...METHOD_GUARDS.get(def.metadata, method)],
+          guards: [...skipped(classGuards, METHOD_SKIPS.get(def.metadata, method), `${def.className}.${String(method)}`, problems), ...METHOD_GUARDS.get(def.metadata, method)],
           classGuards,
           when,
           runs: [],

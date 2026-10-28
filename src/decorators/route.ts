@@ -1,5 +1,5 @@
 import type { Component } from "../jsx/jsx-runtime.js";
-import { CLASS_GUARDS, type GuardRef, type GuardSpec } from "./guards.js";
+import { CLASS_GUARDS, CLASS_SKIPS, type GuardRef, type GuardSpec } from "./guards.js";
 import type { YerdContext } from "../server/context.js";
 import { isMediaType, type MediaType } from "../respond/negotiate.js";
 import { metadataOf } from "./keys.js";
@@ -823,6 +823,8 @@ export interface ResolvedRoute {
   csrf: boolean;
   /** @bodyLimit on the route class, else the nearest group's; undefined for the app's. */
   bodyLimit: number | undefined;
+  /** @skipGuards on its groups and the route class: inherited guards its handlers and actions don't run. */
+  skips: GuardSpec[];
   /** The `sitemap` option through the groups: false, the merged fields (deeper wins), or undefined when nothing set it. */
   sitemap: false | SitemapFields | undefined;
 }
@@ -878,11 +880,12 @@ export function resolveRoute(def: RouteDef): ResolvedRoute {
     crossSiteCheck = csrf.get(metadata) ?? crossSiteCheck;
     limit = CLASS_BODY_LIMIT.get(metadata) ?? limit;
   }
+  const skips = [...chain.map((g) => groupMetadata.get(g)!), def.metadata].flatMap((metadata) => CLASS_SKIPS.get(metadata));
   // false drops what outer groups set; an object adds to it, field by field.
   let sitemap: false | SitemapFields | undefined;
   for (const setting of [...chain.map((g) => g.options.sitemap), def.options.sitemap]) {
     if (setting === false) sitemap = false;
     else if (setting) sitemap = { ...(sitemap || {}), ...setting };
   }
-  return { pattern: joinPaths(prefix, def.pattern), layouts, isolated, meta: { ...meta, ...def.options.meta }, guards, session, sitemap, cors: corsSetting || undefined, csrf: crossSiteCheck, bodyLimit: limit };
+  return { pattern: joinPaths(prefix, def.pattern), layouts, isolated, meta: { ...meta, ...def.options.meta }, guards, session, sitemap, cors: corsSetting || undefined, csrf: crossSiteCheck, bodyLimit: limit, skips };
 }

@@ -227,6 +227,7 @@ export class Support {
 - Also attach guards with [@guards(a, b)](api:yerd.guards), a `guards: [...]` option on `@route` or `@group`, or `app.guard(...)` for every route.
 - Order: app guards, group guards (outer first), the route's `guards` option, class guards, method guards; stacked decorators in written order. The first that doesn't continue decides.
 - Guards also run in front of [actions](06-interactivity.md). Roles and named guards backed by services are in [sessions and auth](09-sessions-and-auth.md#guards).
+- [@skipGuards(a)](api:yerd.skipGuards) on a route class, group class or method drops guards it would inherit: `app.guard(auth.required)` for everything, `@skipGuards(auth.required)` on the login page and the health check. Skipping a guard that isn't applied there stops the boot.
 
 ## Middleware
 

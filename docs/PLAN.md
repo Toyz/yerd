@@ -160,6 +160,7 @@ marked *(planned)* aren't built yet.
 | `@get` `@post` `@put` `@patch` `@del` `@head` `@all` | method | verb handlers on a route class          |
 | `@guard(name?)`                   | method    | define a named guard on a `@service` (name defaults to the method name) |
 | `@guards(...refs)`                | class/method | apply guards by name or by `createGuard` value; stacked guard decorators run top to bottom as written |
+| `@skipGuards(...refs)`            | class/method | drop inherited guards (app, group, class) for a route or `@group` class, or one handler or action; matched as written; one that isn't applied stops the boot |
 | `@action` / `bind(action, args)`  | method / fn | a route method a form calls: `<form action={this.add}>`, `<button formaction={bind(this.remove, { id })}>`; signed `_yx` token, works without JS ([DYNAMICS.md](DYNAMICS.md)) |
 | `attribute(name, { render?, client? })` | fn  | custom attribute: a JSX prop with a server half (what it renders) and a client half (behaviour shipped in the runtime script) ([DYNAMICS.md](DYNAMICS.md#tier-15-custom-attributes-and-prefetch)) |
 | `prefetch` / `prefetch="visible"` / `prefetch={{ url, as: "json" }}` | prop | built-in attribute: warm the next page or a JSON response on intent, visibility or load |

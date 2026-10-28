@@ -151,6 +151,45 @@ export function guards(...specs: GuardSpec[]) {
   return (_value: Function, context: ClassDecoratorContext | ClassMethodDecoratorContext): void => attach(specs, context, "@guards");
 }
 
+/** Per class: the inherited guards it skips (@skipGuards). */
+export const CLASS_SKIPS = classList<GuardSpec>("skipGuards");
+/** Per method: the guards it skips. */
+export const METHOD_SKIPS = methodList<GuardSpec>("skipGuards");
+
+/**
+ * Skip guards this route would otherwise inherit: app-wide ones from
+ * app.guard(), a group's, the class's. On a route or group class it covers
+ * every handler and action under it; on a method, just that one. Guards are
+ * matched as written: the same createGuard() value, or the same name.
+ * Skipping one that isn't applied there stops the boot, so a typo can't
+ * pass for an exemption.
+ *
+ * ```tsx
+ * yerd().guard(auth.required);
+ *
+ * @route("/login")
+ * @skipGuards(auth.required)
+ * export class Login { ... }
+ *
+ * @route("/status")
+ * export class Status {
+ *   @get @skipGuards(auth.required) health() { return { ok: true }; }
+ * }
+ * ```
+ */
+export function skipGuards(...specs: GuardSpec[]) {
+  return (_value: Function, context: ClassDecoratorContext | ClassMethodDecoratorContext): void => {
+    if (context.kind === "class") return CLASS_SKIPS.add(context, ...specs);
+    checkMethod(context, "@skipGuards");
+    METHOD_SKIPS.add(context, ...specs);
+  };
+}
+
+/** A guard spec as a person wrote it: its name, or a value guard's label. */
+export function guardLabel(spec: GuardSpec): string {
+  return typeof spec === "string" ? `"${spec}"` : spec.label;
+}
+
 export interface NamedGuard {
   name: string;
   method: string | symbol;

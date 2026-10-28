@@ -3,7 +3,7 @@ import "./polyfill.js";
 
 export { TestClient } from "./server/in-process.js";
 export { yerd, YerdApp, BootError, type YerdOptions, type RunningServer, type ErrorPageProps, type Middleware, type LoggingOptions } from "./server/app.js";
-export { guard, guards, createGuard, resetGuardRegistry, type GuardRef, type GuardSpec, type GuardFn } from "./decorators/guards.js";
+export { guard, guards, skipGuards, createGuard, resetGuardRegistry, type GuardRef, type GuardSpec, type GuardFn } from "./decorators/guards.js";
 export { Session, CookieStore, MemoryStore, seal, unseal, type SessionData, type SessionFields, type SessionShape, type SessionStore, type SessionRecord, type SessionOptions, type MemoryStoreOptions } from "./session/session.js";
 export { parseCookies, serializeCookie, type CookieOptions } from "./server/cookies.js";
 export { currentContext, setMeta, type YerdContext, type RouteInfo } from "./server/context.js";
