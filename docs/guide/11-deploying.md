@@ -211,6 +211,29 @@ process.on("SIGTERM", async () => {
 
 Pass `handleSignals: false` when a test runner or supervisor owns the signals.
 
+### Health checks and draining
+
+Load balancers and Kubernetes probe an endpoint to decide where traffic goes. [app.health()](api:yerd.YerdApp.health) serves one, and `drainDelay` keeps the server up while they notice it's leaving:
+
+```ts
+// src/app.ts
+return yerd({ drainDelay: 10_000, ...options }).health("/health", { check: () => db.ping() })
+```
+
+```answer
+GET /health
+200 OK
+content-type: application/json; charset=utf-8
+cache-control: no-store
+
+{"status":"ok"}
+```
+
+- Once shutdown starts, it answers 503 `{"status":"draining"}`, and every other route keeps working for `drainDelay` ms; then the steps above run.
+- `check` (optional) makes it a readiness probe: returning `false` or throwing is a 503 `{"status":"unhealthy"}`.
+- It's answered before routing: no guards, sessions or middleware, so `app.guard(auth.required)` doesn't lock the probe out.
+- Set `drainDelay` a little past the balancer's interval times the failures it waits for (Kubernetes: `periodSeconds` × `failureThreshold`).
+
 If the port can't be bound (`EADDRINUSE`, `EACCES`), `listen()` rejects with that error after stopping the app: `@hosted` services and `@every` timers end and `@onShutdown` hooks run, so nothing keeps a server that never started alive. An app you `start()`ed yourself before calling `listen()` keeps running.
 
 ## Before you go live

@@ -134,6 +134,18 @@ export interface YerdOptions {
    */
   trustProxy?: boolean;
   /**
+   * How long close() keeps serving after app.health() starts answering 503,
+   * in ms, before it stops accepting connections. Default 0. Behind a load
+   * balancer or Kubernetes, give it a little longer than they take to notice
+   * (their health-check interval times the failures they wait for), so no
+   * request is sent to a server that's already gone.
+   *
+   * ```ts
+   * yerd({ drainDelay: 10_000 }).health("/health");
+   * ```
+   */
+  drainDelay?: number;
+  /**
    * listen()'s server timeouts, in ms. Defaults: `keepAlive` 72000, longer
    * than load balancers' idle timeouts (an ALB's is 60 s), since a server
    * closing an idle connection first makes the balancer's next request on it
@@ -634,6 +646,9 @@ export class YerdApp {
   readonly #appGuards: GuardSpec[] = [];
   #securityHeaders: SecurityHeaders | undefined;
   #compression: Compression | undefined;
+  #health: { path: string; check: (() => unknown) | undefined } | undefined;
+  /** close() has begun: health answers 503 while the server drains. */
+  #draining = false;
   readonly #trustedOrigins: ReadonlySet<string>;
   /** Shared by every request's context; built at boot. */
   #env: RequestEnv | undefined;
@@ -789,6 +804,42 @@ export class YerdApp {
   securityHeaders(options: SecurityHeadersOptions = {}): this {
     this.#securityHeaders = compileSecurityHeaders(options);
     return this;
+  }
+
+  /**
+   * A health endpoint for load balancers and Kubernetes probes: 200
+   * `{"status":"ok"}` while the app is up, 503 `{"status":"draining"}` once
+   * close() has begun (see `drainDelay`), and 503 `{"status":"unhealthy"}`
+   * when `check` returns false or throws (a database ping, for readiness).
+   * Served before routing: guards, sessions and middleware don't see it.
+   *
+   * ```ts
+   * yerd({ drainDelay: 10_000 }).health("/health", { check: () => db.ping() });
+   * ```
+   */
+  health(path = "/health", options: { check?: () => unknown } = {}): this {
+    if (!path.startsWith("/")) throw new TypeError(`health: the path must start with "/", not ${JSON.stringify(path)}`);
+    this.#health = { path, check: options.check };
+    return this;
+  }
+
+  async #healthResponse(): Promise<Outgoing> {
+    const answer = (status: number, state: string): Outgoing => ({
+      status,
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      body: JSON.stringify({ status: state }),
+    });
+    if (this.#draining) return answer(503, "draining");
+    const check = this.#health!.check;
+    if (check) {
+      try {
+        if ((await check()) === false) return answer(503, "unhealthy");
+      } catch (error) {
+        lifecycleLog.warn("health check failed", { error });
+        return answer(503, "unhealthy");
+      }
+    }
+    return answer(200, "ok");
   }
 
   /**
@@ -1680,7 +1731,7 @@ export class YerdApp {
     const target = splitTarget(rawTarget);
     const path = target.path;
     // Only a prerendered path itself takes the slow path; #serveOther looks it up the same way.
-    if (path.startsWith("/_yerd/") || ((method === "GET" || method === "HEAD") && (this.#prerendered.has(path) || this.#sitemap?.handles(path)))) {
+    if (path.startsWith("/_yerd/") || ((method === "GET" || method === "HEAD") && (this.#prerendered.has(path) || this.#sitemap?.handles(path) || path === this.#health?.path))) {
       return this.#serveOther(req, res, next);
     }
     const match = this.#router!.match(path);
@@ -1716,6 +1767,7 @@ export class YerdApp {
       return send(res, await chunkResponse(req, path.slice(RUNTIME_CHUNK_PREFIX.length, -3), target.search), method === "HEAD", undefined);
     }
     // The server's clock, for pages lining up `sync` animations and cues.
+    if (reading && path === this.#health?.path) return send(res, await this.#healthResponse(), method === "HEAD", undefined);
     if (path === CLOCK_PATH && reading) {
       const body = JSON.stringify({ now: Date.now() });
       return send(res, { status: 200, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }, body }, method === "HEAD", undefined);
@@ -2326,6 +2378,10 @@ export class YerdApp {
       (closing ??= (async () => {
         process.off("SIGINT", onSignal);
         process.off("SIGTERM", onSignal);
+        // Health answers 503 from here; keep serving while load balancers notice.
+        this.#draining = true;
+        const drainDelay = this.#options.drainDelay ?? 0;
+        if (drainDelay > 0) await new Promise((resolve) => setTimeout(resolve, drainDelay));
         const closed = new Promise<void>((resolve) => server.close(() => resolve()));
         // Streams never finish on their own; end them so their requests can.
         for (const stream of this.#streams) stream.abort(new Error("server shutting down"));
