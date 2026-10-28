@@ -40,6 +40,7 @@ import { DEFAULT_BODY_LIMIT, mediaTypeOf } from "./body.js";
 import { metadataOf } from "../decorators/keys.js";
 import { createMount, serveStatic, type StaticMount, type StaticOptions } from "./static.js";
 import { assetResponse, memoryAsset, type MemoryAsset } from "../respond/asset.js";
+import { compileCors, corsHeaders, preflight, type CorsPolicy } from "./cors.js";
 import { applySecurityHeaders, compileSecurityHeaders, removeSecurityHeaders, type SecurityHeaders, type SecurityHeadersOptions } from "./security-headers.js";
 import { useManifest } from "../assets.js";
 import { runWithContext, type RouteInfo, type YerdContext } from "./context.js";
@@ -190,6 +191,14 @@ interface Handler extends Call {
   runs: GuardRun[];
   /** The class's @catches methods, in declaration order. */
   catches: readonly CatchEntry[];
+  /** CORS and the cross-site check, from the route's and its groups' options. */
+  policy: RoutePolicy;
+}
+
+interface RoutePolicy {
+  cors: CorsPolicy | undefined;
+  /** The cross-site check applies (the route's or a group's `csrf: false` turns it off). */
+  csrf: boolean;
 }
 
 /** An @action method, ready to run on the class of `owner` (the pattern's first handler from that class). */
@@ -1100,6 +1109,13 @@ export class YerdApp {
         continue;
       }
       const info: RouteInfo = { pattern: resolved.pattern, paramNames: paramNames(resolved.pattern), className: def.className, session: resolved.session, target: def.ctor };
+      let policy: RoutePolicy;
+      try {
+        policy = { cors: resolved.cors ? compileCors(resolved.cors) : undefined, csrf: resolved.csrf };
+      } catch (e) {
+        problems.push(`${def.className}: ${(e as Error).message}`);
+        continue;
+      }
       const lifetime = lifetimeOf({ lifetime: def.options.lifetime, metadata: def.metadata }, "scoped");
       if (this.#sitemap) mapped.push({ def, pattern: info.pattern, lifetime, sitemap: resolved.sitemap });
       const verbs = verbsOf(def.metadata);
@@ -1163,6 +1179,7 @@ export class YerdApp {
           runs: [],
           declared: responseDefaults(def.metadata, method),
           catches,
+          policy,
         });
       }
     }
@@ -1692,7 +1709,23 @@ export class YerdApp {
    * #answer took the request.
    */
   #route(req: IncomingMessage, res: ServerResponse, method: Verb, target: { path: string; search: string }, match: Match<RouteGroup>, answers: boolean): Promise<void> | undefined {
-    if (this.#options.csrf !== false && UNSAFE_METHODS.has(method)) {
+    const node = match.handlers.values().next().value!.node;
+    const { cors, csrf } = node.first.policy;
+    let crossOrigin = false;
+    if (cors) {
+      const origin = req.headers.origin;
+      // A preflight is the browser asking first; it never reaches a handler.
+      if (method === "OPTIONS" && origin !== undefined && req.headers["access-control-request-method"] !== undefined) {
+        return send(res, preflight(cors, req.headers, node.allow), false, undefined);
+      }
+      if (!cors.any) res.setHeader("vary", "origin");
+      if (origin !== undefined && cors.allows(origin)) {
+        crossOrigin = true;
+        for (const [name, value] of Object.entries(corsHeaders(cors, origin))) res.setHeader(name, value);
+      }
+    }
+    // An origin the route's CORS allows is meant to send unsafe requests.
+    if (this.#options.csrf !== false && csrf && !crossOrigin && UNSAFE_METHODS.has(method)) {
       const refused = crossSiteReason(req, this.#trustedOrigins, this.#options.trustProxy ?? false);
       if (refused) return this.#sendError(new Forbidden(refused), req, res, target, method, { refused: true });
     }
@@ -2511,6 +2544,11 @@ function send(res: ServerResponse, out: Outgoing, headOnly: boolean, signal: Abo
   // Copied rather than reused: handlers may hand back a headers object they share.
   const headers: Record<string, string | string[]> = { "x-content-type-options": "nosniff" };
   for (const name in out.headers) if (name !== LONG_LIVED) headers[name] = out.headers[name]!;
+  // A Vary set on res before routing (CORS's origin) adds to the response's own rather than being replaced by it.
+  if (out.headers.vary !== undefined) {
+    const preset = res.getHeader("vary");
+    if (preset !== undefined) headers.vary = mergeVary(String(preset), String(out.headers.vary));
+  }
   if (out.cookies?.length) headers["set-cookie"] = out.cookies;
   const { body } = out;
   // 204 and 304 never have a body (RFC 9110 6.4.1); a Content-Length promising
