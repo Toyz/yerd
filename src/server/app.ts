@@ -134,6 +134,18 @@ export interface YerdOptions {
    */
   trustProxy?: boolean;
   /**
+   * listen()'s server timeouts, in ms. Defaults: `keepAlive` 72000, longer
+   * than load balancers' idle timeouts (an ALB's is 60 s), since a server
+   * closing an idle connection first makes the balancer's next request on it
+   * a 502; `headers` 73000, which must outlast `keepAlive`; `request`
+   * 300000 (Node's), the most a whole request, body included, may take.
+   *
+   * ```ts
+   * yerd({ timeouts: { keepAlive: 120_000, headers: 121_000, request: 30_000 } });
+   * ```
+   */
+  timeouts?: { keepAlive?: number; headers?: number; request?: number };
+  /**
    * The built-in cue stream: which rooms anyone may listen to (see Cues).
    * Default `{ public: ["main"] }`.
    *
@@ -2242,9 +2254,18 @@ export class YerdApp {
     if (tls && !(tls.cert && tls.key) && !tls.pfx && !tls.SNICallback) {
       throw new TypeError("listen({ tls }) needs a certificate: key and cert, pfx, or an SNICallback");
     }
+    const { keepAlive = 72_000, headers = Math.max(73_000, keepAlive + 1_000), request = 300_000 } = this.#options.timeouts ?? {};
+    for (const [name, ms] of [["keepAlive", keepAlive], ["headers", headers], ["request", request]] as const) {
+      if (!Number.isInteger(ms) || ms < 0) throw new TypeError(`timeouts.${name} must be a whole number of ms, not ${ms}`);
+    }
+    // 0 turns a timeout off; otherwise the headers can't be given longer than the whole request.
+    if (request > 0 && headers > request) throw new TypeError(`timeouts.headers (${headers}) can't be longer than timeouts.request (${request})`);
     const startsHere = this.#started === undefined;
     await this.start();
     const server = tls ? createHttpsServer(tls, this.#listener) : createServer(this.#listener);
+    server.keepAliveTimeout = keepAlive;
+    server.headersTimeout = headers;
+    server.requestTimeout = request;
     try {
       await new Promise<void>((resolve, reject) => {
         server.once("error", reject);

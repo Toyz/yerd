@@ -128,6 +128,7 @@ export function createApp(options?: YerdOptions) {
 
 - `trustProxy` makes the [cross-site check](15-security.md#cross-site-requests) compare against `X-Forwarded-Host`, sessions use `X-Forwarded-Proto` for `Secure` (`__Host-`) cookies, and [ctx.ip](api:yerd.YerdContext.ip) is the last `X-Forwarded-For` entry.
 - `trustedOrigins` lists other origins allowed to send POST, PUT, PATCH and DELETE.
+- Idle keep-alive connections stay open 72 s, longer than load balancers keep theirs (an AWS ALB's 60 s): a server that closes first turns the balancer's next request on that connection into a 502. If yours waits longer, raise `timeouts.keepAlive` past it (`headers` follows, a second longer).
 
 > [!WARNING]
 > Only turn on `trustProxy` behind a proxy that sets those headers and strips any the client sent; otherwise anyone can claim HTTPS or your host.

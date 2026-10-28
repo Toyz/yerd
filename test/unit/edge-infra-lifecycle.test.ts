@@ -590,3 +590,21 @@ describe("listen()", () => {
     expect(await pending).toBe("cut");
   });
 });
+
+describe("listen() timeouts", () => {
+  it("defaults keep-alive past load balancers' idle timeouts, headers past keep-alive", async () => {
+    await using server = await yerd({ routes: [], services: [], handleSignals: false }).listen(0, "127.0.0.1");
+    expect([server.server.keepAliveTimeout, server.server.headersTimeout, server.server.requestTimeout]).toEqual([72_000, 73_000, 300_000]);
+  });
+
+  it("takes its own, keeping headers past a longer keep-alive", async () => {
+    await using server = await yerd({ routes: [], services: [], handleSignals: false, timeouts: { keepAlive: 120_000, request: 0 } }).listen(0, "127.0.0.1");
+    expect([server.server.keepAliveTimeout, server.server.headersTimeout, server.server.requestTimeout]).toEqual([120_000, 121_000, 0]);
+  });
+
+  it("refuses ones that can't work, before starting anything", async () => {
+    const app = (timeouts: { keepAlive?: number; headers?: number; request?: number }) => yerd({ routes: [], services: [], handleSignals: false, timeouts });
+    await expect(app({ headers: 10_000, request: 5_000 }).listen(0, "127.0.0.1")).rejects.toThrow("timeouts.headers (10000) can't be longer than timeouts.request (5000)");
+    await expect(app({ keepAlive: -1 }).listen(0, "127.0.0.1")).rejects.toThrow("timeouts.keepAlive must be a whole number of ms");
+  });
+});
