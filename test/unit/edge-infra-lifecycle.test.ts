@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "node:net";
 import {
   BootError, ILogger, every, get, hosted, inject, onBoot, onShutdown, parseDuration, route, service, yerd,
-  type LogRecord,
+  type LogRecord, type RunningServer,
 } from "@toyz/yerd";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -434,17 +434,69 @@ describe("@hosted", () => {
 });
 
 describe("listen()", () => {
-  it("rejects when the port is taken", async () => {
+  /** A port something else is already listening on, and a way to free it. */
+  async function takenPort(): Promise<{ port: number; free: () => void }> {
     const blocker = createServer();
     await new Promise<void>((r) => blocker.listen(0, "127.0.0.1", r));
-    const port = (blocker.address() as { port: number }).port;
-    const app = yerd({ routes: [], services: [], handleSignals: false });
+    return { port: (blocker.address() as { port: number }).port, free: () => blocker.close() };
+  }
+
+  it("rejects when the port is taken, after stopping the app it started", async () => {
+    const log: string[] = [];
+    let ticks = 0;
+    @service class Jobs {
+      @every("5ms") tick() { ticks++; }
+      @onShutdown down() { log.push("shutdown"); }
+    }
+    const { port, free } = await takenPort();
     try {
+      const app = yerd({ routes: [], services: [Jobs], handleSignals: false });
       await expect(app.listen(port, "127.0.0.1")).rejects.toMatchObject({ code: "EADDRINUSE" });
+      // Stopped: hooks ran, timers are gone, so nothing keeps the process alive.
+      expect(log).toEqual(["shutdown"]);
+      const after = ticks;
+      await sleep(30);
+      expect(ticks).toBe(after);
+      await expect(app.start()).rejects.toThrow("This app was stopped");
     } finally {
-      blocker.close();
+      free();
+    }
+  });
+
+  it("leaves an app you started yourself running when the port is taken", async () => {
+    const log: string[] = [];
+    @service class Jobs {
+      @onShutdown down() { log.push("shutdown"); }
+    }
+    const { port, free } = await takenPort();
+    const app = yerd({ routes: [], services: [Jobs], handleSignals: false });
+    try {
+      await app.start();
+      await expect(app.listen(port, "127.0.0.1")).rejects.toMatchObject({ code: "EADDRINUSE" });
+      expect(log).toEqual([]);
+      // Still usable: another port works.
+      const server = await app.listen(0, "127.0.0.1");
+      await server.close();
+      expect(log).toEqual(["shutdown"]);
+    } finally {
+      free();
       await app.stop();
     }
+  });
+
+  it("reports the port it got, and closes with await using", async () => {
+    @route("/ping") class Ping { @get pong() { return "pong"; } }
+    let http: RunningServer["server"] | undefined;
+    {
+      await using server = await yerd({ routes: [Ping], services: [], handleSignals: false }).listen(0, "127.0.0.1");
+      expect(server.port).toBeGreaterThan(0);
+      expect(server.url).toBe(`http://127.0.0.1:${server.port}`);
+      expect(await (await fetch(`${server.url}/ping`)).text()).toBe("pong");
+      http = server.server;
+      expect(http.listening).toBe(true);
+    }
+    // Disposed when the block ended, before the next line runs.
+    expect(http!.listening).toBe(false);
   });
 
   it.each([

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ActionForm, MemoryRateLimitStore, action, get, group, guards, post, prerender, rateLimit, route, yerd, type RateLimitStore } from "@toyz/yerd";
+import { ActionForm, MemoryRateLimitStore, action, clientKey, get, group, guards, post, prerender, rateLimit, route, yerd, type RateLimitStore } from "@toyz/yerd";
 
 const loginLimit = rateLimit({ name: "login", limit: 2, window: "1m" });
 
@@ -186,5 +186,38 @@ describe("MemoryRateLimitStore", () => {
     // "a" was forgotten: it starts over.
     expect(store.hit("a", 60_000).count).toBe(1);
     expect(store.hit("c", 60_000).count).toBe(2);
+  });
+});
+
+describe("clientKey", () => {
+  it.each([
+    ["203.0.113.7", "203.0.113.7"],
+    ["::ffff:203.0.113.7", "203.0.113.7"],
+    ["2001:db8:1:2:aaaa:bbbb:cccc:dddd", "2001:db8:1:2::/64"],
+    ["2001:db8:1:2::1", "2001:db8:1:2::/64"],
+    ["2001:0DB8:0001:0002::ffff", "2001:db8:1:2::/64"],
+    ["2001:db8::1", "2001:db8:0:0::/64"],
+    ["::1", "0:0:0:0::/64"],
+    ["fe80::1%en0", "fe80:0:0:0::/64"],
+    ["", ""],
+    ["not:an:address::with::two", "not:an:address::with::two"],
+    ["zz::1", "zz::1"],
+  ])("%j -> %j", (ip, key) => {
+    expect(clientKey(ip)).toBe(key);
+  });
+
+  it("counts addresses in one /64 together by default", async () => {
+    const limit = rateLimit({ limit: 1, window: "1m" });
+    @route("/v6")
+    class V6 {
+      @get @guards(limit) page() {
+        return "ok";
+      }
+    }
+    const server = app([V6], true);
+    const from = (ip: string) => server.request("/v6", { headers: { "x-forwarded-for": ip } });
+    expect((await from("2001:db8:1:2::1")).status).toBe(200);
+    expect((await from("2001:db8:1:2::2")).status).toBe(429);
+    expect((await from("2001:db8:1:3::1")).status).toBe(200);
   });
 });

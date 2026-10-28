@@ -1,9 +1,9 @@
 import { STATUS_CODES, createServer, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer as createHttpsServer, type Server as HttpsServer, type ServerOptions as HttpsServerOptions } from "node:https";
 import { once } from "node:events";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createHash, randomBytes } from "node:crypto";
-import { brotliCompressSync, gzipSync } from "node:zlib";
+import { randomBytes } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, extname, join } from "node:path";
 import { ACCESSORS, ARGS, type Resolver } from "../decorators/kit.js";
@@ -38,8 +38,9 @@ import { YerdResponse, isBare, redirect } from "../respond/response.js";
 import { Router, paramNames, type Match } from "../router/trie.js";
 import { DEFAULT_BODY_LIMIT, mediaTypeOf } from "./body.js";
 import { metadataOf } from "../decorators/keys.js";
-import { acceptsEncoding, createMount, serveStatic, type StaticMount, type StaticOptions } from "./static.js";
-import { applySecurityHeaders, compileSecurityHeaders, type SecurityHeaders, type SecurityHeadersOptions } from "./security-headers.js";
+import { createMount, serveStatic, type StaticMount, type StaticOptions } from "./static.js";
+import { assetResponse, memoryAsset, type MemoryAsset } from "../respond/asset.js";
+import { applySecurityHeaders, compileSecurityHeaders, removeSecurityHeaders, type SecurityHeaders, type SecurityHeadersOptions } from "./security-headers.js";
 import { useManifest } from "../assets.js";
 import { runWithContext, type RouteInfo, type YerdContext } from "./context.js";
 import { RequestContext, type RequestEnv } from "./request-context.js";
@@ -400,18 +401,36 @@ type Next = (error?: unknown) => void;
  * const res = await fetch(`${server.url}/hello`);
  * await server.close();
  * ```
+ *
+ * Or with `await using`, which closes it when the block ends, a failed
+ * assertion included:
+ *
+ * ```ts
+ * await using server = await yerd({ routes: [Hello], handleSignals: false }).listen(0, "127.0.0.1");
+ * expect((await fetch(`${server.url}/hello`)).status).toBe(200);
+ * ```
  */
 export interface RunningServer {
   /**
-   * The underlying node:http server, for settings and events yerd doesn't wrap.
+   * The underlying node:http server (node:https with `tls`), for settings
+   * and events yerd doesn't wrap.
    *
    * ```ts
    * server.server.requestTimeout = 30_000;
    * ```
    */
-  readonly server: Server;
-  /** The base URL, `http://<host>:<port>`, with the real port when listening on port 0. Host defaults to localhost. */
+  readonly server: Server | HttpsServer;
+  /** The base URL, `http://<host>:<port>` (`https://` with `tls`), with the real port when listening on port 0. Host defaults to localhost. */
   readonly url: string;
+  /**
+   * The port it's listening on: the one the system picked, for port 0.
+   *
+   * ```ts
+   * const { port } = await app.listen(0);
+   * const socket = connect(port, "localhost");
+   * ```
+   */
+  readonly port: number;
   /**
    * Graceful: stop accepting, end streams, let requests finish, stop
    * background work, dispose services. listen() already does this on SIGINT
@@ -426,6 +445,8 @@ export interface RunningServer {
    * ```
    */
   close(): Promise<void>;
+  /** close(), for `await using`. */
+  [Symbol.asyncDispose](): Promise<void>;
 }
 
 /**
@@ -1582,7 +1603,8 @@ export class YerdApp {
     const method = (req.method ?? "GET").toUpperCase() as Verb;
     const target = splitTarget(rawTarget);
     const path = target.path;
-    if (path.startsWith("/_yerd/") || ((method === "GET" || method === "HEAD") && (this.#prerendered.size > 0 || this.#sitemap?.handles(path)))) {
+    // Only a prerendered path itself takes the slow path; #serveOther looks it up the same way.
+    if (path.startsWith("/_yerd/") || ((method === "GET" || method === "HEAD") && (this.#prerendered.has(path) || this.#sitemap?.handles(path)))) {
       return this.#serveOther(req, res, next);
     }
     const match = this.#router!.match(path);
@@ -1612,10 +1634,10 @@ export class YerdApp {
     const path = target.path;
     const reading = method === "GET" || method === "HEAD";
 
-    if (path === RUNTIME_PATH && reading) return send(res, runtimeResponse(req), method === "HEAD", undefined);
+    if (path === RUNTIME_PATH && reading) return send(res, await runtimeResponse(req), method === "HEAD", undefined);
     // Its chunks, beside it (/_yerd/runtime-<name>.js). A name that isn't one is a 404 here, not a route's.
     if (reading && path.startsWith(RUNTIME_CHUNK_PREFIX) && path.endsWith(".js")) {
-      return send(res, chunkResponse(req, path.slice(RUNTIME_CHUNK_PREFIX.length, -3), target.search), method === "HEAD", undefined);
+      return send(res, await chunkResponse(req, path.slice(RUNTIME_CHUNK_PREFIX.length, -3), target.search), method === "HEAD", undefined);
     }
     // The server's clock, for pages lining up `sync` animations and cues.
     if (path === CLOCK_PATH && reading) {
@@ -1655,7 +1677,10 @@ export class YerdApp {
           if (file) return sendFile(res, file, method === "HEAD");
         }
       }
-      if (next) return next();
+      if (next) {
+        if (this.#securityHeaders) removeSecurityHeaders(this.#securityHeaders, res);
+        return next();
+      }
       return this.#sendError(new NotFound(), req, res, target, method);
     }
     return this.#route(req, res, method, target, match, false);
@@ -2140,19 +2165,46 @@ export class YerdApp {
    * the process. close() stops accepting, ends long-lived streams, waits up
    * to `shutdownTimeout` for in-flight requests, then calls stop().
    *
+   * With `tls` (node:https's server options: `key` and `cert`, or `pfx`),
+   * it serves HTTPS: ctx.url is https, session cookies get Secure, and
+   * securityHeaders() sends HSTS. Without a certificate it throws rather
+   * than listen for handshakes that can only fail.
+   *
+   * ```ts
+   * await yerd().listen(443, undefined, {
+   *   tls: { key: readFileSync("/etc/tls/key.pem"), cert: readFileSync("/etc/tls/cert.pem") },
+   * });
+   * ```
+   *
+   * If the port can't be bound (EADDRINUSE, EACCES), it rejects with that
+   * error, and an app this call started is stopped first: its background
+   * work ends and @onShutdown hooks run, so the process can exit. An app
+   * you started yourself keeps running.
+   *
    * ```ts
    * const { url, close } = await yerd().listen(0, "127.0.0.1", { handleSignals: false });
    * await fetch(url);
    * await close();
    * ```
    */
-  async listen(port = 3000, host?: string, options: { handleSignals?: boolean } = {}): Promise<RunningServer> {
+  async listen(port = 3000, host?: string, options: { handleSignals?: boolean; tls?: HttpsServerOptions } = {}): Promise<RunningServer> {
+    const { tls } = options;
+    if (tls && !(tls.cert && tls.key) && !tls.pfx && !tls.SNICallback) {
+      throw new TypeError("listen({ tls }) needs a certificate: key and cert, pfx, or an SNICallback");
+    }
+    const startsHere = this.#started === undefined;
     await this.start();
-    const server = createServer(this.#listener);
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(port, host, () => resolve());
-    });
+    const server = tls ? createHttpsServer(tls, this.#listener) : createServer(this.#listener);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(port, host, () => resolve());
+      });
+    } catch (error) {
+      // Background work this call started would keep the process alive with nothing serving.
+      if (startsHere) await this.stop().catch((cleanup: unknown) => lifecycleLog.error("stopping after a failed listen failed", { error: cleanup }));
+      throw error;
+    }
     const address = server.address();
     const actualPort = typeof address === "object" && address ? address.port : port;
     const timeout = this.#options.shutdownTimeout ?? DEFAULT_SHUTDOWN_MS;
@@ -2191,7 +2243,7 @@ export class YerdApp {
     }
 
     const shown = host === undefined ? "localhost" : host.includes(":") ? `[${host}]` : host;
-    return { server, url: `http://${shown}:${actualPort}`, close };
+    return { server, url: `${tls ? "https" : "http"}://${shown}:${actualPort}`, port: actualPort, close, [Symbol.asyncDispose]: close };
   }
 }
 
@@ -2201,7 +2253,8 @@ function redirectBack(context: YerdContext): YerdResponse {
   if (referer) {
     try {
       const ref = new URL(referer);
-      if (ref.host === context.headers.host) back = ref.pathname + ref.search;
+      // ctx.url's host: X-Forwarded-Host under trustProxy, as the cross-site check reads it.
+      if (ref.host === context.url.host) back = ref.pathname + ref.search;
     } catch {
       back = undefined;
     }
@@ -2260,10 +2313,18 @@ function withErrorHeaders(out: Outgoing, error: unknown): Outgoing {
 // each compressed once per distinct source (brotli and gzip, kept in memory)
 // rather than per request. `no-cache` with an ETag, so browsers revalidate
 // (a 304) instead of downloading them on every page.
-const scriptAssets = new Map<string, { source: string; etag: string; br: Uint8Array; gzip: Uint8Array; raw: Uint8Array }>();
+const scriptAssets = new Map<string, { source: string; asset: MemoryAsset }>();
 
-function runtimeResponse(req: IncomingMessage): Outgoing {
-  return scriptResponse(req, "", runtimeSource({ chunks: "split", lazy: lazyRegistry(moduleAttributes()) }) + attributesSource());
+// The core and the attributes' source are each cached, so while neither
+// changes they're the same strings; their concatenation is kept with them, so
+// scriptResponse's check is an identity comparison, not a 30 KB string compare.
+let runtimeJoined: { core: string; attributes: string; source: string } | undefined;
+
+function runtimeResponse(req: IncomingMessage): Promise<Outgoing> {
+  const core = runtimeSource({ chunks: "split", lazy: lazyRegistry(moduleAttributes()) });
+  const attributes = attributesSource();
+  if (runtimeJoined?.core !== core || runtimeJoined.attributes !== attributes) runtimeJoined = { core, attributes, source: core + attributes };
+  return scriptResponse(req, "", runtimeJoined.source);
 }
 
 /**
@@ -2271,7 +2332,7 @@ function runtimeResponse(req: IncomingMessage): Outgoing {
  * never changes, so it's cached for good. Any other version comes from a page
  * whose core predates this deploy, and gets a chunk that reloads the page.
  */
-function chunkResponse(req: IncomingMessage, name: string, search: string): Outgoing {
+async function chunkResponse(req: IncomingMessage, name: string, search: string): Promise<Outgoing> {
   const source = chunkSource(name);
   if (source === undefined) return errorResponse(new NotFound());
   const asked = new URLSearchParams(search).get("v");
@@ -2283,36 +2344,10 @@ function chunkResponse(req: IncomingMessage, name: string, search: string): Outg
 }
 
 /** A runtime script (`key`: "" for the core, else the chunk's name), from its compressed copies. */
-function scriptResponse(req: IncomingMessage, key: string, source: string, cacheControl = "no-cache"): Outgoing {
-  let asset = scriptAssets.get(key);
-  if (asset?.source !== source) {
-    const raw = Buffer.from(source);
-    asset = {
-      source,
-      // Weak: one validator for the identity, gzip and brotli bytes alike.
-      etag: `W/"${createHash("sha256").update(raw).digest("base64url").slice(0, 16)}"`,
-      br: brotliCompressSync(raw),
-      gzip: gzipSync(raw),
-      raw,
-    };
-    scriptAssets.set(key, asset);
-  }
-  const headers: Record<string, string> = {
-    "content-type": "text/javascript; charset=utf-8",
-    "cache-control": cacheControl,
-    etag: asset.etag,
-    vary: "accept-encoding",
-  };
-  const inm = req.headers["if-none-match"];
-  // `*` matches any current representation (RFC 9110 13.1.2), and there always is one.
-  const etag = asset.etag;
-  if (inm && inm.split(",").some((tag) => tag.trim() === "*" || tag.trim() === etag || `W/${tag.trim()}` === etag)) {
-    return { status: 304, headers, body: null };
-  }
-  const accept = req.headers["accept-encoding"] ?? "";
-  if (acceptsEncoding(accept, "br")) return { status: 200, headers: { ...headers, "content-encoding": "br" }, body: asset.br };
-  if (acceptsEncoding(accept, "gzip")) return { status: 200, headers: { ...headers, "content-encoding": "gzip" }, body: asset.gzip };
-  return { status: 200, headers, body: asset.raw };
+function scriptResponse(req: IncomingMessage, key: string, source: string, cacheControl = "no-cache"): Promise<Outgoing> {
+  let entry = scriptAssets.get(key);
+  if (entry?.source !== source) scriptAssets.set(key, (entry = { source, asset: memoryAsset(source) }));
+  return assetResponse(req.headers, entry.asset, { "content-type": "text/javascript; charset=utf-8", "cache-control": cacheControl });
 }
 
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -2402,7 +2437,9 @@ async function sendFile(res: ServerResponse, file: Outgoing, headOnly: boolean):
       file = errorResponse(error);
     }
   }
-  return send(res, file, headOnly, undefined);
+  // A client that hangs up mid-download never drains the socket: without a
+  // signal the send would wait on it forever, holding the file open.
+  return send(res, file, headOnly, isStreamBody(file.body) ? abortOnClose(res).signal : undefined);
 }
 
 /** A failure that escaped the request pipeline: logged, then a bare 500, or the connection cut once headers are out. */

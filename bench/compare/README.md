@@ -66,10 +66,10 @@ Servers live in `servers/`, one file per framework, written the way each framewo
   run also had a yerd ssr result 26% low while other work was running on the host, so it was run
   again. Treat gaps under ~10% as ties. The benchmark itself keeps 5-6 threads busy, which is most of
   the load average during a run.
-- Found while building this: yerd reads request bodies with `for await (const chunk of req)`
-  (`src/server/body.ts`, `readAll`). On bare `node:http` that costs ~12% versus `data`/`end`
-  listeners for this 1 KB POST (about 88k vs 100k req/s), which accounts for part of yerd's gap in
-  `body`.
+- Found while building this: yerd read request bodies with `for await (const chunk of req)`, which
+  on bare `node:http` costs ~12% versus `data`/`end` listeners for this 1 KB POST (about 88k vs
+  100k req/s). It has used the listeners since (`src/server/body.ts`, `readParsed`); the results
+  below predate that change, so `body` may close part of its gap on a fresh run.
 
 ## Latest results
 

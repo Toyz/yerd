@@ -285,6 +285,15 @@ describe("URL attributes", () => {
     ["href", "a&b", "a&amp;b"],
     ["title", "javascript:x", "javascript:x"],
     ["data-href", "javascript:x", "javascript:x"],
+    // Attribute names are case-insensitive in HTML: SRC is src.
+    ["SRC", "javascript:x", blocked],
+    ["Href", "JaVaScRiPt:x", blocked],
+    ["FORMACTION", "javascript:x", blocked],
+    ["Action", "vbscript:x", blocked],
+    ["XLINK:HREF", "javascript:x", blocked],
+    ["POSTER", "data:image/gif,x", "data:image/gif,x"],
+    ["Src", "data:text/html,x", blocked],
+    ["HREFX", "javascript:x", "javascript:x"],
   ])("%s=%j", async (name, url, written) => {
     expect(await attrs({ [name]: url })).toBe(` ${name}="${written}"`);
   });
@@ -298,9 +307,9 @@ describe("URL attributes", () => {
     expect(await attrs({ href: raw("javascript:void 0") })).toBe(' href="javascript:void 0"');
   });
 
-  // The names are matched exactly, as written in JSX.
-  it("leaves other spellings alone", async () => {
-    expect(await attrs({ HREF: "javascript:x" })).toBe(' HREF="javascript:x"');
+  // Browsers read HREF as href, so the check can't go by the JSX spelling.
+  it("checks other spellings of the same name", async () => {
+    expect(await attrs({ HREF: "javascript:x" })).toBe(' HREF="about:blank#blocked"');
   });
 });
 

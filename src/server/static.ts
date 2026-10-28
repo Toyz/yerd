@@ -17,6 +17,7 @@ import { createReadStream } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import { extname, join, relative, resolve, sep, isAbsolute } from "node:path";
 import type { Outgoing } from "../respond/coerce.js";
+import { etagMatches } from "./http.js";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -311,11 +312,7 @@ export async function serveStatic(
     vary: "accept-encoding",
   };
 
-  // If-None-Match compares weakly (RFC 9110 13.1.2): `"x"` matches `W/"x"`.
-  const inm = headers["if-none-match"];
-  if (inm && inm.split(",").some((tag) => tag.trim() === "*" || tag.trim().replace(/^W\//, "") === etag.slice(2))) {
-    return { status: 304, headers: base, body: null };
-  }
+  if (etagMatches(headers["if-none-match"], etag)) return { status: 304, headers: base, body: null };
 
   // Precompressed sibling, if the client takes it and it exists.
   const accept = headers["accept-encoding"] ?? "";

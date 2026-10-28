@@ -6,22 +6,17 @@
  */
 
 import type { IncomingMessage } from "node:http";
-import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { promisify } from "node:util";
-import { brotliCompress, gzip } from "node:zlib";
 import { metadataOf } from "../decorators/keys.js";
 import { createMethodDecorator, type DecoratorTarget } from "../decorators/kit.js";
 import type { Outgoing } from "../respond/coerce.js";
+import { assetResponse, memoryAsset, type MemoryAsset } from "../respond/asset.js";
 import { Logger } from "../log/logger.js";
 import { parseDuration } from "../util/duration.js";
 import { requestOrigin } from "../server/http.js";
-import { acceptsEncoding } from "../server/static.js";
 
 const sitemapLog = new Logger("yerd::sitemap");
-const compressBrotli = promisify(brotliCompress);
-const compressGzip = promisify(gzip);
 
 /**
  * How often a page is expected to change, as sitemaps.org spells it. A hint
@@ -235,12 +230,8 @@ const XML_TYPE = "application/xml; charset=utf-8";
 /** Origins remembered at once when the origin comes from requests: a stream of made-up Host headers can't grow it. */
 const MAX_ORIGINS = 16;
 
-interface Asset {
+interface Asset extends MemoryAsset {
   type: string;
-  etag: string;
-  raw: Buffer;
-  br?: Promise<Buffer>;
-  gzip?: Promise<Buffer>;
 }
 
 interface Generation {
@@ -513,31 +504,15 @@ function remember<V>(map: Map<string, V>, key: string, value: V): void {
 }
 
 function makeAsset(text: string, type: string): Asset {
-  const raw = Buffer.from(text);
-  // Weak: one validator for the identity, gzip and brotli bytes alike.
-  return { type, raw, etag: `W/"${createHash("sha256").update(raw).digest("base64url").slice(0, 16)}"` };
+  return { ...memoryAsset(text), type };
 }
 
-/** An asset as a response: 304 for a matching If-None-Match, else br or gzip (compressed once, on first ask) or plain. */
-async function respond(req: IncomingMessage, asset: Asset, maxAge: number): Promise<Outgoing> {
-  const headers: Record<string, string> = {
+/** An asset as a response (see assetResponse), cached for `maxAge` ms. */
+function respond(req: IncomingMessage, asset: Asset, maxAge: number): Promise<Outgoing> {
+  return assetResponse(req.headers, asset, {
     "content-type": asset.type,
     "cache-control": maxAge > 0 ? `public, max-age=${Math.floor(maxAge / 1000)}` : "no-cache",
-    etag: asset.etag,
-    vary: "accept-encoding",
-  };
-  const inm = req.headers["if-none-match"];
-  if (inm && inm.split(",").some((tag) => tag.trim() === "*" || tag.trim() === asset.etag || `W/${tag.trim()}` === asset.etag)) {
-    return { status: 304, headers, body: null };
-  }
-  const accept = req.headers["accept-encoding"] ?? "";
-  if (acceptsEncoding(accept, "br")) {
-    return { status: 200, headers: { ...headers, "content-encoding": "br" }, body: await (asset.br ??= compressBrotli(asset.raw)) };
-  }
-  if (acceptsEncoding(accept, "gzip")) {
-    return { status: 200, headers: { ...headers, "content-encoding": "gzip" }, body: await (asset.gzip ??= compressGzip(asset.raw)) };
-  }
-  return { status: 200, headers, body: asset.raw };
+  });
 }
 
 /** What a @sitemap method gave back, awaited and drained: an array, any iterable, or an async one. */

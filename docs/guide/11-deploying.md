@@ -126,11 +126,27 @@ export function createApp(options?: YerdOptions) {
 }
 ```
 
-- `trustProxy` makes the [cross-site check](15-security.md#cross-site-requests) compare against `X-Forwarded-Host`, and sessions use `X-Forwarded-Proto` for `Secure` (`__Host-`) cookies.
+- `trustProxy` makes the [cross-site check](15-security.md#cross-site-requests) compare against `X-Forwarded-Host`, sessions use `X-Forwarded-Proto` for `Secure` (`__Host-`) cookies, and [ctx.ip](api:yerd.YerdContext.ip) is the last `X-Forwarded-For` entry.
 - `trustedOrigins` lists other origins allowed to send POST, PUT, PATCH and DELETE.
 
 > [!WARNING]
 > Only turn on `trustProxy` behind a proxy that sets those headers and strips any the client sent; otherwise anyone can claim HTTPS or your host.
+
+## HTTPS without a proxy
+
+`listen()` serves HTTPS itself when given a certificate:
+
+```ts
+// src/server.ts
+await createApp().listen(443, undefined, {
+  tls: { key: readFileSync("/etc/tls/privkey.pem"), cert: readFileSync("/etc/tls/fullchain.pem") },
+});
+```
+
+- `tls` takes [node:https's server options](https://nodejs.org/api/https.html#httpscreateserveroptions-requestlistener): `key` and `cert`, or `pfx`, or an `SNICallback` for several hosts. Without one, `listen()` throws.
+- The connection itself is TLS, so no `trustProxy` is needed: `ctx.url` is https, cookies are `Secure` and [security headers](15-security.md#security-headers) include HSTS.
+- Graceful shutdown works the same. Renewed certificates need a restart (or `server.server.setSecureContext(...)`).
+- Plain HTTP on port 80 redirecting to HTTPS is a second, tiny server; most deployments leave both to a proxy or the platform.
 
 ## Static files
 
@@ -179,6 +195,8 @@ process.on("SIGTERM", async () => {
 ```
 
 Pass `handleSignals: false` when a test runner or supervisor owns the signals.
+
+If the port can't be bound (`EADDRINUSE`, `EACCES`), `listen()` rejects with that error after stopping the app: `@hosted` services and `@every` timers end and `@onShutdown` hooks run, so nothing keeps a server that never started alive. An app you `start()`ed yourself before calling `listen()` keeps running.
 
 ## Before you go live
 

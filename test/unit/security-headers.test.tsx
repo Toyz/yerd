@@ -1,5 +1,6 @@
 // app.securityHeaders(): CSP, HSTS (HTTPS only), framing, referrer and opener policy on every response.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -89,6 +90,24 @@ describe("app.securityHeaders()", () => {
       expect((await fetch(server.url + "/robots.txt")).headers.get("x-frame-options")).toBe("SAMEORIGIN");
     } finally {
       await server.close();
+    }
+  });
+
+  it("leaves requests it passes on (next()) to the host app's own headers", async () => {
+    const app = yerd({ routes: [Home], services: [], handleSignals: false }).securityHeaders();
+    await app.start();
+    const host = createServer((req, res) => app.handle(req, res, () => res.end("host app")));
+    await new Promise<void>((r) => host.listen(0, "127.0.0.1", r));
+    try {
+      const base = `http://127.0.0.1:${(host.address() as { port: number }).port}`;
+      const passed = await fetch(`${base}/not-yerds`);
+      expect(await passed.text()).toBe("host app");
+      expect(passed.headers.get("content-security-policy")).toBeNull();
+      expect(passed.headers.get("x-frame-options")).toBeNull();
+      expect((await fetch(`${base}/`)).headers.get("content-security-policy")).toBe(DEFAULT_CSP);
+    } finally {
+      host.close();
+      await app.stop();
     }
   });
 

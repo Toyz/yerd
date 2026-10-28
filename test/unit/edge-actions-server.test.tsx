@@ -1,3 +1,4 @@
+import { get as httpGet } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   ActionForm, YerdError, Region, action, bind, createGuard, currentContext, get, guards, is, length, param, post, query, redirect, res, route, yerd,
@@ -124,6 +125,16 @@ class Files {
   }
 }
 
+@route("/edge/any/*")
+class Any {
+  @get page() {
+    return <form action={this.touch}><button>t</button></form>;
+  }
+  @action touch() {
+    seen.push(["any"]);
+  }
+}
+
 @route("/edge/other")
 class Other {
   @get page() {
@@ -157,7 +168,7 @@ class Host {
 let server: RunningServer;
 let rotated: RunningServer;
 beforeAll(async () => {
-  server = await yerd({ routes: [Edge, Item, Files, Other, Host, Admin], services: [], handleSignals: false, secret: [SECRET, OLD] }).listen(0, "127.0.0.1");
+  server = await yerd({ routes: [Edge, Item, Files, Any, Other, Host, Admin], services: [], handleSignals: false, secret: [SECRET, OLD] }).listen(0, "127.0.0.1");
   rotated = await yerd({ routes: [Edge], services: [], handleSignals: false, secret: SECRET }).listen(0, "127.0.0.1");
 });
 afterAll(async () => {
@@ -431,7 +442,11 @@ describe("params, query and other routes", () => {
     ["/edge/items/@ada?tab=x", "/edge/items/%40ada?tab=x"],
     ["/edge/items/a,b?tab=x", "/edge/items/a%2Cb?tab=x"],
     ["/edge/items/%3cx?tab=x", "/edge/items/%3Cx?tab=x"],
-    ["/edge/files/a/b.txt?v=2", "/edge/files/a%2Fb.txt?v=2"],
+    // A splat keeps its slashes: each segment is encoded on its own.
+    ["/edge/files/a/b.txt?v=2", "/edge/files/a/b.txt?v=2"],
+    ["/edge/files/a%20b/c.txt", "/edge/files/a%20b/c.txt"],
+    // A bare * is named "wildcard", and filled like any splat.
+    ["/edge/any/x/y", "/edge/any/x/y"],
   ])("a form on %s posts to %s", async (path, expected) => {
     const html = await page(path);
     const url = /<form action="([^"]+)"/.exec(html)![1]!.replaceAll("&amp;", "&");
@@ -458,12 +473,26 @@ describe("params, query and other routes", () => {
 
   it("a wildcard param is filled into the URL", async () => {
     const html = await page("/edge/files/a/b.txt");
-    expect(html).toContain('<form action="/edge/files/a%2Fb.txt" method="post" data-yx>');
+    expect(html).toContain('<form action="/edge/files/a/b.txt" method="post" data-yx>');
     const t = /name="_yx" value="([^"]+)"/.exec(html)![1]!;
     seen.length = 0;
-    const r = await post_("/edge/files/a%2Fb.txt", fields({ _yx: t }), { yx: "1" });
+    const r = await post_("/edge/files/a/b.txt", fields({ _yx: t }), { yx: "1" });
     expect(r.status).toBe(204);
     expect(seen).toEqual([["touch", "a/b.txt"]]);
+  });
+
+  it("a page whose path has a dot segment as a param is a 400: no form URL can point back to it", async () => {
+    // fetch() would resolve the dot segment before sending; node:http sends the path as written.
+    const { port } = new URL(server.url);
+    const r = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      httpGet({ host: "127.0.0.1", port, path: "/edge/items/%2E%2E?tab=x", headers: { accept: "application/json" } }, (res) => {
+        let body = "";
+        res.on("data", (c: Buffer) => (body += c));
+        res.on("end", () => resolve({ status: res.statusCode!, body }));
+      }).on("error", reject);
+    });
+    expect(r.status).toBe(400);
+    expect(JSON.parse(r.body)).toEqual({ error: `The path's :id can't be ".."`, code: "bad_request" });
   });
 
   it("another route's action posts to that route, without this page's query", async () => {

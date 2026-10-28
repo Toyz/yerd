@@ -229,7 +229,17 @@ it("answers over TCP", async () => {
 });
 ```
 
-`listen(0)` picks a free port, `server.url` has it, and `server.close()` runs the full shutdown.
+`listen(0)` picks a free port, `server.url` and `server.port` have it, and `server.close()` runs the full shutdown.
+
+For one test, `await using` closes the server when the block ends, a failed assertion included:
+
+```ts
+it("keeps the connection alive", async () => {
+  await using server = await createApp({ handleSignals: false }).listen(0, "127.0.0.1");
+  const r = await fetch(server.url + "/api/products/7");
+  expect(r.headers.get("connection")).toBe("keep-alive");
+});
+```
 
 ## In a browser
 

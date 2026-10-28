@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request } from "node:http";
@@ -467,5 +468,43 @@ describe("static over HTTP", () => {
   it("refuses traversal in an absolute-form request target", async () => {
     const r = await raw(`${server.url}/../package.json`);
     expect(r.status).toBe(404);
+  });
+});
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+describe("static: aborted downloads", () => {
+  // /dev/fd lists this process's open descriptors (on Linux it's /proc/self/fd).
+  const openFds = () => readdirSync("/dev/fd").length;
+
+  it("closes the file when the client hangs up before the download ends", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "yerd-edge-abort-"));
+    writeFileSync(join(dir, "big.bin"), Buffer.alloc(32 * 1024 * 1024));
+    await using server = await yerd({ routes: [], services: [], handleSignals: false }).static("/", dir).listen(0, "127.0.0.1");
+    const { port } = server;
+    try {
+      const abortOne = () =>
+        new Promise<void>((resolve, reject) => {
+          const socket = connect(port, "127.0.0.1", () => socket.write("GET /big.bin HTTP/1.1\r\nHost: x\r\n\r\n"));
+          // Stop reading after the first bytes, so the server's writes back up, then hang up.
+          socket.once("data", () => {
+            socket.pause();
+            setTimeout(() => {
+              socket.destroy();
+              resolve();
+            }, 20);
+          });
+          socket.on("error", reject);
+        });
+      await abortOne();
+      await sleep(50);
+      const before = openFds();
+      for (let i = 0; i < 10; i++) await abortOne();
+      // Give the server a moment to see the closes.
+      await sleep(200);
+      expect(openFds()).toBeLessThanOrEqual(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

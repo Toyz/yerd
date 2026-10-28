@@ -140,20 +140,30 @@ function styleString(value: unknown): string {
   return out;
 }
 
-/** Attributes whose value is a URL, checked for script-running schemes. First char first: this runs per string attribute. */
+/**
+ * Attributes whose value is a URL, checked for script-running schemes. HTML
+ * attribute names are case-insensitive (`SRC` is `src`), so the check is
+ * too. First char first, lower-cased by bit: this runs per string attribute,
+ * and only a name of the right length and first letter is lower-cased whole.
+ */
 function isUrlAttribute(name: string): boolean {
-  switch (name.charCodeAt(0)) {
-    case 104: return name === "href";
-    case 115: return name === "src";
-    case 97: return name === "action";
-    case 102: return name === "formaction" || name === "formAction";
-    case 120: return name === "xlink:href";
-    case 112: return name === "poster" || name === "ping";
-    case 99: return name === "cite";
-    case 98: return name === "background";
-    case 100: return name === "data";
+  switch (name.charCodeAt(0) | 32) {
+    case 104: return named(name, "href");
+    case 115: return named(name, "src");
+    case 97: return named(name, "action");
+    case 102: return named(name, "formaction");
+    case 120: return named(name, "xlink:href");
+    case 112: return named(name, "poster") || named(name, "ping");
+    case 99: return named(name, "cite");
+    case 98: return named(name, "background");
+    case 100: return named(name, "data");
   }
   return false;
+}
+
+/** `name` is `lower` in any case. */
+function named(name: string, lower: string): boolean {
+  return name.length === lower.length && (name === lower || name.toLowerCase() === lower);
 }
 
 const BLOCKED_URL = "about:blank#blocked";
@@ -175,7 +185,7 @@ function safeUrl(name: string, url: string): string {
   const scheme = url.slice(0, colon).replace(URL_IGNORED, "").toLowerCase();
   if (scheme === "javascript" || scheme === "vbscript") return BLOCKED_URL;
   if (scheme === "data") {
-    if ((name === "src" || name === "poster") && url.slice(colon + 1).replace(URL_IGNORED, "").toLowerCase().startsWith("image/")) return url;
+    if ((named(name, "src") || named(name, "poster")) && url.slice(colon + 1).replace(URL_IGNORED, "").toLowerCase().startsWith("image/")) return url;
     return BLOCKED_URL;
   }
   return url;

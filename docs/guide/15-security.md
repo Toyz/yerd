@@ -237,7 +237,7 @@ retry-after: 60
 ```
 
 - It's a guard, so it goes where guards go: one action or handler, a route, a group's `guards`, or [app.guard()](api:yerd.YerdApp.guard) for everything.
-- Counts are per client address, [ctx.ip](api:yerd.YerdContext.ip). Behind a proxy, set `trustProxy` or every visitor shares the proxy's address. With it, ctx.ip is the last `X-Forwarded-For` entry, the one your proxy wrote; earlier entries are the client's to forge.
+- Counts are per client address, [ctx.ip](api:yerd.YerdContext.ip), and per /64 network for IPv6, since one connection usually holds a whole /64 ([clientKey](api:yerd.clientKey)). Behind a proxy, set `trustProxy` or every visitor shares the proxy's address. With it, ctx.ip is the last `X-Forwarded-For` entry, the one your proxy wrote; earlier entries are the client's to forge.
 - `key: (ctx) => ...` counts by something else (an API key, a user id). Returning `undefined` lets the request through uncounted.
 - Windows are fixed: a client can spend its limit at the end of one window and again at the start of the next.
 - Counts live in the process ([MemoryRateLimitStore](api:yerd.MemoryRateLimitStore)). With several instances, pass a shared `store`: anything with `hit(key, windowMs)` returning `{ count, resetAt }`.
@@ -254,7 +254,7 @@ content-type: text/html; charset=utf-8
 <!-- ... --><input type="search" name="q" value="&lt;script&gt;alert(1)&lt;/script&gt;" placeholder="Search" aria-label="Search"><!-- ... --><p class="empty">Nothing matches &quot;&lt;script&gt;alert(1)&lt;/script&gt;&quot;.</p><!-- ... -->
 ```
 
-- **Escaping.** Text and attributes always are; [raw()](api:yerd.raw) is the only way around. URL attributes block `javascript:`, `vbscript:` and `data:` (`" java\tscript:"` too); [json()](api:yerd.json) makes data safe in inline scripts. See [what renders how](05-pages-and-layouts.md#what-renders-how).
+- **Escaping.** Text and attributes always are; [raw()](api:yerd.raw) is the only way around. URL attributes block `javascript:`, `vbscript:` and `data:` (`" java\tscript:"` too, and `SRC` or `Href` spelled any way); [json()](api:yerd.json) makes data safe in inline scripts. See [what renders how](05-pages-and-layouts.md#what-renders-how).
 - **Headers.** Values with line breaks, NUL or other control characters are refused, so request data can't split a response. Every response gets `X-Content-Type-Options: nosniff`; the rest are opt-in, see [security headers](#security-headers).
 - **Errors.** A non-`YerdError` is a 500 saying `Internal Server Error`; message and stack go to the log. `YerdError` messages show below 500. Stacks on the [error page](05-pages-and-layouts.md#error-pages) in development only.
 - **Logs.** Fields named like secrets (`password`, `token`, `cookie`...) are redacted; see [logging](10-logging.md#redaction-and-limits).

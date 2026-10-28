@@ -30,27 +30,24 @@ export interface UrlOptions {
   hash?: string;
 }
 
-interface Compiled {
-  /** Where the def sat in the registry, to notice a reset (dev reloads). */
-  index: number;
-  def: RouteDef;
+/** A route pattern split for filling: static text, or a param (`:name`) or splat (`*name`) to fill. */
+export interface CompiledPattern {
   pattern: string;
-  /** The pattern's segments: static text, or a param (`:name`) or splat (`*name`) to fill. */
   segments: ({ text: string } | { param: string } | { splat: string })[];
   names: Set<string>;
 }
 
-const compiled = new WeakMap<DecoratorMetadataObject, Compiled>();
+/** What's wrong with a param fillPattern() was given. */
+export interface FillProblem {
+  /** missing: no value; empty: "" for a :param; invalid: a non-finite number, or a "." / ".." segment. */
+  kind: "missing" | "empty" | "invalid";
+  name: string;
+  /** Says what's wrong, e.g. `:id is missing`. */
+  message: string;
+}
 
-function compile(route: Function): Compiled {
-  const metadata = metadataOf(route);
-  const cached = compiled.get(metadata);
-  if (cached && routeRegistry[cached.index] === cached.def) return cached;
-  const index = routeRegistry.findIndex((d) => d.metadata === metadata);
-  if (index < 0) throw new TypeError(`urlFor: ${route.name || "that class"} isn't a @route`);
-  const def = routeRegistry[index]!;
-  const pattern = resolveRoute(def).pattern;
-  const segments: Compiled["segments"] = [];
+export function compilePattern(pattern: string): CompiledPattern {
+  const segments: CompiledPattern["segments"] = [];
   const names = new Set<string>();
   for (const segment of pattern.split("/").slice(1)) {
     if (segment.startsWith(":")) {
@@ -64,20 +61,62 @@ function compile(route: Function): Compiled {
       segments.push({ text: segment });
     }
   }
-  const entry = { index, def, pattern, segments, names };
+  return { pattern, segments, names };
+}
+
+/**
+ * The path of a pattern with its params filled in, percent-encoded: a splat
+ * segment by segment, so its slashes stay slashes. `fail` turns a problem
+ * into the error to throw. Params the pattern doesn't name are ignored.
+ */
+export function fillPattern(compiled: CompiledPattern, params: Readonly<Record<string, string | number | undefined>>, fail: (problem: FillProblem) => Error): string {
+  const text = (name: string, value: string | number): string => {
+    if (typeof value === "number" && !Number.isFinite(value)) throw fail({ kind: "invalid", name, message: `:${name} is ${value}` });
+    return String(value);
+  };
+  // "." and ".." would be resolved away by the browser, landing on another path.
+  const encode = (name: string, value: string): string => {
+    if (value === "." || value === "..") throw fail({ kind: "invalid", name, message: `:${name} can't be ${JSON.stringify(value)}` });
+    return encodeURIComponent(value);
+  };
+  const parts: string[] = [];
+  for (const segment of compiled.segments) {
+    if ("text" in segment) {
+      parts.push(segment.text);
+    } else if ("param" in segment) {
+      const value = params[segment.param];
+      if (value === undefined) throw fail({ kind: "missing", name: segment.param, message: `:${segment.param} is missing` });
+      const filled = text(segment.param, value);
+      if (filled === "") throw fail({ kind: "empty", name: segment.param, message: `:${segment.param} is empty` });
+      parts.push(encode(segment.param, filled));
+    } else {
+      const value = params[segment.splat];
+      const filled = value === undefined ? "" : text(segment.splat, value);
+      // An empty splat matches the path without it: /files/* answers /files.
+      if (filled !== "") parts.push(filled.split("/").map((part) => encode(segment.splat, part)).join("/"));
+    }
+  }
+  return `/${parts.join("/")}`;
+}
+
+interface Compiled extends CompiledPattern {
+  /** Where the def sat in the registry, to notice a reset (dev reloads). */
+  index: number;
+  def: RouteDef;
+}
+
+const compiled = new WeakMap<DecoratorMetadataObject, Compiled>();
+
+function compile(route: Function): Compiled {
+  const metadata = metadataOf(route);
+  const cached = compiled.get(metadata);
+  if (cached && routeRegistry[cached.index] === cached.def) return cached;
+  const index = routeRegistry.findIndex((d) => d.metadata === metadata);
+  if (index < 0) throw new TypeError(`urlFor: ${route.name || "that class"} isn't a @route`);
+  const def = routeRegistry[index]!;
+  const entry = { ...compilePattern(resolveRoute(def).pattern), index, def };
   compiled.set(metadata, entry);
   return entry;
-}
-
-function text(value: string | number, route: Compiled, name: string): string {
-  if (typeof value === "number" && !Number.isFinite(value)) throw new TypeError(`urlFor ${route.pattern}: :${name} is ${value}`);
-  return String(value);
-}
-
-/** One segment, encoded. "." and ".." would be resolved away by the browser, landing on another path. */
-function encodeSegment(value: string, route: Compiled, name: string): string {
-  if (value === "." || value === "..") throw new TypeError(`urlFor ${route.pattern}: :${name} can't be ${JSON.stringify(value)}`);
-  return encodeURIComponent(value);
 }
 
 /**
@@ -104,24 +143,7 @@ export function urlFor(route: Function, params: UrlParams = {}, options: UrlOpti
       throw new TypeError(`urlFor ${compiledRoute.pattern}: there's no :${name} param (it has ${has})`);
     }
   }
-  const parts: string[] = [];
-  for (const segment of compiledRoute.segments) {
-    if ("text" in segment) {
-      parts.push(segment.text);
-    } else if ("param" in segment) {
-      const value = params[segment.param];
-      if (value === undefined) throw new TypeError(`urlFor ${compiledRoute.pattern}: :${segment.param} is missing`);
-      const filled = text(value, compiledRoute, segment.param);
-      if (filled === "") throw new TypeError(`urlFor ${compiledRoute.pattern}: :${segment.param} is empty`);
-      parts.push(encodeSegment(filled, compiledRoute, segment.param));
-    } else {
-      const value = params[segment.splat];
-      const filled = value === undefined ? "" : text(value, compiledRoute, segment.splat);
-      // An empty splat matches the path without it: /files/* answers /files.
-      if (filled !== "") parts.push(filled.split("/").map((part) => encodeSegment(part, compiledRoute, segment.splat)).join("/"));
-    }
-  }
-  let url = `/${parts.join("/")}`;
+  let url = fillPattern(compiledRoute, params, (problem) => new TypeError(`urlFor ${compiledRoute.pattern}: ${problem.message}`));
   const search = queryString(options.query);
   if (search) url += `?${search}`;
   if (options.hash) url += options.hash.startsWith("#") ? options.hash : `#${options.hash}`;

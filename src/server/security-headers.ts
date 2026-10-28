@@ -147,3 +147,9 @@ export function applySecurityHeaders(headers: SecurityHeaders, req: IncomingMess
   for (const [name, value] of headers.always) res.setHeader(name, value);
   if (headers.https.length && requestIsHttps(req, trustProxy)) for (const [name, value] of headers.https) res.setHeader(name, value);
 }
+
+/** Take them off again: a request yerd passes on (next()) is the host app's to answer, with its own headers. */
+export function removeSecurityHeaders(headers: SecurityHeaders, res: ServerResponse): void {
+  for (const [name] of headers.always) res.removeHeader(name);
+  for (const [name] of headers.https) res.removeHeader(name);
+}

@@ -45,10 +45,12 @@ export interface RateLimitStore {
 
 /** Most keys a MemoryRateLimitStore holds by default. */
 const MEMORY_MAX_KEYS = 100_000;
+/** Entries a hit looks at while a sweep is under way. */
+const SWEEP_STEP = 16;
 
 /**
- * Counts in a Map, for one process. Expired windows are swept as it's used,
- * with no timer to keep the process alive. Past `maxKeys` (default 100,000)
+ * Counts in a Map, for one process. Expired windows are swept a few at a
+ * time as it's used, with no timer to keep the process alive. Past `maxKeys` (default 100,000)
  * the oldest window is dropped, so a flood of new addresses costs bounded
  * memory, at the price of forgetting that key's count early.
  *
@@ -61,6 +63,8 @@ const MEMORY_MAX_KEYS = 100_000;
 export class MemoryRateLimitStore implements RateLimitStore {
   readonly #windows = new Map<string, RateLimitHit>();
   readonly #maxKeys: number;
+  /** The sweep in progress: an iterator that keeps its place from one hit to the next. */
+  #sweep: MapIterator<[string, RateLimitHit]> | undefined;
   #nextSweep = 0;
 
   constructor(options: { maxKeys?: number } = {}) {
@@ -70,9 +74,23 @@ export class MemoryRateLimitStore implements RateLimitStore {
 
   hit(key: string, windowMs: number): RateLimitHit {
     const now = Date.now();
-    if (now >= this.#nextSweep) {
-      for (const [k, w] of this.#windows) if (w.resetAt <= now) this.#windows.delete(k);
+    // Once per window, a sweep for expired windows starts, and each hit moves
+    // it on a few entries: never a stall over every key. (Restarting from the
+    // front each time instead would walk past every entry deleted before:
+    // a Map keeps their slots until it's resized.)
+    if (!this.#sweep && now >= this.#nextSweep) {
+      this.#sweep = this.#windows.entries();
       this.#nextSweep = now + windowMs;
+    }
+    if (this.#sweep) {
+      for (let i = 0; i < SWEEP_STEP; i++) {
+        const next = this.#sweep.next();
+        if (next.done) {
+          this.#sweep = undefined;
+          break;
+        }
+        if (next.value[1].resetAt <= now) this.#windows.delete(next.value[0]);
+      }
     }
     let window = this.#windows.get(key);
     if (!window || window.resetAt <= now) {
@@ -93,6 +111,31 @@ export class MemoryRateLimitStore implements RateLimitStore {
 }
 
 /**
+ * The default key for an address: IPv4 as it is (an IPv4-mapped IPv6
+ * address too), IPv6 as its /64 network, anything unparsable as it is.
+ *
+ * ```ts
+ * clientKey("2001:db8:1:2:aaaa::1"); // "2001:db8:1:2::/64"
+ * clientKey("::ffff:203.0.113.7");   // "203.0.113.7"
+ * ```
+ */
+export function clientKey(ip: string): string {
+  if (!ip.includes(":")) return ip;
+  const address = ip.split("%")[0]!.toLowerCase();
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(address);
+  if (mapped) return mapped[1]!;
+  const halves = address.split("::");
+  if (halves.length > 2) return ip;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const missing = 8 - head.length - tail.length;
+  if (missing < 0 || (halves.length === 1 && missing !== 0)) return ip;
+  const groups = [...head, ...Array<string>(missing).fill("0"), ...tail];
+  if (!groups.slice(0, 4).every((g) => /^[0-9a-f]{1,4}$/.test(g))) return ip;
+  return `${groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, "")).join(":")}::/64`;
+}
+
+/**
  * Options for rateLimit().
  *
  * ```ts
@@ -110,7 +153,9 @@ export interface RateLimitOptions {
    */
   name?: string;
   /**
-   * Who a request counts against. Default ctx.ip (see trustProxy). Return
+   * Who a request counts against. Default: the client's address (ctx.ip, see
+   * trustProxy), an IPv6 one by its /64 network, since one connection
+   * usually holds a whole /64 and could take a new address per request. Return
    * undefined (or "") to let the request through uncounted: a signed-in
    * user's id when there is one, say, with anonymous traffic left to another
    * limiter.
@@ -154,7 +199,7 @@ export function rateLimit(options: RateLimitOptions): GuardRef {
   if (!Number.isInteger(limit) || limit < 1) throw new TypeError(`rateLimit: limit must be a positive integer, not ${limit}`);
   const windowMs = parseDuration(options.window);
   if (!(windowMs > 0)) throw new TypeError(`rateLimit: window must be longer than 0, not ${JSON.stringify(options.window)}`);
-  const key = options.key ?? ((ctx: YerdContext) => ctx.ip);
+  const key = options.key ?? ((ctx: YerdContext) => clientKey(ctx.ip));
   const store = options.store ?? new MemoryRateLimitStore();
 
   const judge = (hit: RateLimitHit): GuardResult =>

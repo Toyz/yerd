@@ -73,6 +73,20 @@ export function clientAddress(req: IncomingMessage, trustProxy: boolean): string
   return req.socket?.remoteAddress ?? "";
 }
 
+/**
+ * Whether an If-None-Match header matches `etag`. Weak comparison (RFC 9110
+ * 13.1.2): `"x"` and `W/"x"` match each other, and `*` matches any current
+ * representation, of which there always is one here.
+ */
+export function etagMatches(header: string | undefined, etag: string): boolean {
+  if (!header) return false;
+  const opaque = etag.startsWith("W/") ? etag.slice(2) : etag;
+  return header.split(",").some((tag) => {
+    const t = tag.trim();
+    return t === "*" || (t.startsWith("W/") ? t.slice(2) : t) === opaque;
+  });
+}
+
 const REQUEST_ID = /^[\w.:@-]{1,128}$/;
 
 /** A well-formed `x-request-id` the client sent, else undefined (the caller makes one up). */

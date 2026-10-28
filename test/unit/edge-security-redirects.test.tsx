@@ -204,4 +204,21 @@ describe("redirects in a running app", () => {
     expect(r.status).toBe(303);
     expect(r.headers.get("location")).toBe(expected);
   });
+
+  it("behind a proxy, the no-JS action redirect compares the Referer with the forwarded host", async () => {
+    await using proxied = await yerd({ routes: [Back], services: [], handleSignals: false, secret: "r".repeat(32), trustProxy: true })
+      .listen(0, "127.0.0.1");
+    // The proxy rewrites Host to the internal address and says what the client asked for.
+    const via = { "x-forwarded-host": "shop.example", "x-forwarded-proto": "https" };
+    const html = await (await fetch(proxied.url + "/back", { headers: { accept: "text/html", ...via } })).text();
+    const token = /name="_yx" value="([^"]+)"/.exec(html)![1]!;
+    const r = await fetch(proxied.url + "/back", {
+      method: "POST",
+      redirect: "manual",
+      body: new URLSearchParams({ _yx: token }),
+      headers: { ...via, referer: "https://shop.example/back?x=1", "sec-fetch-site": "same-origin" },
+    });
+    expect(r.status).toBe(303);
+    expect(r.headers.get("location")).toBe("/back?x=1");
+  });
 });

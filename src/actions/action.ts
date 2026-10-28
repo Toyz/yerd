@@ -19,6 +19,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createMethodDecorator, type DecoratorTarget } from "../decorators/kit.js";
 import { resolveRoute, routeRegistry, type RouteDef } from "../decorators/route.js";
+import { compilePattern, fillPattern, type CompiledPattern } from "../router/url.js";
 import { BadRequest, Forbidden, ValidationFailed } from "../respond/errors.js";
 import { Logger } from "../log/logger.js";
 import { currentContext, type YerdContext } from "../server/context.js";
@@ -809,13 +810,12 @@ export function formAction(value: ActionLambda | Action<unknown> | BoundAction):
   if (!info) throw new TypeError("An action must be an @action method, a lambda calling one, or bind(...) of one");
   const owner = ownerRoute(info);
   const ctx = currentContext();
-  const url = owner.pattern.replace(/[:*]([A-Za-z0-9_]+)/g, (_, name: string) => {
-    const value = ctx.params[name];
-    if (value === undefined) {
-      throw new Error(`Can't render a form for ${owner.className}.${info.name}: the current page has no :${name} param`);
-    }
-    return encodeURIComponent(value);
-  });
+  const url = fillPattern(owner.compiled, ctx.params, (problem) =>
+    problem.kind === "missing"
+      ? new Error(`Can't render a form for ${owner.className}.${info.name}: the current page has no :${problem.name} param`)
+      // The request's own path held it (/users/%2E%2E): no URL can point back there.
+      : new BadRequest(`The path's ${problem.message}`),
+  );
   // Keep the page's query string when posting to the page's own route, so the
   // action sees the same @query values (filters, sort) as the page did. The
   // page's own URL may spell a param differently ("/u/@ada" for "/u/%40ada").
@@ -829,6 +829,7 @@ interface OwnerRoute {
   className: string;
   /** The full pattern, group prefixes included. */
   pattern: string;
+  compiled: CompiledPattern;
   /** Where the route sat in the registry, to notice a reset (dev reloads) without a hook. */
   index: number;
   def: RouteDef;
@@ -846,7 +847,8 @@ function ownerRoute(info: ActionInfo): OwnerRoute {
   const index = routeRegistry.findIndex((d) => d.metadata === info.metadata);
   if (index < 0) throw new TypeError(`@action ${info.name} belongs to a class that isn't a @route`);
   const def = routeRegistry[index]!;
-  const owner = { className: def.className, pattern: resolveRoute(def).pattern, index, def };
+  const pattern = resolveRoute(def).pattern;
+  const owner = { className: def.className, pattern, compiled: compilePattern(pattern), index, def };
   owners.set(info.metadata, owner);
   return owner;
 }
