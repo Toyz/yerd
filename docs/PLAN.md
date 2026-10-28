@@ -36,7 +36,7 @@ Everything that ships is written by hand:
 | Static files / mime  | serve-static      | `node:fs` + a hand-written mime table       |
 | Cookies / signing    | cookie, iron      | `node:crypto` HMAC                          |
 | Logging / tracing    | pino, winston, OTel SDK | `Logger` facade, `@instrument` spans, `ILogger` sink from DI, built-in console sink, request ids and access log, see [LOGGING.md](LOGGING.md) |
-| Sessions / auth      | express-session, passport, jsonwebtoken | `node:crypto` (AES-GCM, HMAC, scrypt), see [AUTH.md](AUTH.md) |
+| Sessions / auth      | express-session, passport, jsonwebtoken | `node:crypto` (AES-GCM, HMAC, argon2id), see [AUTH.md](AUTH.md) |
 
 Node built-ins (`node:*`) and web globals that ship in Node (`URL`,
 `URLSearchParams`, `TextEncoder`, `ReadableStream`) are fair game. They're the
@@ -834,7 +834,7 @@ parsing; sessions (`app.sessions()`, AES-256-GCM sealed cookie store or
 loom-style named `@guard` on services (resolved through DI per request),
 value guards via `createGuard`, `guards` on routes and groups, `@guards`,
 `app.guard()`; `app.use()` middleware; `@toyz/yerd/auth`: argon2id
-passwords (scrypt fallback, dummy hash for unknown users), `createAuth`
+passwords (scrypt hashes still verify, dummy hash for unknown users), `createAuth`
 (`@auth.user`, `@auth.maybeUser`, `auth.required` (login redirect for pages,
 `yx-location` for scripts, 401 for APIs), `auth.role()`, `login()` with id
 rotation, `logout()`, `current()`), `safeNext()`. The todo app is
@@ -1035,7 +1035,7 @@ exports today: `@toyz/yerd` (server), `@toyz/yerd/jsx-runtime`,
 `@toyz/yerd/jsx-dev-runtime`, `@toyz/yerd/vite`, `@toyz/yerd/auth`,
 `@toyz/yerd/client` (types for client modules). Ships
 `dist/` (tsc output of `tsconfig.build.json`, with `.d.ts` files), `LICENSE`
-and `README.md`, with zero runtime `dependencies`; requires Node 24 or later.
+and `README.md`, with zero runtime `dependencies`; requires Node 24.7 or later.
 Apps set `"jsxImportSource": "@toyz/yerd"`.
 
 Planned: `@toyz/yerd/kit` and `@toyz/yerd/async-context` subpaths, a `yerd`

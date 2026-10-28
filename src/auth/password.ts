@@ -3,8 +3,8 @@
  *
  * argon2id (OWASP's minimum: 19 MiB, 2 passes, 1 lane) via crypto.argon2,
  * stored in the standard PHC format so parameters can be raised later and old
- * hashes still verify. scrypt is the fallback where crypto.argon2 is missing,
- * and verifyPassword reads both.
+ * hashes still verify. verifyPassword also reads scrypt hashes, which older
+ * yerd versions made on Node releases without crypto.argon2.
  */
 
 import { argon2, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
@@ -23,12 +23,10 @@ function scryptHash(password: string, salt: Buffer, N: number, r: number, p: num
   });
 }
 
-const hasArgon2 = typeof argon2 === "function";
-
 /**
- * Hash a password for storage: argon2id (scrypt where Node lacks it), salted,
- * in PHC format, so the string carries its own parameters and verifyPassword
- * keeps reading it after they're raised. Store the whole string.
+ * Hash a password for storage: argon2id, salted, in PHC format, so the
+ * string carries its own parameters and verifyPassword keeps reading it after
+ * they're raised. Store the whole string.
  *
  * ```ts
  * @action async signUp(_: {}, form: ActionForm) {
@@ -41,12 +39,8 @@ const hasArgon2 = typeof argon2 === "function";
  */
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
-  if (hasArgon2) {
-    const key = await argon2id(password, salt, ARGON);
-    return `$argon2id$v=19$m=${ARGON.memory},t=${ARGON.passes},p=${ARGON.parallelism}$${salt.toString("base64url")}$${key.toString("base64url")}`;
-  }
-  const key = await scryptHash(password, salt, 1 << 15, 8, 1);
-  return `scrypt$32768$8$1$${salt.toString("base64url")}$${key.toString("base64url")}`;
+  const key = await argon2id(password, salt, ARGON);
+  return `$argon2id$v=19$m=${ARGON.memory},t=${ARGON.passes},p=${ARGON.parallelism}$${salt.toString("base64url")}$${key.toString("base64url")}`;
 }
 
 // A real hash of nothing in particular, so a lookup of an unknown user costs the same.

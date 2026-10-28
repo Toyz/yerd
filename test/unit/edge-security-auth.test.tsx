@@ -509,7 +509,7 @@ describe("hashPassword / verifyPassword", () => {
     await expect(verifyPassword("correct horse", stored)).rejects.toThrow(/Unrecognized password hash format/);
   });
 
-  it("verifies scrypt hashes (the fallback format)", async () => {
+  it("verifies scrypt hashes (made by older yerd versions)", async () => {
     const salt = Buffer.from("0123456789abcdef");
     const key = await new Promise<Buffer>((resolve, reject) =>
       scrypt("pw", salt, 32, { N: 1024, r: 8, p: 1 }, (error, k) => (error ? reject(error) : resolve(k))),

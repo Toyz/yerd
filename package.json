@@ -25,7 +25,7 @@
     "url": "git+https://github.com/Toyz/yerd.git"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=24.7"
   },
   "files": [
     "dist/src",

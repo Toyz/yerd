@@ -142,7 +142,7 @@ export function packageJson({ name, template, tailwind, yerd }) {
     version: "0.0.0",
     private: true,
     type: "module",
-    engines: { node: ">=24" },
+    engines: { node: ">=24.7" },
     scripts,
     dependencies: { "@toyz/yerd": yerd },
     devDependencies: Object.fromEntries(dev.sort().map((dep) => [dep, VERSIONS[/** @type {keyof typeof VERSIONS} */ (dep)]])),

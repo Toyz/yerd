@@ -49,7 +49,7 @@ iterable for a stream, JSX for a page, `res()` / `redirect()` for full control.
 
 ## Install
 
-Start a new app (Node 24+):
+Start a new app (Node 24.7+):
 
 ```sh
 npm create yerd@latest my-app

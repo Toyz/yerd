@@ -24,7 +24,7 @@
     "directory": "packages/create-yerd"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=24.7"
   },
   "bin": {
     "create-yerd": "bin/create-yerd.js"

@@ -180,7 +180,7 @@ if (!(await verifyPassword(input.password, user?.passwordHash)) || !user) {
 $argon2id$v=19$m=19456,t=2,p=1$FFENKpfSnIu5lEaCDdoaLQ$0fLU1TYPg4-yeaz57BE8C9UIDRZLbJ1xBL6c6S4kDII
 ```
 
-- [hashPassword](api:auth.hashPassword) uses argon2id at OWASP's minimum (19 MiB, 2 passes), scrypt where Node lacks it, in PHC format so the parameters can be raised later.
+- [hashPassword](api:auth.hashPassword) uses argon2id at OWASP's minimum (19 MiB, 2 passes), in PHC format so the parameters can be raised later.
 - [verifyPassword](api:auth.verifyPassword) compares in constant time. Pass it `undefined` for an unknown user, as above.
 
 ## Redirects

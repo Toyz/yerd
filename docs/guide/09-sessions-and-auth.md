@@ -344,7 +344,7 @@ set-cookie: yerd_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax
 
 `auth.logout()` runs `onLogout`, then destroys the session and cookie.
 
-- [hashPassword](api:auth.hashPassword) uses argon2id (scrypt where Node lacks it), PHC format; [verifyPassword](api:auth.verifyPassword) reads both. Given `undefined`, it still spends a full hash.
+- [hashPassword](api:auth.hashPassword) uses argon2id, PHC format; [verifyPassword](api:auth.verifyPassword) also reads the scrypt hashes older yerd versions wrote. Given `undefined`, it still spends a full hash.
 - [safeNext](api:auth.safeNext) passes only same-site paths, else the fallback (`"/"`). Always run `?next=` through it.
 - Always `await` `login()` and `logout()`; with async hooks they return a promise.
 

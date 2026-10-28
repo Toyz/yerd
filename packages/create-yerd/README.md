@@ -11,7 +11,7 @@ bun create yerd my-app
 
 It asks for anything the flags leave out: the directory, a template,
 Tailwind, the package manager, git, and whether to install. Then it prints
-what to run next. Node 24 or newer; no dependencies.
+what to run next. Node 24.7 or newer; no dependencies.
 
 ## Templates
 

@@ -4,7 +4,7 @@ The shop starts here: install yerd and serve its first page.
 
 ## Create an app
 
-yerd needs Node 24 or newer. The scaffolder writes a working app, with Vite, TypeScript and tests set up:
+yerd needs Node 24.7 or newer. The scaffolder writes a working app, with Vite, TypeScript and tests set up:
 
 ```sh
 npm create yerd@latest my-app

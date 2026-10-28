@@ -255,11 +255,11 @@ like any other `YerdError`.
 **Passwords.** `hashPassword` uses argon2id via `crypto.argon2` (present in
 Node 26, confirmed in M0) with a random 16-byte salt, stored in the standard
 `$argon2id$v=19$m=...,t=...,p=...$salt$hash` format so cost parameters can be
-raised later and old hashes still verify. scrypt (`scrypt$N$r$p$salt$hash`) is
-the fallback where `crypto.argon2` is unavailable, and `verifyPassword` reads
-both formats. `verifyPassword` compares with
-`crypto.timingSafeEqual`, and when given `undefined` (no such user) it still
-runs a dummy hash so response timing doesn't reveal which emails exist.
+raised later and old hashes still verify. `verifyPassword` also reads scrypt
+(`scrypt$N$r$p$salt$hash`), which older yerd versions wrote on Node releases
+without `crypto.argon2`. It compares with `crypto.timingSafeEqual`, and when
+given `undefined` (no such user) it still runs a dummy hash so response timing
+doesn't reveal which emails exist.
 
 **Session fixation.** `auth.login(user)` always calls `session.regenerate()`:
 new ID, data copied over, the old ID destroyed in id stores. When a different

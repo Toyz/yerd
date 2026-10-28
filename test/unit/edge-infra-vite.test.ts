@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -225,7 +225,8 @@ describe("the build plugin", () => {
 
 describe("the dev server", () => {
   const src = (path: string) => fileURLToPath(new URL(`../../src/${path}`, import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), "yerd-vite-edge-"));
+  // realpath: on macOS the temp dir is under /var, a symlink to /private/var, and Vite reports the resolved root.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "yerd-vite-edge-")));
   mkdirSync(join(dir, "src", "routes"), { recursive: true });
   mkdirSync(join(dir, "public"), { recursive: true });
   const route = (path: string, text: string) => `
