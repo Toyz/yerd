@@ -398,11 +398,11 @@ content-type: text/html; charset=utf-8
 
 ## Upload photos with a form
 
-A post with a title and up to ten photos, picked or dropped, sent on submit. Uses [is.files](03-request-data.md#uploads), [dropTo](06-interactivity.md#dropping-files) and the app's `bodyLimit`.
+A post with a title and up to ten photos, picked or dropped, sent on submit. Uses [is.files](03-request-data.md#uploads), [dropTo](06-interactivity.md#dropping-files) and [@bodyLimit](api:yerd.bodyLimit).
 
 ```tsx
 // src/routes/new-post.tsx
-import { ActionForm, action, get, inject, is, length, redirect, route, service, trim } from "@toyz/yerd";
+import { ActionForm, action, bodyLimit, get, inject, is, length, redirect, route, service, trim } from "@toyz/yerd";
 
 @service
 export class Photos {
@@ -442,18 +442,14 @@ export class NewPostPage {
     );
   }
 
-  @action async create(_: {}, form: ActionForm) {
+  // Ten photos of 5 MB each must fit in one request; every other route keeps the 1 MiB default.
+  @action @bodyLimit("55mb") async create(_: {}, form: ActionForm) {
     const post = form.parse(NewPost);
     const ids = await Promise.all((post.photos ?? []).map((photo) => this.photos.save(photo)));
     console.log(`"${post.title}" with ${ids.length} photos`);
     return redirect("/posts");
   }
 }
-```
-
-```ts
-// src/main.ts: ten photos of 5 MB each must fit in one request
-export default yerd({ bodyLimit: 55 * 1024 * 1024 });
 ```
 
 ```css
@@ -479,7 +475,7 @@ content-type: application/json; charset=utf-8
 {"error":"Validation failed","code":"validation_failed","issues":[{"path":"photos[0]","message":"notes.txt has type text/plain, which isn't accepted (image/png, image/jpeg, image/webp)"}]}
 ```
 
-- **Two limits.** `maxSize` is per file (an issue for `photos[n]`); `bodyLimit` caps the whole request (413 before the action). Raise it to fit all files plus fields.
+- **Two limits.** `maxSize` is per file (an issue for `photos[n]`); `@bodyLimit` caps the whole request (413 before the action runs). Set it on the upload action alone, to fit all files plus fields.
 - **Types are what the browser says.** `types` checks the declared mime type and `accept` only filters the picker and drops. Check the bytes if it matters.
 - **Staging.** Drops add to the input, filtered by `accept`; the zone gets `data-yx-files` with the count. Without JavaScript the input still works.
 - **Memory.** The body is read into memory first. For huge uploads, send them from the browser straight to object storage (a presigned URL) and post the result.

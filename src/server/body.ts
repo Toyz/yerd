@@ -127,12 +127,12 @@ function hasBody(req: IncomingMessage): boolean {
  * chunk). Parsing in the end listener, rather than after an await, saves the
  * request another suspended frame.
  */
-function readParsed(req: IncomingMessage, limit: number): Promise<ParsedBody> {
+function readParsed(req: IncomingMessage, limit: number): Promise<SizedBody> {
   const declared = Number(req.headers["content-length"]);
   if (Number.isFinite(declared) && declared > limit) {
     return Promise.reject(new PayloadTooLarge(`Request body is larger than ${limit} bytes`));
   }
-  if (req.readableEnded) return Promise.resolve({ kind: "none", value: undefined });
+  if (req.readableEnded) return Promise.resolve(NO_BODY);
   return new Promise((resolve, reject) => {
     const chunks: Buffer<ArrayBuffer>[] = [];
     let size = 0;
@@ -157,7 +157,8 @@ function readParsed(req: IncomingMessage, limit: number): Promise<ParsedBody> {
       stop();
       try {
         // Most bodies arrive in one chunk: no copy for those.
-        resolve(parseBody(chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks, size), req.headers["content-type"]));
+        const body = parseBody(chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks, size), req.headers["content-type"]);
+        resolve(body instanceof Promise ? body.then((parsed) => ({ body: parsed, bytes: size })) : { body, bytes: size });
       } catch (error) {
         reject(error);
       }
@@ -180,7 +181,7 @@ function readParsed(req: IncomingMessage, limit: number): Promise<ParsedBody> {
 /**
  * Multipart bodies, parsed by the platform's own FormData (the fetch
  * implementation built into Node), so there's no hand-rolled boundary parser.
- * The body limit has already been applied; raise `bodyLimit` for uploads.
+ * The body limit has already been applied; raise it for uploads with @bodyLimit.
  */
 async function parseMultipart(raw: Buffer<ArrayBuffer>, contentType: string): Promise<ParsedBody> {
   let data: FormData;
@@ -254,7 +255,20 @@ export function formFields(params: URLSearchParams): FormFields {
  * ```
  */
 export function readBody(req: IncomingMessage, limit = DEFAULT_BODY_LIMIT): Promise<ParsedBody> {
-  if (!hasBody(req)) return Promise.resolve({ kind: "none", value: undefined });
+  return readSizedBody(req, limit).then((sized) => sized.body);
+}
+
+/** A parsed body and how many bytes it came in. */
+export interface SizedBody {
+  body: ParsedBody;
+  bytes: number;
+}
+
+const NO_BODY: SizedBody = Object.freeze({ body: Object.freeze({ kind: "none", value: undefined }) as ParsedBody, bytes: 0 });
+
+/** @internal readBody, with the body's size: a route reads up to its largest limit, then checks what's about to run (see @bodyLimit). */
+export function readSizedBody(req: IncomingMessage, limit: number): Promise<SizedBody> {
+  if (!hasBody(req)) return Promise.resolve(NO_BODY);
   return readParsed(req, limit);
 }
 

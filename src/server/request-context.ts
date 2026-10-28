@@ -11,14 +11,14 @@ import type { Container, Scope } from "../di/container.js";
 import type { LoadedSession, SessionManager } from "../session/manager.js";
 import type { Session } from "../session/session.js";
 import { CSRF_FIELD, csrfTag, signAction, type TokenPayload } from "../actions/action.js";
-import { readBody, readNdjson, type ParsedBody } from "./body.js";
+import { readNdjson, readSizedBody, type ParsedBody, type SizedBody } from "./body.js";
 import type { RouteInfo, YerdContext } from "./context.js";
 import { parseCookies, serializeCookie, type CookieOptions } from "./cookies.js";
 import type { Outgoing } from "../respond/coerce.js";
 import { assertStatus, checkHeader } from "../respond/response.js";
 import type { ResponseDefaults } from "../decorators/response.js";
 import { REQUEST_SPAN, newSpanId, type Span } from "../log/span.js";
-import { BadRequest } from "../respond/errors.js";
+import { BadRequest, PayloadTooLarge } from "../respond/errors.js";
 import { abortOnClose, clientAddress, forwarded, mergeVary, requestIdFrom, requestIsHttps } from "./http.js";
 
 /** A query string URLSearchParams would read as written: no percent-escapes, no `+`, no lone surrogates. */
@@ -50,6 +50,8 @@ export interface RequestContextInit {
   prerendering?: boolean;
   scope: Scope;
   env: RequestEnv;
+  /** Body limits (see @bodyLimit): what's read, and what the handler accepts. Default: the app's for both. */
+  bodyLimit?: { read: number; allowed: number };
 }
 
 export class RequestContext implements YerdContext {
@@ -65,7 +67,12 @@ export class RequestContext implements YerdContext {
   #abort: AbortController | undefined;
   #memo: Map<unknown, unknown> | undefined;
   #cookies: Record<string, string> | undefined;
-  #body: Promise<ParsedBody> | undefined;
+  #body: Promise<SizedBody> | undefined;
+  #checked: { allowed: number; body: Promise<ParsedBody> } | undefined;
+  /** Most bytes body() reads: the route's largest limit, a handler's or an action's. */
+  readonly bodyRead: number;
+  /** @internal Most bytes what's about to run accepts; body() answers a bigger body with 413. */
+  bodyAllowed: number;
   #lines: AsyncIterable<unknown> | undefined;
   #requestId: string | undefined;
   #outHeaders: Record<string, string> | undefined;
@@ -87,6 +94,8 @@ export class RequestContext implements YerdContext {
   readonly env: RequestEnv;
 
   constructor(init: RequestContextInit) {
+    this.bodyRead = init.bodyLimit?.read ?? init.env.bodyLimit;
+    this.bodyAllowed = init.bodyLimit?.allowed ?? init.env.bodyLimit;
     this.req = init.req;
     this.res = init.res;
     this.method = init.method;
@@ -334,13 +343,27 @@ export class RequestContext implements YerdContext {
   body(): Promise<ParsedBody> {
     this.#noRequestData("the body");
     if (this.#lines) throw new Error("The request body is already being streamed with lines()");
-    return (this.#body ??= readBody(this.req, this.env.bodyLimit));
+    const read = (this.#body ??= readSizedBody(this.req, this.bodyRead));
+    // Checked against the limit at the time of the call: an action post reads
+    // the body before it knows which action's applies. One promise per limit,
+    // so callers in one handler share it.
+    const allowed = this.bodyAllowed;
+    if (this.#checked?.allowed !== allowed) {
+      this.#checked = {
+        allowed,
+        body: read.then((sized) => {
+          if (sized.bytes > allowed) throw new PayloadTooLarge(`Request body is larger than ${allowed} bytes`);
+          return sized.body;
+        }),
+      };
+    }
+    return this.#checked.body;
   }
 
   lines(): AsyncIterable<unknown> {
     this.#noRequestData("the body");
     if (this.#body) throw new Error("The request body was already read whole with body()");
-    return (this.#lines ??= readNdjson(this.req, this.env.bodyLimit));
+    return (this.#lines ??= readNdjson(this.req, this.bodyAllowed));
   }
 
   /**

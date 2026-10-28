@@ -9,7 +9,7 @@ export { parseCookies, serializeCookie, type CookieOptions } from "./server/cook
 export { currentContext, setMeta, type YerdContext, type RouteInfo } from "./server/context.js";
 
 export {
-  route, group, get, post, put, patch, del, head, options, all, layout, noLayout, accepts, prerender, resetRouteRegistry, varies, cors, csrf,
+  route, group, get, post, put, patch, del, head, options, all, layout, noLayout, accepts, prerender, resetRouteRegistry, varies, cors, csrf, bodyLimit,
   type When, type WhenTest, type VerbDecorator,
 } from "./decorators/route.js";
 export type { Verb, RouteOptions, GroupOptions, PageMeta, LayoutProps, PrerenderOptions } from "./decorators/route.js";

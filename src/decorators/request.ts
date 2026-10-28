@@ -545,7 +545,7 @@ const filesAccessor = createAccessor<Promise<File[]>, [name: string, options?: F
 
 /**
  * Files uploaded under `name` in a multipart form, as a promise like @body.
- * Raise the app's `bodyLimit` for anything beyond small files.
+ * Raise the body limit for anything beyond small files: @bodyLimit on the handler or action.
  *
  * ```ts
  * @files("photos", { types: ["image/*"], maxSize: 5_000_000 }) accessor photos!: Promise<File[]>;

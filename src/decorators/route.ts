@@ -6,6 +6,7 @@ import { metadataOf } from "./keys.js";
 import { classValue, createMethodDecorator, methodFlag, methodList, methodValue, type DecoratorTarget } from "./kit.js";
 import { checkSitemapFields, type SitemapFields } from "../seo/sitemap.js";
 import { compileCors, type CorsOptions } from "../server/cors.js";
+import { parseSize } from "../util/size.js";
 
 /**
  * An HTTP method a handler can answer. "ALL" answers any method the route has
@@ -336,6 +337,38 @@ export const cors = classValue<CorsOptions | false>("cors", {
  * ```
  */
 export const csrf = classValue<boolean>("csrf");
+
+/** @internal @bodyLimit on a route or group class. */
+export const CLASS_BODY_LIMIT = classValue<number>("bodyLimit");
+/** @internal @bodyLimit on one handler or action. */
+export const METHOD_BODY_LIMIT = methodValue<number>("bodyLimit");
+
+/**
+ * The largest request body accepted, in bytes or as "512kb", "10mb", ...,
+ * for a route or group class, or one handler or action; bigger is a 413.
+ * The deepest wins: a method's, then the class's, then its groups', then
+ * the app's `bodyLimit` (1 MiB). Raise it only where uploads go, so every
+ * other route keeps refusing big bodies early.
+ *
+ * ```ts
+ * @route("/photos")
+ * export class Photos {
+ *   @action @bodyLimit("25mb") async upload(_: {}, form: ActionForm) { ... }
+ * }
+ * ```
+ */
+export function bodyLimit(size: number | string) {
+  let bytes: number;
+  try {
+    bytes = parseSize(size);
+  } catch (error) {
+    throw new TypeError(`@bodyLimit: ${(error as Error).message}`);
+  }
+  return (_value: Function, context: ClassDecoratorContext | ClassMethodDecoratorContext): void => {
+    if (context.kind === "class") CLASS_BODY_LIMIT.set(context, bytes);
+    else METHOD_BODY_LIMIT.set(context, bytes);
+  };
+}
 /** Layouts declared with @layout on a handler method. */
 export const METHOD_LAYOUTS = methodValue<LayoutSpec>("layout");
 
@@ -788,6 +821,8 @@ export interface ResolvedRoute {
   cors: CorsOptions | undefined;
   /** Whether the cross-site check applies: the route's @csrf, else the nearest group's, else true. */
   csrf: boolean;
+  /** @bodyLimit on the route class, else the nearest group's; undefined for the app's. */
+  bodyLimit: number | undefined;
   /** The `sitemap` option through the groups: false, the merged fields (deeper wins), or undefined when nothing set it. */
   sitemap: false | SitemapFields | undefined;
 }
@@ -837,9 +872,11 @@ export function resolveRoute(def: RouteDef): ResolvedRoute {
   // @cors and @csrf on the groups, then the route: the deepest one set wins.
   let corsSetting: CorsOptions | false | undefined;
   let crossSiteCheck = true;
+  let limit: number | undefined;
   for (const metadata of [...chain.map((g) => groupMetadata.get(g)!), def.metadata]) {
     corsSetting = cors.get(metadata) ?? corsSetting;
     crossSiteCheck = csrf.get(metadata) ?? crossSiteCheck;
+    limit = CLASS_BODY_LIMIT.get(metadata) ?? limit;
   }
   // false drops what outer groups set; an object adds to it, field by field.
   let sitemap: false | SitemapFields | undefined;
@@ -847,5 +884,5 @@ export function resolveRoute(def: RouteDef): ResolvedRoute {
     if (setting === false) sitemap = false;
     else if (setting) sitemap = { ...(sitemap || {}), ...setting };
   }
-  return { pattern: joinPaths(prefix, def.pattern), layouts, isolated, meta: { ...meta, ...def.options.meta }, guards, session, sitemap, cors: corsSetting || undefined, csrf: crossSiteCheck };
+  return { pattern: joinPaths(prefix, def.pattern), layouts, isolated, meta: { ...meta, ...def.options.meta }, guards, session, sitemap, cors: corsSetting || undefined, csrf: crossSiteCheck, bodyLimit: limit };
 }

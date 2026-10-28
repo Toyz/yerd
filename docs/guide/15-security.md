@@ -341,7 +341,7 @@ x-frame-options: SAMEORIGIN
 
 - **Validation.** Bad values are a 400 before your handler. DTOs drop undeclared keys (no sneaking in `isAdmin: true`), and `__proto__` is plain data. See [request data](03-request-data.md).
 - **URLs.** [is.url()](api:yerd.is.url) accepts only http and https unless you list others.
-- **Size.** Bodies over `bodyLimit` (1 MiB) are a 413 before your code runs; `maxSize` and `types` limit uploads. Streamed NDJSON is limited per line.
+- **Size.** Bodies over `bodyLimit` (1 MiB) are a 413 before your code runs; `@bodyLimit` raises it for one route or action, `maxSize` and `types` limit uploads. Streamed NDJSON is limited per line.
 - **Static files.** `app.static()` refuses `..` (encoded or not), NUL bytes, dotfiles and symlinks leaving the folder.
 
 ## Client-side code
@@ -364,5 +364,5 @@ x-frame-options: SAMEORIGIN
 - `trustProxy` only behind a proxy that sets the forwarded headers and strips the client's.
 - `trustedOrigins` lists only origins you control.
 - Separate `sessionKey`s for separate kinds of sign-in.
-- `bodyLimit` raised only as far as your uploads need.
+- Body limits raised only where uploads go (`@bodyLimit` on that action), and only as far as they need.
 - The error page shows `error.stack` only outside production.

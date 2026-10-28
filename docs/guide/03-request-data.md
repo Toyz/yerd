@@ -352,7 +352,7 @@ class Profile {
 ```
 
 > [!WARNING]
-> The whole body is capped by the app's `bodyLimit` (1 MiB by default; bigger is a 413 before your code runs). Raise it for uploads: `yerd({ bodyLimit: 10 * 1024 * 1024 })`. `maxSize` can't raise it.
+> The whole body is capped by the app's `bodyLimit` (1 MiB by default; bigger is a 413 before your code runs). Raise it where uploads go, not app-wide: [@bodyLimit](api:yerd.bodyLimit)`("10mb")` on the handler, action, route class or group. `maxSize` can't raise it.
 
 ## Signal and session
 
@@ -503,7 +503,7 @@ yerd answers bad input before (or while) your handler reads it.
 | A `required` value is missing | 400, e.g. `Missing required query parameter: q` |
 | A DTO doesn't validate | 400 JSON listing every issue |
 | Malformed JSON or multipart | 400 |
-| Body over `bodyLimit`, or a file over `maxSize` | 413 |
+| Body over `bodyLimit` (or the route's `@bodyLimit`), or a file over `maxSize` | 413 |
 | A file of the wrong type | 415 |
 | `@param` names a param the path doesn't have | The app refuses to boot |
 

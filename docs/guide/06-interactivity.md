@@ -322,7 +322,7 @@ To send them with a form instead, point a zone at a file input with `dropTo`:
 
 - Drops add to the input's files, filtered by its `accept`, one unless it's `multiple`. Folders are skipped; refused files are left out with a notice.
 - The action reads them like any upload: `form.files("photos")`, or `is.files()` in a DTO. The zone gets `data-yx-files="<count>"` while the input holds files.
-- Mind `bodyLimit` (1 MiB by default); see the [photo upload recipe](16-recipes.md#upload-photos-with-a-form).
+- Mind the body limit (1 MiB by default; `@bodyLimit("25mb")` on the action raises it there); see the [photo upload recipe](16-recipes.md#upload-photos-with-a-form).
 
 ### Infinite scroll
 

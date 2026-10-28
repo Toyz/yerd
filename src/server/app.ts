@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, extname, join } from "node:path";
 import { ACCESSORS, ARGS, type Resolver } from "../decorators/kit.js";
-import { ACCEPTS, METHOD_LAYOUTS, noLayout, prerender, applyLayouts, joinLayouts, resetRouteRegistry, type When, verbsOf, resolveRoute, routeRegistry, type LayoutProps, type PageMeta, type ResolvedRoute, type RouteDef, type Verb } from "../decorators/route.js";
+import { ACCEPTS, METHOD_BODY_LIMIT, METHOD_LAYOUTS, noLayout, prerender, applyLayouts, joinLayouts, resetRouteRegistry, type When, verbsOf, resolveRoute, routeRegistry, type LayoutProps, type PageMeta, type ResolvedRoute, type RouteDef, type Verb } from "../decorators/route.js";
 import { choose, expandType } from "../respond/negotiate.js";
 import { Container, Scope, ServiceCollection, classRegistration, currentServices, keyName, runWithServices, type Lifetime, type Registration } from "../di/container.js";
 import {
@@ -183,6 +183,8 @@ interface Call {
   runs: readonly GuardRun[];
   /** What @status / @setHeader declared for it. */
   declared: ResponseDefaults | undefined;
+  /** The largest body it accepts: its @bodyLimit, else its class's or groups', else the app's. */
+  bodyLimit: number;
 }
 
 interface Handler extends Call {
@@ -206,6 +208,8 @@ interface Handler extends Call {
   catches: readonly CatchEntry[];
   /** CORS and the cross-site check, from @cors and @csrf on the route and its groups. */
   policy: RoutePolicy;
+  /** The class's body limit (its or its groups' @bodyLimit, else the app's), for its actions without their own. */
+  classBodyLimit: number;
 }
 
 interface RoutePolicy {
@@ -283,6 +287,8 @@ interface RouteNode {
   actions: ReadonlyMap<string, ReadonlyMap<string, ActionCall>>;
   /** The Allow header for a 405. */
   allow: string[];
+  /** The largest body any of its handlers or actions accepts: what's read before knowing which runs. */
+  bodyLimit: number;
 }
 
 /** What routing picked for a request (see resolveRequest). */
@@ -338,14 +344,18 @@ function routeNode(byVerb: ReadonlyMap<Verb, readonly Handler[]>, pendingRuns: A
     for (const name of names) {
       // Two handlers of one class (GET and POST) share its actions: the first found runs them.
       if (byName.has(name)) continue;
-      const call: ActionCall = { owner, method: name, route: { ...owner.info, method: name }, runs: [], declared: responseDefaults(owner.def.metadata, name) };
+      const call: ActionCall = {
+        owner, method: name, route: { ...owner.info, method: name }, runs: [], declared: responseDefaults(owner.def.metadata, name),
+        bodyLimit: METHOD_BODY_LIMIT.get(owner.def.metadata, name) ?? owner.classBodyLimit,
+      };
       pendingRuns.push([call.runs, [...owner.classGuards, ...METHOD_GUARDS.get(owner.def.metadata, name)]]);
       byName.set(name, call);
     }
   }
   const allow = [...byVerb.keys()].filter((v) => v !== "ALL");
   if (allow.includes("GET") && !allow.includes("HEAD")) allow.push("HEAD");
-  return { first: candidates[0]!, actions, allow };
+  const limits = [...candidates.map((h) => h.bodyLimit), ...[...actions.values()].flatMap((byName) => [...byName.values()].map((a) => a.bodyLimit))];
+  return { first: candidates[0]!, actions, allow, bodyLimit: Math.max(...limits) };
 }
 
 function routeGroup(handlers: readonly Handler[], node: RouteNode): RouteGroup {
@@ -1144,6 +1154,7 @@ export class YerdApp {
       const info: RouteInfo = { pattern: resolved.pattern, paramNames: paramNames(resolved.pattern), className: def.className, session: resolved.session, target: def.ctor };
       // @cors checked its options when it decorated the class.
       const policy: RoutePolicy = { cors: resolved.cors ? compileCors(resolved.cors) : undefined, csrf: resolved.csrf };
+      const classBodyLimit = resolved.bodyLimit ?? this.#options.bodyLimit ?? DEFAULT_BODY_LIMIT;
       const lifetime = lifetimeOf({ lifetime: def.options.lifetime, metadata: def.metadata }, "scoped");
       if (this.#sitemap) mapped.push({ def, pattern: info.pattern, lifetime, sitemap: resolved.sitemap });
       const verbs = verbsOf(def.metadata);
@@ -1208,6 +1219,8 @@ export class YerdApp {
           declared: responseDefaults(def.metadata, method),
           catches,
           policy,
+          classBodyLimit,
+          bodyLimit: METHOD_BODY_LIMIT.get(def.metadata, method) ?? classBodyLimit,
         });
       }
     }
@@ -1764,7 +1777,10 @@ export class YerdApp {
 
     const base = routed.handler ?? routed.group?.variants[0] ?? routed.node.first;
     const prerendering = this.#prerenderToken !== undefined && req.headers["x-yerd-prerender"] === this.#prerenderToken;
-    const context = new RequestContext({ req, res, target, method, params: match.params, route: base.route, meta: { ...base.meta }, prerendering, scope: new Scope(), env: this.#env! });
+    const context = new RequestContext({
+      req, res, target, method, params: match.params, route: base.route, meta: { ...base.meta }, prerendering, scope: new Scope(), env: this.#env!,
+      bodyLimit: { read: routed.node.bodyLimit, allowed: base.bodyLimit },
+    });
     // One async context for the whole request and its DI scope (currentServices() reads context.services).
     const answering = runWithContext(context, () => this.#answer(context, routed, base, answers));
     return answers ? undefined : answering;
@@ -2171,7 +2187,13 @@ export class YerdApp {
    * for ordinary form posts, which then go to the route's @post handler.
    */
   async #dispatchAction(node: RouteNode, context: RequestContext): Promise<Outgoing | undefined> {
+    // Which action runs is in the body: read it up to the route's largest
+    // limit, then hold it to the one that applies (the action's, or the
+    // handler's for an ordinary post).
+    const handlerLimit = context.bodyAllowed;
+    context.bodyAllowed = node.bodyLimit;
     const parsed = await context.body();
+    context.bodyAllowed = handlerLimit;
     if (parsed.kind !== "form") return undefined;
     // The last one wins: a submit button with formaction={action} carries its
     // own `_yx`, which comes after the form's hidden one in tree order.
@@ -2199,6 +2221,8 @@ export class YerdApp {
       }
       throw error;
     }
+    context.bodyAllowed = found.bodyLimit;
+    await context.body();
     const { owner } = found;
     // The class's guards (app, group, route) and the action's own method guards.
     const result = await this.#invoke(context, owner, found, () => [fillHoles(payload.p, payload.h, parsed.value), new ActionForm(parsed.value, parsed.files)]);
