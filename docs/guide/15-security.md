@@ -247,6 +247,17 @@ set-cookie: yerd_session=cqr108Ui...; Max-Age=1209600; Path=/; HttpOnly; SameSit
 - A no-JavaScript action redirects back to the form's page, from a same-host `Referer` only, checked like `safeNext`.
 - The client runtime never navigates to `javascript:`, `data:` or `vbscript:` URLs.
 
+## Host names
+
+`ctx.url` is built from the `Host` header (or `X-Forwarded-Host` with `trustProxy`), which the client writes. A reset-password link built from it can be pointed at another host. `hosts` lists the names the app answers to; anything else is a 400 before routing:
+
+```ts
+yerd({ hosts: ["paperyard.example", ".paperyard.example"] }); // a leading dot adds every subdomain
+```
+
+- Ports don't count: `paperyard.example:8443` matches `paperyard.example`.
+- Add `localhost` for local runs, or set `hosts` only in production.
+
 ## Rate limiting
 
 Nothing stops a script from trying passwords at the login form all day. [rateLimit()](api:yerd.rateLimit) makes a guard that counts requests per client and answers 429 past the limit:
@@ -363,6 +374,7 @@ x-frame-options: SAMEORIGIN
 - `app.securityHeaders()` on, with the CSP loosened only as far as the app needs.
 - `trustProxy` only behind a proxy that sets the forwarded headers and strips the client's.
 - `trustedOrigins` lists only origins you control.
+- `hosts` set in production, so links built from `ctx.url` can't be pointed elsewhere.
 - Separate `sessionKey`s for separate kinds of sign-in.
 - Body limits raised only where uploads go (`@bodyLimit` on that action), and only as far as they need.
 - The error page shows `error.stack` only outside production.

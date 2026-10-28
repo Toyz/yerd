@@ -128,6 +128,19 @@ export interface YerdOptions {
   /** Other origins allowed to send unsafe requests, e.g. ["https://admin.example.com"]. */
   trustedOrigins?: string[];
   /**
+   * The host names this app answers to; a request for any other (by Host,
+   * or X-Forwarded-Host under `trustProxy`) is a 400 before anything runs.
+   * A leading dot covers subdomains too: ".example.com" is example.com and
+   * every *.example.com. Ports don't count. Without it every host is
+   * answered, so links built from ctx.url (a password-reset email) can be
+   * pointed at another host with a forged Host header.
+   *
+   * ```ts
+   * yerd({ hosts: ["shop.example", ".shop.example", "localhost"] });
+   * ```
+   */
+  hosts?: string[];
+  /**
    * Behind a reverse proxy: believe X-Forwarded-Proto and X-Forwarded-Host
    * (ctx.url, the origin check, Secure cookies) and the last X-Forwarded-For
    * entry (ctx.ip, rateLimit()). Default false.
@@ -342,6 +355,16 @@ function resolveRequest(
   const mayBeAction = method === "POST" && node.actions.size > 0 && isFormBody(headers["content-type"]);
   if (!handler && !mayBeAction && variants === 0) return { error: new MethodNotAllowed(undefined, { allow: node.allow }) };
   return { group, handler, node, mayBeAction };
+}
+
+/** Whether the request's host (X-Forwarded-Host under trustProxy, else Host), port aside, is one of `hosts`. */
+function hostAllowed(hosts: { exact: Set<string>; suffixes: string[] }, req: IncomingMessage, trustProxy: boolean): boolean {
+  const header = (trustProxy ? forwarded(req.headers["x-forwarded-host"]) : undefined) ?? req.headers.host;
+  if (!header) return false;
+  const lower = header.toLowerCase();
+  const name = lower.startsWith("[") ? lower.slice(0, lower.indexOf("]") + 1) : lower.split(":")[0]!;
+  if (hosts.exact.has(name)) return true;
+  return hosts.suffixes.some((suffix) => name.endsWith(suffix) || name === suffix.slice(1));
 }
 
 /**
@@ -647,6 +670,8 @@ export class YerdApp {
   #securityHeaders: SecurityHeaders | undefined;
   #compression: Compression | undefined;
   #health: { path: string; check: (() => unknown) | undefined } | undefined;
+  /** YerdOptions.hosts: exact names, and ".suffix"es that also match the bare name. */
+  #hosts: { exact: Set<string>; suffixes: string[] } | undefined;
   /** close() has begun: health answers 503 while the server drains. */
   #draining = false;
   readonly #trustedOrigins: ReadonlySet<string>;
@@ -674,6 +699,13 @@ export class YerdApp {
   constructor(options: YerdOptions = {}) {
     this.#options = options;
     this.#trustedOrigins = new Set((options.trustedOrigins ?? []).map((o) => new URL(o).origin));
+    if (options.hosts) {
+      const names = options.hosts.map((h) => h.toLowerCase());
+      for (const name of names) {
+        if (!/^\.?[a-z0-9.-]+$|^\[[0-9a-f:.]+\]$/.test(name)) throw new TypeError(`hosts: ${JSON.stringify(name)} isn't a host name (no scheme, port or path)`);
+      }
+      this.#hosts = { exact: new Set(names.filter((n) => !n.startsWith("."))), suffixes: names.filter((n) => n.startsWith(".")) };
+    }
   }
 
   /**
@@ -1723,6 +1755,9 @@ export class YerdApp {
    * answered by #answer itself, and there's no promise to hand back for it.
    */
   #serve(req: IncomingMessage, res: ServerResponse, next: Next | undefined, answers: boolean): Promise<void> | undefined {
+    if (this.#hosts && !hostAllowed(this.#hosts, req, this.#options.trustProxy ?? false)) {
+      return send(res, errorResponse(new BadRequest("Unknown host")), req.method === "HEAD", undefined);
+    }
     if (this.#securityHeaders) applySecurityHeaders(this.#securityHeaders, req, res, this.#options.trustProxy ?? false);
     if (this.#compression) compressing.set(res, { settings: this.#compression, accept: req.headers["accept-encoding"] });
     const rawTarget = req.url ?? "/";
