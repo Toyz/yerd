@@ -1,6 +1,5 @@
 /**
- * CORS for routes that other origins may call: the `cors` option on @route
- * and @group. A preflight (OPTIONS with Access-Control-Request-Method) is
+ * CORS for routes that other origins may call: @cors on a route or group class. A preflight (OPTIONS with Access-Control-Request-Method) is
  * answered from the options; any other request from an allowed origin gets
  * the Access-Control-* headers, and gets past the cross-site check, which
  * otherwise refuses unsafe requests from other origins.
@@ -13,7 +12,8 @@ import type { Outgoing } from "../respond/coerce.js";
  * Who may call a route from another origin, and how.
  *
  * ```ts
- * @group("/api", { session: false, cors: { origins: ["https://app.example"], headers: ["authorization", "content-type"] } })
+ * @cors({ origins: ["https://app.example"], headers: ["authorization", "content-type"] })
+ * @group("/api", { session: false })
  * class Api {}
  * ```
  */
@@ -48,7 +48,7 @@ export interface CorsPolicy {
 export function compileCors(options: CorsOptions): CorsPolicy {
   const { origins } = options;
   if (origins === "*") {
-    if (options.credentials) throw new TypeError(`cors: origins "*" can't be used with credentials; list the origins`);
+    if (options.credentials) throw new TypeError(`origins "*" can't be used with credentials; list the origins`);
     return { allows: () => true, any: true, options };
   }
   if (typeof origins === "function") return { allows: (origin) => origin !== "null" && origins(origin), any: false, options };
@@ -58,10 +58,10 @@ export function compileCors(options: CorsOptions): CorsPolicy {
       try {
         parsed = new URL(origin);
       } catch {
-        throw new TypeError(`cors: ${JSON.stringify(origin)} isn't an origin (like "https://app.example")`);
+        throw new TypeError(`${JSON.stringify(origin)} isn't an origin (like "https://app.example")`);
       }
       if (parsed.origin === "null" || parsed.origin !== origin.replace(/\/$/, "")) {
-        throw new TypeError(`cors: ${JSON.stringify(origin)} isn't an origin (like "https://app.example"): no path, query or trailing parts`);
+        throw new TypeError(`${JSON.stringify(origin)} isn't an origin (like "https://app.example"): no path, query or trailing parts`);
       }
       return parsed.origin;
     }),

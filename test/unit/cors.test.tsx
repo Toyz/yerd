@@ -1,8 +1,9 @@
-// CORS (the `cors` route/group option) and `csrf: false`: preflights, headers for allowed origins, the cross-site check.
+// @cors and @csrf(false) on routes and groups: preflights, headers for allowed origins, the cross-site check.
 import { describe, expect, it } from "vitest";
-import { BootError, get, group, post, res, route, yerd } from "@toyz/yerd";
+import { cors, csrf, get, group, post, res, route, yerd } from "@toyz/yerd";
 
-@group("/api", { session: false, cors: { origins: ["https://app.example"], headers: ["content-type", "authorization"], expose: ["x-total"] } })
+@cors({ origins: ["https://app.example"], headers: ["content-type", "authorization"], expose: ["x-total"] })
+@group("/api", { session: false })
 class Api {}
 
 @route("/quotes", { group: Api })
@@ -15,28 +16,32 @@ class Quotes {
   }
 }
 
-@route("/internal", { group: Api, cors: false })
+@cors(false)
+@route("/internal", { group: Api })
 class Internal {
   @post poke() {
     return 204;
   }
 }
 
-@route("/public", { session: false, cors: { origins: "*" } })
+@cors({ origins: "*" })
+@route("/public", { session: false })
 class Public {
   @get read() {
     return { open: true };
   }
 }
 
-@route("/me", { cors: { origins: (origin) => origin.endsWith(".partner.example"), credentials: true } })
+@cors({ origins: (origin) => origin.endsWith(".partner.example"), credentials: true })
+@route("/me")
 class Me {
   @get read() {
     return { me: "ada" };
   }
 }
 
-@route("/payments/return", { csrf: false })
+@csrf(false)
+@route("/payments/return")
 class PaymentReturn {
   @post done() {
     return 204;
@@ -96,7 +101,7 @@ describe("cors", () => {
     expect((await from("https://evil.example")).status).toBe(403);
   });
 
-  it("is turned off by cors: false under a group that has it", async () => {
+  it("is turned off by @cors(false) under a group that has it", async () => {
     const r = await app().request("/api/internal", { method: "POST", headers: { origin: "https://app.example", "sec-fetch-site": "cross-site" } });
     expect(r.status).toBe(403);
     expect(r.headers.get("access-control-allow-origin")).toBeNull();
@@ -120,29 +125,14 @@ describe("cors", () => {
     expect((await app().request("/me", { headers: { origin: "null" } })).headers.get("access-control-allow-origin")).toBeNull();
   });
 
-  it("refuses bad options at boot", async () => {
-    @route("/bad-star", { cors: { origins: "*", credentials: true } })
-    class BadStar {
-      @get read() {
-        return 1;
-      }
-    }
-    @route("/bad-origin", { cors: { origins: ["https://app.example/path"] } })
-    class BadOrigin {
-      @get read() {
-        return 1;
-      }
-    }
-    const error = await yerd({ routes: [BadStar, BadOrigin], services: [], handleSignals: false }).boot().catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(BootError);
-    expect((error as BootError).problems).toEqual([
-      `BadStar: cors: origins "*" can't be used with credentials; list the origins`,
-      `BadOrigin: cors: "https://app.example/path" isn't an origin (like "https://app.example"): no path, query or trailing parts`,
-    ]);
+  it("refuses bad options where the class is decorated", () => {
+    expect(() => cors({ origins: "*", credentials: true })).toThrow(`@cors: origins "*" can't be used with credentials; list the origins`);
+    expect(() => cors({ origins: ["https://app.example/path"] })).toThrow(`@cors: "https://app.example/path" isn't an origin`);
+    expect(() => cors({ origins: ["app.example"] })).toThrow(`@cors: "app.example" isn't an origin`);
   });
 });
 
-describe("csrf: false", () => {
+describe("@csrf(false)", () => {
   it("skips the cross-site check for that route only", async () => {
     const crossSite = { method: "POST", headers: { origin: "https://pay.example", "sec-fetch-site": "cross-site" } };
     expect((await app().request("/payments/return", crossSite)).status).toBe(204);

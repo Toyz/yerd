@@ -67,12 +67,13 @@ yerd({
 > [!TAKE]
 > There's no CSRF token to remember. Every write is checked by origin and every action is signed, so a form you forgot about is covered too. You give up cross-site posts you didn't list in `trustedOrigins`.
 
-### APIs other sites call: cors
+### APIs other sites call: @cors
 
-An app on another origin calling `/api` from the browser needs CORS. The `cors` option on a route or group answers the browser's preflight, adds the `Access-Control-*` headers for allowed origins, and lets those origins past the check above:
+An app on another origin calling `/api` from the browser needs CORS. [@cors](api:yerd.cors) on a route or group class answers the browser's preflight, adds the `Access-Control-*` headers for allowed origins, and lets those origins past the check above:
 
 ```ts
-@group("/api", { session: false, cors: { origins: ["https://app.example"], headers: ["content-type", "authorization"] } })
+@cors({ origins: ["https://app.example"], headers: ["content-type", "authorization"] })
+@group("/api", { session: false })
 export class Api {}
 ```
 
@@ -89,14 +90,17 @@ vary: origin
 - `origins` is a list, `"*"` (any origin, no `credentials`), or a function given the `Origin`. `credentials: true` sends cookies along; with it, every origin you list can act as the signed-in visitor, so list only your own.
 - Other origins get no allow headers, and their unsafe requests are still a 403.
 - `methods` defaults to the route's own verbs, `headers` to what the browser asks for; `expose` lists response headers the script may read; `maxAge` (600 s) is how long the preflight answer is kept.
-- The deepest setting wins: a route's `cors: false` turns a group's off.
+- It's on the class, not a method: the browser's preflight asks about a URL, whatever the verb.
+- The deepest one wins: `@cors(false)` on a route turns its group's off.
+- Bad options (an origin with a path, `"*"` with `credentials`) throw where the class is decorated.
 
-### One route that takes cross-site posts: csrf: false
+### One route that takes cross-site posts: @csrf(false)
 
-A payment provider posting the visitor back, or a form on a partner's page, is cross-site on purpose. `csrf: false` on that route (or a group) skips the check for it alone:
+A payment provider posting the visitor back, or a form on a partner's page, is cross-site on purpose. [@csrf(false)](api:yerd.csrf) on that route (or a group) skips the check for it alone:
 
 ```ts
-@route("/payments/return", { csrf: false })
+@csrf(false)
+@route("/payments/return")
 export class PaymentReturn {
   @post done() { /* verify the provider's signature first */ }
 }

@@ -191,13 +191,13 @@ interface Handler extends Call {
   runs: GuardRun[];
   /** The class's @catches methods, in declaration order. */
   catches: readonly CatchEntry[];
-  /** CORS and the cross-site check, from the route's and its groups' options. */
+  /** CORS and the cross-site check, from @cors and @csrf on the route and its groups. */
   policy: RoutePolicy;
 }
 
 interface RoutePolicy {
   cors: CorsPolicy | undefined;
-  /** The cross-site check applies (the route's or a group's `csrf: false` turns it off). */
+  /** The cross-site check applies (`@csrf(false)` on the route or a group turns it off). */
   csrf: boolean;
 }
 
@@ -1109,13 +1109,8 @@ export class YerdApp {
         continue;
       }
       const info: RouteInfo = { pattern: resolved.pattern, paramNames: paramNames(resolved.pattern), className: def.className, session: resolved.session, target: def.ctor };
-      let policy: RoutePolicy;
-      try {
-        policy = { cors: resolved.cors ? compileCors(resolved.cors) : undefined, csrf: resolved.csrf };
-      } catch (e) {
-        problems.push(`${def.className}: ${(e as Error).message}`);
-        continue;
-      }
+      // @cors checked its options when it decorated the class.
+      const policy: RoutePolicy = { cors: resolved.cors ? compileCors(resolved.cors) : undefined, csrf: resolved.csrf };
       const lifetime = lifetimeOf({ lifetime: def.options.lifetime, metadata: def.metadata }, "scoped");
       if (this.#sitemap) mapped.push({ def, pattern: info.pattern, lifetime, sitemap: resolved.sitemap });
       const verbs = verbsOf(def.metadata);

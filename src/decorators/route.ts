@@ -5,7 +5,7 @@ import { isMediaType, type MediaType } from "../respond/negotiate.js";
 import { metadataOf } from "./keys.js";
 import { classValue, createMethodDecorator, methodFlag, methodList, methodValue, type DecoratorTarget } from "./kit.js";
 import { checkSitemapFields, type SitemapFields } from "../seo/sitemap.js";
-import type { CorsOptions } from "../server/cors.js";
+import { compileCors, type CorsOptions } from "../server/cors.js";
 
 /**
  * An HTTP method a handler can answer. "ALL" answers any method the route has
@@ -212,34 +212,6 @@ export interface RouteOptions {
    * ```
    */
   sitemap?: false | SitemapFields;
-  /**
-   * Let other origins call this route from the browser (see CorsOptions):
-   * preflights are answered, allowed origins get the Access-Control-*
-   * headers and pass the cross-site check. false turns a group's off.
-   * Default: the group's setting, else none.
-   *
-   * ```ts
-   * @route("/api/quotes", { session: false, cors: { origins: ["https://partner.example"] } })
-   * class Quotes {
-   *   @post create() { ... }
-   * }
-   * ```
-   */
-  cors?: CorsOptions | false;
-  /**
-   * false: skip the cross-site check for this route (see YerdOptions.csrf),
-   * for a POST another site is meant to send: a payment provider's return,
-   * a form on a partner's page. Action tokens still need a session binding
-   * when the visitor has one. Default: the group's setting, else true.
-   *
-   * ```ts
-   * @route("/payments/return", { csrf: false })
-   * class PaymentReturn {
-   *   @post done() { ... }
-   * }
-   * ```
-   */
-  csrf?: boolean;
 }
 
 /**
@@ -279,10 +251,6 @@ export interface GroupOptions {
    * ```
    */
   session?: boolean;
-  /** CORS for member routes (see RouteOptions.cors). The deepest setting wins; false turns an outer group's off. */
-  cors?: CorsOptions | false;
-  /** false: member routes skip the cross-site check (see RouteOptions.csrf). The deepest setting wins. */
-  csrf?: boolean;
   /**
    * Sitemap settings for member routes (see RouteOptions.sitemap): false
    * leaves them out, unless a route sets its own object. The deepest
@@ -322,6 +290,52 @@ export function verbsOf(target: DecoratorTarget): VerbEntry[] {
 
 /** Layouts declared with @layout on a class (route or group). */
 export const LAYOUT = classValue<LayoutSpec>("layout");
+
+/**
+ * Let other origins call a route, or every route in a group, from the
+ * browser (see CorsOptions). Preflights are answered before any handler,
+ * an allowed origin gets the Access-Control-* headers and passes the
+ * cross-site check, and other origins are refused as before. On a class:
+ * CORS is about a URL, whatever the method. The deepest one wins, and
+ * `@cors(false)` turns a group's off for one route. Throws on an origin
+ * with a path, or `"*"` with credentials.
+ *
+ * ```ts
+ * @cors({ origins: ["https://app.example"], headers: ["content-type", "authorization"] })
+ * @group("/api", { session: false })
+ * export class Api {}
+ *
+ * @cors(false)
+ * @route("/internal", { group: Api })
+ * export class Internal { ... }
+ * ```
+ */
+export const cors = classValue<CorsOptions | false>("cors", {
+  validate: (options) => {
+    if (options === false) return;
+    try {
+      compileCors(options);
+    } catch (error) {
+      return (error as Error).message;
+    }
+  },
+});
+
+/**
+ * `@csrf(false)`: skip the cross-site check (see YerdOptions.csrf) for this
+ * route, or every route in a group, for posts another site is meant to send:
+ * a payment provider's return, a form on a partner's page. The deepest one
+ * wins. Check what's posted (the provider's signature) before acting on it.
+ *
+ * ```ts
+ * @csrf(false)
+ * @route("/payments/return")
+ * export class PaymentReturn {
+ *   @post done() { ... }
+ * }
+ * ```
+ */
+export const csrf = classValue<boolean>("csrf");
 /** Layouts declared with @layout on a handler method. */
 export const METHOD_LAYOUTS = methodValue<LayoutSpec>("layout");
 
@@ -770,9 +784,9 @@ export interface ResolvedRoute {
   guards: GuardSpec[];
   /** Whether the route has a session: its `session` option, else the nearest group's, else true. */
   session: boolean;
-  /** CORS: the route's option, else the nearest group's that sets one. */
+  /** CORS: the route's @cors, else the nearest group's. */
   cors: CorsOptions | undefined;
-  /** Whether the cross-site check applies: the route's `csrf` option, else the nearest group's, else true. */
+  /** Whether the cross-site check applies: the route's @csrf, else the nearest group's, else true. */
   csrf: boolean;
   /** The `sitemap` option through the groups: false, the merged fields (deeper wins), or undefined when nothing set it. */
   sitemap: false | SitemapFields | undefined;
@@ -820,11 +834,12 @@ export function resolveRoute(def: RouteDef): ResolvedRoute {
   let session = true;
   for (const g of chain) session = g.options.session ?? session;
   session = def.options.session ?? session;
-  let cors: CorsOptions | false | undefined;
-  let csrf = true;
-  for (const options of [...chain.map((g) => g.options), def.options]) {
-    if (options.cors !== undefined) cors = options.cors;
-    csrf = options.csrf ?? csrf;
+  // @cors and @csrf on the groups, then the route: the deepest one set wins.
+  let corsSetting: CorsOptions | false | undefined;
+  let crossSiteCheck = true;
+  for (const metadata of [...chain.map((g) => groupMetadata.get(g)!), def.metadata]) {
+    corsSetting = cors.get(metadata) ?? corsSetting;
+    crossSiteCheck = csrf.get(metadata) ?? crossSiteCheck;
   }
   // false drops what outer groups set; an object adds to it, field by field.
   let sitemap: false | SitemapFields | undefined;
@@ -832,5 +847,5 @@ export function resolveRoute(def: RouteDef): ResolvedRoute {
     if (setting === false) sitemap = false;
     else if (setting) sitemap = { ...(sitemap || {}), ...setting };
   }
-  return { pattern: joinPaths(prefix, def.pattern), layouts, isolated, meta: { ...meta, ...def.options.meta }, guards, session, sitemap, cors: cors || undefined, csrf };
+  return { pattern: joinPaths(prefix, def.pattern), layouts, isolated, meta: { ...meta, ...def.options.meta }, guards, session, sitemap, cors: corsSetting || undefined, csrf: crossSiteCheck };
 }
