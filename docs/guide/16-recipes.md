@@ -187,6 +187,7 @@ etag: "af2783UEEIRdZYrX"
 - **`session: false`** matters: no cookie goes out, so a shared cache can't store one visitor's session.
 - **Never on pages with forms or a cart badge.** They carry the visitor's tokens; yerd marks them `private, no-cache` ([caching headers](04-responses.md#caching-headers)).
 - **Hashing the body** still runs the query; an ETag from a version or `updatedAt` skips the work.
+- **For every JSON response at once**, [app.etags()](api:yerd.YerdApp.etags) does the hashing and the 304 for you (weak ETags; no-store and cookie-setting responses are skipped). Write it by hand, as here, when the ETag can come from something cheaper than the body.
 
 ## Per-field form errors
 

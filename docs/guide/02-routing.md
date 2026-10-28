@@ -105,6 +105,7 @@ content-type: application/json; charset=utf-8
 - Values are URL-decoded strings; a transform like [toInt](api:yerd.toInt) converts them ([Request data](03-request-data.md)).
 - A trailing `*name` captures the rest of the path: `/files/*path` gives `path` = `"a/b.txt"` for `/files/a/b.txt`, and `""` for `/files`. A bare `*` is captured as `wildcard`.
 - Static segments win over params whatever the order: `/products/new` beats `/products/:id`.
+- One trailing slash is ignored, so `/products/7/` is the same page. `yerd({ trailingSlash: "strip" })` (or `"add"`) redirects GETs to one spelling with a 308 instead.
 - [@params](api:yerd.params) gives them all as a `Record<string, string>`.
 - `@param("nope")` on a route without `:nope` stops the boot, naming the class and field.
 

@@ -3,7 +3,7 @@ import { createServer as createHttpsServer, type Server as HttpsServer, type Ser
 import { once } from "node:events";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, extname, join } from "node:path";
 import { ACCESSORS, ARGS, type Resolver } from "../decorators/kit.js";
@@ -46,7 +46,7 @@ import { applySecurityHeaders, compileSecurityHeaders, removeSecurityHeaders, ty
 import { useManifest } from "../assets.js";
 import { runWithContext, type RouteInfo, type YerdContext } from "./context.js";
 import { RequestContext, type RequestEnv } from "./request-context.js";
-import { abortOnClose, forwarded, isDevelopment, isStreamBody, mergeVary, splitTarget, wantsPage } from "./http.js";
+import { abortOnClose, etagMatches, forwarded, isDevelopment, isStreamBody, mergeVary, splitTarget, wantsPage } from "./http.js";
 import { catchesOf, responseDefaults, type CatchEntry, type ResponseDefaults } from "../decorators/response.js";
 import { ConsoleLogger } from "../log/console.js";
 import { LogFilter, defaultFilter } from "../log/filter.js";
@@ -146,6 +146,18 @@ export interface YerdOptions {
    * entry (ctx.ip, rateLimit()). Default false.
    */
   trustProxy?: boolean;
+  /**
+   * One spelling per page: "strip" redirects `/about/` to `/about`, "add"
+   * the other way (except paths whose last segment has a dot, like
+   * `/feed.xml`), both with a 308 and the query string kept. Only GET and
+   * HEAD requests that match a route; static files are left alone. Default:
+   * both spellings answer, as the same page.
+   *
+   * ```ts
+   * yerd({ trailingSlash: "strip" });
+   * ```
+   */
+  trailingSlash?: "strip" | "add";
   /**
    * How long close() keeps serving after app.health() starts answering 503,
    * in ms, before it stops accepting connections. Default 0. Behind a load
@@ -355,6 +367,33 @@ function resolveRequest(
   const mayBeAction = method === "POST" && node.actions.size > 0 && isFormBody(headers["content-type"]);
   if (!handler && !mayBeAction && variants === 0) return { error: new MethodNotAllowed(undefined, { allow: node.allow }) };
   return { group, handler, node, mayBeAction };
+}
+
+/**
+ * The spelling of `path` trailingSlash wants, or `path` itself when it's
+ * already that, or when the other would be unsafe to send as a Location
+ * ("//evil.com/" stripped is a link to another host).
+ */
+function canonicalPath(path: string, slash: "strip" | "add"): string {
+  if (path === "/" || path.startsWith("//") || path.includes("\\")) return path;
+  if (slash === "strip") return path.endsWith("/") ? path.replace(/\/+$/, "") || "/" : path;
+  if (path.endsWith("/") || path.slice(path.lastIndexOf("/") + 1).includes(".")) return path;
+  return `${path}/`;
+}
+
+/**
+ * app.etags(): a GET or HEAD 200 with a body in one piece gets a weak ETag
+ * of that body, and becomes a bodiless 304 when If-None-Match has it.
+ */
+function withEtag(req: IncomingMessage, out: Outgoing): Outgoing {
+  const { body } = out;
+  if (out.status !== 200 || (req.method !== "GET" && req.method !== "HEAD")) return out;
+  if (typeof body !== "string" && !(body instanceof Uint8Array)) return out;
+  if (out.headers.etag !== undefined || out.cookies?.length || /\bno-store\b/i.test(out.headers["cache-control"] ?? "")) return out;
+  const etag = `W/"${createHash("sha1").update(body).digest("base64url")}"`;
+  const headers = { ...out.headers, etag };
+  if (etagMatches(req.headers["if-none-match"], etag)) return { status: 304, headers, body: null };
+  return { ...out, headers };
 }
 
 /** Whether the request's host (X-Forwarded-Host under trustProxy, else Host), port aside, is one of `hosts`. */
@@ -669,6 +708,7 @@ export class YerdApp {
   readonly #appGuards: GuardSpec[] = [];
   #securityHeaders: SecurityHeaders | undefined;
   #compression: Compression | undefined;
+  #etags = false;
   #health: { path: string; check: (() => unknown) | undefined } | undefined;
   /** YerdOptions.hosts: exact names, and ".suffix"es that also match the bare name. */
   #hosts: { exact: Set<string>; suffixes: string[] } | undefined;
@@ -835,6 +875,22 @@ export class YerdApp {
    */
   securityHeaders(options: SecurityHeadersOptions = {}): this {
     this.#securityHeaders = compileSecurityHeaders(options);
+    return this;
+  }
+
+  /**
+   * ETags for responses sent in one piece (JSON, text): a weak validator from
+   * the body, and 304 Not Modified, with no body, when the client's
+   * If-None-Match already has it. The handler still runs; what's saved is
+   * the bytes on the wire. Streamed pages, responses setting cookies or an
+   * ETag of their own, and `Cache-Control: no-store` are left alone.
+   *
+   * ```ts
+   * yerd().etags();
+   * ```
+   */
+  etags(): this {
+    this.#etags = true;
     return this;
   }
 
@@ -1771,6 +1827,11 @@ export class YerdApp {
     }
     const match = this.#router!.match(path);
     if (!match) return this.#serveOther(req, res, next);
+    const slash = this.#options.trailingSlash;
+    if (slash && (method === "GET" || method === "HEAD")) {
+      const canonical = canonicalPath(path, slash);
+      if (canonical !== path) return send(res, { status: 308, headers: { location: canonical + target.search }, body: null }, method === "HEAD", undefined);
+    }
     return this.#route(req, res, method, target, match, answers);
   }
 
@@ -2203,7 +2264,7 @@ export class YerdApp {
     ) {
       out.headers["cache-control"] = "private, no-cache";
     }
-    return out;
+    return this.#etags ? withEtag(context.req, out) : out;
   }
 
   /** Render a page stream's first chunk now (see primeStream); anything else as it is. */
