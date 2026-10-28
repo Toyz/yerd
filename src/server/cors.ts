@@ -9,6 +9,28 @@ import type { IncomingHttpHeaders } from "node:http";
 import type { Outgoing } from "../respond/coerce.js";
 
 /**
+ * A request header a page's script may send with a cross-origin request
+ * (CorsOptions.headers): the usual ones by name, any other as a string.
+ */
+export type CorsRequestHeader =
+  | "accept" | "accept-language" | "authorization" | "cache-control" | "content-language" | "content-type"
+  | "if-match" | "if-modified-since" | "if-none-match" | "if-unmodified-since" | "range"
+  | "x-api-key" | "x-csrf-token" | "x-request-id" | "x-requested-with"
+  | (string & {});
+
+/**
+ * A response header a page's script may read (CorsOptions.expose); the
+ * simple ones (content-type, cache-control, ...) it can read anyway.
+ */
+export type CorsResponseHeader =
+  | "content-disposition" | "content-encoding" | "content-length" | "content-range" | "etag" | "link" | "location"
+  | "retry-after" | "x-request-id" | "x-total-count" | "ratelimit" | "ratelimit-policy"
+  | (string & {});
+
+/** A method a preflight may allow (CorsOptions.methods). */
+export type CorsMethod = "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | (string & {});
+
+/**
  * Who may call a route from another origin, and how.
  *
  * ```ts
@@ -27,11 +49,11 @@ export interface CorsOptions {
   /** Send cookies and Authorization with the request (Access-Control-Allow-Credentials). Default false. */
   credentials?: boolean;
   /** Methods a preflight allows. Default: the route's own verbs. */
-  methods?: readonly string[];
+  methods?: readonly CorsMethod[];
   /** Request headers a preflight allows. Default: whichever the browser asks for. */
-  headers?: readonly string[];
+  headers?: readonly CorsRequestHeader[];
   /** Response headers the page's script may read beyond the simple ones (Access-Control-Expose-Headers). */
-  expose?: readonly string[];
+  expose?: readonly CorsResponseHeader[];
   /** How long a browser may keep a preflight's answer, in seconds. Default 600. */
   maxAge?: number;
 }

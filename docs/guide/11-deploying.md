@@ -132,6 +132,20 @@ export function createApp(options?: YerdOptions) {
 > [!WARNING]
 > Only turn on `trustProxy` behind a proxy that sets those headers and strips any the client sent; otherwise anyone can claim HTTPS or your host.
 
+## Compression
+
+Most proxies and CDNs compress responses. Without one in front, [app.compression()](api:yerd.YerdApp.compression) does it:
+
+```ts
+// src/app.ts
+return yerd(options).compression() // brotli, else gzip, as the browser accepts
+```
+
+- Pages, JSON, CSS, JS, SVG and other text over 1 KB (`threshold`) are compressed; images, fonts and archives aren't (they're compressed already).
+- A streamed page is compressed chunk by chunk, each flushed, so the top of the page still arrives before slow parts render.
+- Left alone: precompressed static files (`app.js.br`), yerd's runtime script (compressed once and kept), SSE and other long-lived streams, HEAD, and `Cache-Control: no-transform`.
+- Brotli runs at quality 4 (`brotliQuality`), gzip at level 6 (`gzipLevel`): most of the saving for little CPU per response. Behind a proxy that compresses, leave it off; doing it twice costs CPU for nothing.
+
 ## HTTPS without a proxy
 
 `listen()` serves HTTPS itself when given a certificate:

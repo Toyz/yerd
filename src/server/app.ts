@@ -41,6 +41,7 @@ import { metadataOf } from "../decorators/keys.js";
 import { createMount, serveStatic, type StaticMount, type StaticOptions } from "./static.js";
 import { assetResponse, memoryAsset, type MemoryAsset } from "../respond/asset.js";
 import { compileCors, corsHeaders, preflight, type CorsPolicy } from "./cors.js";
+import { compileCompression, compressOutgoing, type Compression, type CompressionOptions } from "../respond/compress.js";
 import { applySecurityHeaders, compileSecurityHeaders, removeSecurityHeaders, type SecurityHeaders, type SecurityHeadersOptions } from "./security-headers.js";
 import { useManifest } from "../assets.js";
 import { runWithContext, type RouteInfo, type YerdContext } from "./context.js";
@@ -595,6 +596,7 @@ export class YerdApp {
   readonly #middleware: Middleware[] = [];
   readonly #appGuards: GuardSpec[] = [];
   #securityHeaders: SecurityHeaders | undefined;
+  #compression: Compression | undefined;
   readonly #trustedOrigins: ReadonlySet<string>;
   /** Shared by every request's context; built at boot. */
   #env: RequestEnv | undefined;
@@ -749,6 +751,25 @@ export class YerdApp {
    */
   securityHeaders(options: SecurityHeadersOptions = {}): this {
     this.#securityHeaders = compileSecurityHeaders(options);
+    return this;
+  }
+
+  /**
+   * Compress responses on the fly: pages, JSON, CSS, JS, SVG and other text,
+   * with brotli or gzip as the client accepts (see CompressionOptions). A
+   * body in one piece is compressed off the event loop; a streamed page
+   * chunk by chunk, each flushed, so it still arrives as it renders.
+   * Already-encoded responses (precompressed static files, yerd's runtime),
+   * bodies under `threshold`, `Cache-Control: no-transform` and long-lived
+   * streams (SSE) are sent as they are. Leave it off behind a proxy or CDN
+   * that compresses.
+   *
+   * ```ts
+   * yerd().compression();
+   * ```
+   */
+  compression(options: CompressionOptions = {}): this {
+    this.#compression = compileCompression(options);
     return this;
   }
 
@@ -1610,6 +1631,7 @@ export class YerdApp {
    */
   #serve(req: IncomingMessage, res: ServerResponse, next: Next | undefined, answers: boolean): Promise<void> | undefined {
     if (this.#securityHeaders) applySecurityHeaders(this.#securityHeaders, req, res, this.#options.trustProxy ?? false);
+    if (this.#compression) compressing.set(res, { settings: this.#compression, accept: req.headers["accept-encoding"] });
     const rawTarget = req.url ?? "/";
     if (!rawTarget.startsWith("/")) return this.#serveOther(req, res, next);
     const method = (req.method ?? "GET").toUpperCase() as Verb;
@@ -2535,7 +2557,26 @@ function varyByAccept(out: Outgoing): Outgoing {
 const STOPPED: unique symbol = Symbol("stopped");
 
 /** Write `out`. A body in one piece is written at once; a stream returns a promise for its end. */
+/** Responses to compress, and the Accept-Encoding they were asked with: set in #serve when app.compression() is on. */
+const compressing = new WeakMap<ServerResponse, { settings: Compression; accept: string | undefined }>();
+
 function send(res: ServerResponse, out: Outgoing, headOnly: boolean, signal: AbortSignal | undefined): Promise<void> | undefined {
+  const compression = headOnly ? undefined : compressing.get(res);
+  // Long-lived streams (SSE, NDJSON feeds) stay as they are: each event has to arrive whole, and on its own.
+  if (compression && out.headers[LONG_LIVED] === undefined) {
+    compressing.delete(res);
+    const compressed = compressOutgoing(out, compression.accept, compression.settings);
+    if (compressed instanceof Promise) {
+      return compressed.then(
+        (done) => send(res, done, headOnly, signal),
+        (error: unknown) => {
+          requestLog.warn("compressing a response failed; sending it as it is", { error });
+          return send(res, out, headOnly, signal);
+        },
+      );
+    }
+    out = compressed;
+  }
   // Copied rather than reused: handlers may hand back a headers object they share.
   const headers: Record<string, string | string[]> = { "x-content-type-options": "nosniff" };
   for (const name in out.headers) if (name !== LONG_LIVED) headers[name] = out.headers[name]!;

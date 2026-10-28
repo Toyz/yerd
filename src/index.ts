@@ -56,7 +56,8 @@ export { action, bind, ActionForm, type Action, type ActionElement, type ActionL
 export { assetUrl, useManifest, resetManifest, Stylesheet } from "./assets.js";
 export { mimeType, type StaticOptions } from "./server/static.js";
 export { rateLimit, clientKey, MemoryRateLimitStore, type RateLimitOptions, type RateLimitStore, type RateLimitHit } from "./server/rate-limit.js";
-export type { CorsOptions } from "./server/cors.js";
+export type { CorsOptions, CorsRequestHeader, CorsResponseHeader, CorsMethod } from "./server/cors.js";
+export type { CompressionOptions } from "./respond/compress.js";
 export type { SecurityHeadersOptions, CspDirectives, CspDirective, HstsOptions } from "./server/security-headers.js";
 export { urlFor, type UrlParams, type UrlOptions } from "./router/url.js";
 export type { FormFiles } from "./server/body.js";
