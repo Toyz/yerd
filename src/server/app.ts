@@ -39,6 +39,7 @@ import { Router, paramNames, type Match } from "../router/trie.js";
 import { DEFAULT_BODY_LIMIT, mediaTypeOf } from "./body.js";
 import { metadataOf } from "../decorators/keys.js";
 import { acceptsEncoding, createMount, serveStatic, type StaticMount, type StaticOptions } from "./static.js";
+import { applySecurityHeaders, compileSecurityHeaders, type SecurityHeaders, type SecurityHeadersOptions } from "./security-headers.js";
 import { useManifest } from "../assets.js";
 import { runWithContext, type RouteInfo, type YerdContext } from "./context.js";
 import { RequestContext, type RequestEnv } from "./request-context.js";
@@ -123,7 +124,11 @@ export interface YerdOptions {
   csrf?: boolean;
   /** Other origins allowed to send unsafe requests, e.g. ["https://admin.example.com"]. */
   trustedOrigins?: string[];
-  /** Behind a reverse proxy: believe X-Forwarded-Host for the origin check. Default false. */
+  /**
+   * Behind a reverse proxy: believe X-Forwarded-Proto and X-Forwarded-Host
+   * (ctx.url, the origin check, Secure cookies) and the last X-Forwarded-For
+   * entry (ctx.ip, rateLimit()). Default false.
+   */
   trustProxy?: boolean;
   /**
    * The built-in cue stream: which rooms anyone may listen to (see Cues).
@@ -559,6 +564,7 @@ export class YerdApp {
   #sessionOptions: SessionOptions | undefined;
   readonly #middleware: Middleware[] = [];
   readonly #appGuards: GuardSpec[] = [];
+  #securityHeaders: SecurityHeaders | undefined;
   readonly #trustedOrigins: ReadonlySet<string>;
   /** Shared by every request's context; built at boot. */
   #env: RequestEnv | undefined;
@@ -691,6 +697,28 @@ export class YerdApp {
   guard(...specs: GuardSpec[]): this {
     if (this.#router) throw new Error("guard() must be called before the app starts");
     this.#appGuards.push(...specs);
+    return this;
+  }
+
+  /**
+   * Send the usual security headers on every response: a Content-Security-
+   * Policy, Strict-Transport-Security (over HTTPS), X-Frame-Options,
+   * Referrer-Policy and Cross-Origin-Opener-Policy. Each is on by default
+   * and tunable or `false` (see SecurityHeadersOptions). A header a handler
+   * sets itself replaces the app's, for that response. Throws on a CSP
+   * directive or source that isn't well formed.
+   *
+   * ```ts
+   * yerd().securityHeaders({ csp: { "img-src": ["'self'", "https://images.example"] } });
+   *
+   * // One page that's embedded elsewhere:
+   * @get widget() {
+   *   return res(<Widget />, { headers: { "content-security-policy": "frame-ancestors https://partner.example" } });
+   * }
+   * ```
+   */
+  securityHeaders(options: SecurityHeadersOptions = {}): this {
+    this.#securityHeaders = compileSecurityHeaders(options);
     return this;
   }
 
@@ -1548,6 +1576,7 @@ export class YerdApp {
    * answered by #answer itself, and there's no promise to hand back for it.
    */
   #serve(req: IncomingMessage, res: ServerResponse, next: Next | undefined, answers: boolean): Promise<void> | undefined {
+    if (this.#securityHeaders) applySecurityHeaders(this.#securityHeaders, req, res, this.#options.trustProxy ?? false);
     const rawTarget = req.url ?? "/";
     if (!rawTarget.startsWith("/")) return this.#serveOther(req, res, next);
     const method = (req.method ?? "GET").toUpperCase() as Verb;

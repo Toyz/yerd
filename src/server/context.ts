@@ -88,6 +88,17 @@ export interface YerdContext {
   /** The request path as sent, without the query string and not percent-decoded. */
   readonly path: string;
   /**
+   * The client's address: the socket's peer, or with `trustProxy` the last
+   * X-Forwarded-For entry (what your proxy saw; earlier entries are the
+   * client's to forge). Behind more than one proxy that's the inner proxy's
+   * view, so key anything per-client off a header your edge sets instead.
+   *
+   * ```ts
+   * this.audit.add({ action: "login", ip: ctx.ip });
+   * ```
+   */
+  readonly ip: string;
+  /**
    * Route params by name, percent-decoded. A splat holds the rest of the path, slashes included.
    *
    * ```ts

@@ -55,6 +55,9 @@ export { renderToString, renderToStream, type RenderOptions } from "./render/ren
 export { action, bind, ActionForm, type Action, type ActionElement, type ActionLambda, type ActionScope, type BoundAction } from "./actions/action.js";
 export { assetUrl, useManifest, resetManifest, Stylesheet } from "./assets.js";
 export { mimeType, type StaticOptions } from "./server/static.js";
+export { rateLimit, MemoryRateLimitStore, type RateLimitOptions, type RateLimitStore, type RateLimitHit } from "./server/rate-limit.js";
+export type { SecurityHeadersOptions, CspDirectives, CspDirective, HstsOptions } from "./server/security-headers.js";
+export { urlFor, type UrlParams, type UrlOptions } from "./router/url.js";
 export type { FormFiles } from "./server/body.js";
 export { Region, Scripts, RUNTIME_PATH, type RegionProps } from "./actions/components.js";
 export { raw, escapeHtml, json, type RawHtml } from "./render/escape.js";

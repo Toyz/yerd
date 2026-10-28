@@ -108,6 +108,20 @@ content-type: application/json; charset=utf-8
 - [@params](api:yerd.params) gives them all as a `Record<string, string>`.
 - `@param("nope")` on a route without `:nope` stops the boot, naming the class and field.
 
+### Linking to a route: urlFor()
+
+A link written as `"/products/" + id` breaks quietly when the path changes. [urlFor()](api:yerd.urlFor) builds it from the class:
+
+```tsx
+<a href={urlFor(ProductPage, { id: product.id })}>{product.name}</a> // href="/products/7"
+redirect(urlFor(ProductPage, { id: 7 }, { query: { added: 1 } }));    // "/products/7?added=1"
+```
+
+- Group prefixes are included; params are percent-encoded. A splat takes a path with slashes, each segment encoded.
+- A missing or empty param, a name the route doesn't have, or a `.` / `..` segment throws, so a stale link fails in the first test that renders it.
+- `query` skips `undefined` and `null` values and repeats a name for a list; `hash` adds a fragment.
+- Params are checked when the URL is built, not by the compiler: a decorator's path string isn't part of the class's type.
+
 ## Groups
 
 Checkout and the order page both need a signed-in user and the same narrow layout. A [@group](api:yerd.group) class holds shared settings; routes join with the `group` option.

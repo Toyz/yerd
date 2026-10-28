@@ -206,6 +206,42 @@ set-cookie: yerd_session=cqr108Ui...; Max-Age=1209600; Path=/; HttpOnly; SameSit
 - A no-JavaScript action redirects back to the form's page, from a same-host `Referer` only, checked like `safeNext`.
 - The client runtime never navigates to `javascript:`, `data:` or `vbscript:` URLs.
 
+## Rate limiting
+
+Nothing stops a script from trying passwords at the login form all day. [rateLimit()](api:yerd.rateLimit) makes a guard that counts requests per client and answers 429 past the limit:
+
+```tsx
+// src/routes/auth.tsx
+const loginLimit = rateLimit({ name: "login", limit: 5, window: "1m" });
+
+@route("/login", { meta: { title: "Sign in" } })
+export class LoginPage {
+  // ...
+  @action @loginLimit async submit(_: {}, form: ActionForm) {
+    // ...
+  }
+}
+```
+
+The sixth try within the minute:
+
+```answer
+POST /login
+_yx=(the form's token)&name=ada&password=guess-6
+>>>
+429 Too Many Requests
+content-type: application/json; charset=utf-8
+retry-after: 60
+
+{"error":"Too Many Requests","code":"too_many_requests"}
+```
+
+- It's a guard, so it goes where guards go: one action or handler, a route, a group's `guards`, or [app.guard()](api:yerd.YerdApp.guard) for everything.
+- Counts are per client address, [ctx.ip](api:yerd.YerdContext.ip). Behind a proxy, set `trustProxy` or every visitor shares the proxy's address. With it, ctx.ip is the last `X-Forwarded-For` entry, the one your proxy wrote; earlier entries are the client's to forge.
+- `key: (ctx) => ...` counts by something else (an API key, a user id). Returning `undefined` lets the request through uncounted.
+- Windows are fixed: a client can spend its limit at the end of one window and again at the start of the next.
+- Counts live in the process ([MemoryRateLimitStore](api:yerd.MemoryRateLimitStore)). With several instances, pass a shared `store`: anything with `hit(key, windowMs)` returning `{ count, resetAt }`.
+
 ## Output
 
 A search for `<script>alert(1)</script>` comes back as text, in the box and in the message:
@@ -219,9 +255,46 @@ content-type: text/html; charset=utf-8
 ```
 
 - **Escaping.** Text and attributes always are; [raw()](api:yerd.raw) is the only way around. URL attributes block `javascript:`, `vbscript:` and `data:` (`" java\tscript:"` too); [json()](api:yerd.json) makes data safe in inline scripts. See [what renders how](05-pages-and-layouts.md#what-renders-how).
-- **Headers.** Values with line breaks, NUL or other control characters are refused, so request data can't split a response. Every response gets `X-Content-Type-Options: nosniff`.
+- **Headers.** Values with line breaks, NUL or other control characters are refused, so request data can't split a response. Every response gets `X-Content-Type-Options: nosniff`; the rest are opt-in, see [security headers](#security-headers).
 - **Errors.** A non-`YerdError` is a 500 saying `Internal Server Error`; message and stack go to the log. `YerdError` messages show below 500. Stacks on the [error page](05-pages-and-layouts.md#error-pages) in development only.
 - **Logs.** Fields named like secrets (`password`, `token`, `cookie`...) are redacted; see [logging](10-logging.md#redaction-and-limits).
+
+## Security headers
+
+One call adds a Content-Security-Policy and the other headers a browser app should send, on every response (pages, errors, static files):
+
+```ts
+// src/app.ts
+export function createApp(options?: YerdOptions) {
+  return yerd(options)
+    .securityHeaders()
+    // ...
+}
+```
+
+```answer
+GET /
+200 OK
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'
+cross-origin-opener-policy: same-origin
+referrer-policy: strict-origin-when-cross-origin
+x-content-type-options: nosniff
+x-frame-options: SAMEORIGIN
+```
+
+| Option | Default | Sends |
+| --- | --- | --- |
+| `csp` | the policy above | `Content-Security-Policy`; `cspReportOnly: true` sends it as `-Report-Only` |
+| `hsts` | `{ maxAge: 31536000 }` | `Strict-Transport-Security`, on HTTPS responses only |
+| `frame` | `"sameorigin"` | `X-Frame-Options`, and `frame-ancestors` unless the CSP names its own |
+| `referrerPolicy` | `"strict-origin-when-cross-origin"` | `Referrer-Policy` |
+| `crossOriginOpenerPolicy` | `"same-origin"` | `Cross-Origin-Opener-Policy` |
+
+- `false` leaves a header out.
+- `csp` directives merge over the defaults: `{ "img-src": ["'self'", "https://images.example"] }` replaces one, `false` drops one, `true` writes one without sources (`"upgrade-insecure-requests": true`). A source with `;`, `,` or whitespace stops the boot.
+- The runtime, its chunks and islands are same-origin scripts, so `script-src 'self'` holds. `style-src` needs `'unsafe-inline'` for [css()](api:yerd.css)'s `<style>` elements. [Local](api:yerd.Local) needs `'unsafe-eval'`.
+- A header a handler sets wins for that response: one page that partners embed can send its own `frame-ancestors`.
+- HSTS is sent only when the request came over HTTPS (with `trustProxy`, as `X-Forwarded-Proto` says). `includeSubDomains` is off until you ask: turn it on once every subdomain serves HTTPS.
 
 ## Input
 
@@ -232,7 +305,7 @@ content-type: text/html; charset=utf-8
 
 ## Client-side code
 
-- **CSP.** [Local](api:yerd.Local) handlers are compiled in the browser and need `'unsafe-eval'` under a strict Content-Security-Policy. Without `Local`, `script-src 'self'` is enough for the runtime and its `/_yerd/` chunks.
+- **CSP.** [Local](api:yerd.Local) handlers are compiled in the browser and need `'unsafe-eval'` under a strict Content-Security-Policy. Without `Local`, `script-src 'self'` is enough for the runtime and its `/_yerd/` chunks. [app.securityHeaders()](#security-headers) sends such a policy.
 - **Shipped as source.** `Local` handlers and [custom attributes](06-interactivity.md#custom-attributes)' client halves are public and can't see server variables.
 
 ## Checklist
@@ -245,6 +318,8 @@ content-type: text/html; charset=utf-8
 - GET handlers change nothing.
 - Every `?next=` goes through `safeNext`; `redirect()` never gets a raw URL from the request.
 - `raw()` only on trusted or sanitized HTML.
+- A `rateLimit()` on sign-in, sign-up and anything else worth guessing at.
+- `app.securityHeaders()` on, with the CSP loosened only as far as the app needs.
 - `trustProxy` only behind a proxy that sets the forwarded headers and strips the client's.
 - `trustedOrigins` lists only origins you control.
 - Separate `sessionKey`s for separate kinds of sign-in.

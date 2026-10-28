@@ -57,6 +57,22 @@ export function requestOrigin(req: IncomingMessage, trustProxy: boolean): string
   }
 }
 
+/**
+ * The client's address. Without `trustProxy`, the socket's peer. With it, the
+ * last X-Forwarded-For entry: the address our own proxy saw, which a client
+ * can't forge (earlier entries are whatever the client sent, so they're never
+ * believed). Behind several proxies that's the next proxy's address, not the
+ * client's. "" when the socket is gone and there's no header.
+ */
+export function clientAddress(req: IncomingMessage, trustProxy: boolean): string {
+  if (trustProxy) {
+    const header = req.headers["x-forwarded-for"];
+    const last = (Array.isArray(header) ? header.join(",") : header)?.split(",").pop()!.trim();
+    if (last) return last;
+  }
+  return req.socket?.remoteAddress ?? "";
+}
+
 const REQUEST_ID = /^[\w.:@-]{1,128}$/;
 
 /** A well-formed `x-request-id` the client sent, else undefined (the caller makes one up). */

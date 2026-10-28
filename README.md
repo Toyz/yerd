@@ -30,7 +30,8 @@ iterable for a stream, JSX for a page, `res()` / `redirect()` for full control.
 
 - **Routing**: `@route`, verb decorators, nested `@group`s, guards and meta;
   layouts on routes, groups, one handler or one response; content
-  negotiation with `@accepts` / `negotiate()`.
+  negotiation with `@accepts` / `negotiate()`; links built from the class
+  with `urlFor()`.
 - **Request data**: `@param` `@query` `@header` `@cookie` `@body` `@field`
   `@file` accessors with transform/validate pipelines; DTO classes (`is.*`)
   that validate bodies, forms and uploads into typed instances.
@@ -42,7 +43,8 @@ iterable for a stream, JSX for a page, `res()` / `redirect()` for full control.
   auto mode (`<Scripts auto />`) that needs no attributes at all. For real
   client code: islands and lazy custom elements, loaded only where they're used.
 - **Sessions and auth**: sealed cookie or memory sessions, `createAuth`,
-  argon2id passwords, session-bound CSRF tokens, cross-site request checks.
+  argon2id passwords, session-bound CSRF tokens, cross-site request checks,
+  `rateLimit()` guards, and a CSP and the usual security headers in one call.
 - **Streaming**: NDJSON and SSE, per-user channels.
 - **Build**: a Vite plugin for dev and production builds, prerendering at
   build time with `<Dynamic>` per-request parts.

@@ -19,7 +19,7 @@ import { assertStatus, checkHeader } from "../respond/response.js";
 import type { ResponseDefaults } from "../decorators/response.js";
 import { REQUEST_SPAN, newSpanId, type Span } from "../log/span.js";
 import { BadRequest } from "../respond/errors.js";
-import { abortOnClose, forwarded, mergeVary, requestIdFrom, requestIsHttps } from "./http.js";
+import { abortOnClose, clientAddress, forwarded, mergeVary, requestIdFrom, requestIsHttps } from "./http.js";
 
 /** A query string URLSearchParams would read as written: no percent-escapes, no `+`, no lone surrogates. */
 const PLAIN_QUERY = /^[^%+\ud800-\udfff]*$/;
@@ -31,7 +31,7 @@ export interface RequestEnv {
   container: Container;
   /** How long action tokens stay valid, in seconds. */
   actionTtl: number;
-  /** Believe X-Forwarded-Proto / X-Forwarded-Host (behind a reverse proxy). */
+  /** Believe X-Forwarded-Proto / -Host / -For (behind a reverse proxy). */
   trustProxy: boolean;
 }
 
@@ -131,6 +131,11 @@ export class RequestContext implements YerdContext {
       this.#url = url;
     }
     return this.#url;
+  }
+
+  get ip(): string {
+    this.#noRequestData("the client's address");
+    return clientAddress(this.req, this.env.trustProxy);
   }
 
   get query(): URLSearchParams {
